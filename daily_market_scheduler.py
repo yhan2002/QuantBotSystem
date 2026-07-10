@@ -20,6 +20,11 @@ EVENING_DATA_REFRESH_TIME = "19:00"
 SCHEDULED_SCAN_TIME = "19:10"
 
 
+def _should_hide_backtest_detail(chat_id):
+    hidden_ids = getattr(config, "BACKTEST_DETAIL_HIDDEN_CHAT_IDS", set())
+    return str(chat_id) in {str(item) for item in hidden_ids}
+
+
 def send_split_telegram_message(chat_id, text):
     url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
     max_length = 4000
@@ -74,7 +79,7 @@ def daily_market_scanner():
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"
 
-            if chat_id == "-5489984462":
+            if _should_hide_backtest_detail(chat_id):
                 for marker in ["Backtest Summary"]:
                     if marker in report_content:
                         report_content = report_content.split(marker)[0].strip()

@@ -2,10 +2,16 @@
 # Generates strategy scan, quick-check, and box backtest reports.
 import ma_cross_engine
 import box_range_engine
+import config
 import market_data_store
 import value_reversion_engine
 
 from bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
+
+
+def _should_hide_backtest_detail(chat_id):
+    hidden_ids = getattr(config, "BACKTEST_DETAIL_HIDDEN_CHAT_IDS", set())
+    return str(chat_id) in {str(item) for item in hidden_ids}
 
 
 def run_compiled_scan(chat_id, progress_callback=None):
@@ -41,7 +47,7 @@ def run_compiled_scan(chat_id, progress_callback=None):
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
-    if chat_id == "-5489984462" and "Backtest Summary" in report:
+    if _should_hide_backtest_detail(chat_id) and "Backtest Summary" in report:
         report = report.split("Backtest Summary")[0].strip()
         report += "\n\n*Backtest detail is available in private/admin sessions.*"
 
