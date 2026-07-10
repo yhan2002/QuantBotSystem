@@ -1,0 +1,30 @@
+# File name: .gitignore
+# Keeps runtime caches, local data, and generated artifacts out of Git.
+.agents/
+.codex/
+__pycache__/
+*.py[cod]
+
+# Local market/fundamental data caches.
+data/
+**/data/
+*.sqlite
+*.sqlite-*
+*.db
+
+# Local secrets and machine-specific files.
+.env
+*.log
+config.py
+config_backup.py
+
+# Proprietary source workbooks and generated office artifacts.
+*.xlsx
+*.xlsm
+*.docx
+*.pdf
+*.png
+outputs/
+work/
+build_quantbot_meeting_doc.py
+inspect_scalping_*.py

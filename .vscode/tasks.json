@@ -1,0 +1,50 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "GitHub: record current work",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\git_record.ps1",
+        "-Message",
+        "${input:commitMessage}"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "GitHub: set origin and record current work",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\git_record.ps1",
+        "-OriginUrl",
+        "${input:originUrl}",
+        "-Message",
+        "${input:commitMessage}"
+      ],
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Commit message",
+      "default": "Codex update"
+    },
+    {
+      "id": "originUrl",
+      "type": "promptString",
+      "description": "GitHub origin URL, e.g. https://github.com/OWNER/REPO.git"
+    }
+  ]
+}
