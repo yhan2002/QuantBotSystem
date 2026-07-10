@@ -111,7 +111,7 @@ def run_compiled_scan(chat_id, progress_callback=None):
             f"\nMissing local data: {len(missing)} tickers"
             f"\nRun Admin -> Refresh Selected Universe. Missing sample: {shown}{suffix}"
         )
-    report = f"{cache_line}\n\n{report}"
+    report = f"{report}\n\n----------------------------------------\n{cache_line}"
 
     return report
 
@@ -208,7 +208,8 @@ def quick_report(ticker):
         report += f"\nBox Detail: {box['message']}\n"
     report += f"\nView: {view}\n\n"
     report += "**6M Backtest Summary**\n"
-    report += "Rule: signal close -> next open, no-lookahead historical entries.\n"
+    report += "Entry: strategy signal at close; enter next open.\n"
+    report += "Exit: each strategy's configured exit condition.\n"
     report += _bt_line("Momentum", ma_bt[0], ma_bt[1], ma_bt[2], ma_side_label) + "\n"
     report += _bt_line("Box Range", box_bt[0], box_bt[1], box_bt[2], box_side_label) + "\n"
     report += (

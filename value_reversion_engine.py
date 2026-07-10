@@ -368,10 +368,9 @@ def _format_backtest(targets):
     report = "\nBacktest Summary\n"
     report += "-----------------------------------------\n"
     report += (
-        f"Rule: no-lookahead value reversion signal, signal close -> next open, "
-        f"{REVERSION_HOLDING_DAYS} trading-day holding, non-overlapping entries\n"
-        "Guard: historical entries use price z-score proxy only; latest fundamentals "
-        "and catalyst are excluded from historical entry logic.\n"
+        "Entry: positive value score for LONG or negative value score for SHORT at "
+        "close; enter next open.\n"
+        f"Exit: close after {REVERSION_HOLDING_DAYS} trading days; no overlapping entries.\n"
     )
 
     total_return_sum = 0.0
@@ -383,17 +382,22 @@ def _format_backtest(targets):
         total_wins += (win_rate / 100.0) * count
         total_trades += count
         period_text = f" | period {period_label}" if period_label != "N/A" else ""
-        report += (
-            f"{side} *{row['ticker']}*: avg *{avg_return:+.1f}%* | "
-            f"win {win_rate:.1f}% | {count} trades{period_text}\n"
-        )
+        if count:
+            wins = round((win_rate / 100.0) * count)
+            report += (
+                f"{side} *{row['ticker']}*: avg *{avg_return:+.1f}%* | "
+                f"win {win_rate:.1f}% ({wins}/{count}){period_text}\n"
+            )
+        else:
+            report += f"{side} *{row['ticker']}*: no closed trades{period_text}\n"
 
     total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
     portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
+    total_win_count = round(total_wins)
     report += "\nSelected Candidate History Summary\n"
     report += (
         f"*Avg trade return {portfolio_avg:+.1f}%* | "
-        f"win {total_win_rate:.1f}% | {total_trades} trades\n"
+        f"win {total_win_rate:.1f}% ({total_win_count}/{total_trades})\n"
     )
     report += "-----------------------------------------\n"
     return report
@@ -428,22 +432,13 @@ def scan_value_reversion(universe_list):
     ]
 
     msg = (
-        "**[Value Reversion Scan Report]**\n"
+        "**Value Reversion Scan Report**\n"
         "=============================\n\n"
-        "**Scoring**\n"
-        "Aggressive test setting: value reversion score 50% + catalyst factor 50%.\n"
-        f"Suggested holding period: {REVERSION_HOLDING_DAYS} trading days.\n"
-        "For SHORT candidates, positive catalyst reduces rank.\n\n"
-        "**Hypothesis**\n"
-        "Stocks whose cap/equity ratio has recently fallen versus their own "
-        "short-term history may be temporarily undervalued and likely to rebound.\n"
-        "Stocks whose cap/equity ratio has recently risen too much may be "
-        "overheated and vulnerable to reversal.\n\n"
-        f"Scored universe: {len(scored)} / {len(universe_list)} tickers\n"
-        f"Data issues: {len(failed)} tickers\n\n"
         "**LONG Candidates**\n"
+        "Benchmark: positive score; +1.0 is meaningful and +2.0 is strong.\n"
         f"{_format_rows(top_longs, long_side=True)}\n"
         "**SHORT Candidates**\n"
+        "Benchmark: negative score; -1.0 is meaningful and -2.0 is strong.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
         f"{_format_backtest(backtest_targets)}"
     )

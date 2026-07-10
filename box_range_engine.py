@@ -381,10 +381,12 @@ def compare_box_exit_modes(ticker, **kwargs):
 
 
 def _catalyst_label(catalyst_map, ticker):
-    score = catalyst_factor.confirmed_score(catalyst_map, ticker)
-    if score > 0:
-        return f"catalyst {score:.1f}"
-    return "no catalyst"
+    row = catalyst_map.get(ticker)
+    if not row:
+        return "catalyst unavailable"
+    if row.get("confirmed"):
+        return "catalyst confirmed"
+    return "catalyst unconfirmed"
 
 
 def _box_row(idx, ticker, res, action, catalyst_text):
@@ -422,17 +424,9 @@ def scan_total_universe(universe_list):
             trim_risk.append((ticker, res, catalyst_text))
             backtest_targets.append((ticker, "TRIM / SHORT-RISK", res["status"]))
 
-    report = "**[Box Range Strategy Scan]**\n"
+    report = "**Box Range Scan Report**\n"
     report += "=============================\n\n"
-    report += (
-        "**Signal logic**\n"
-        "Lower box touch = long rebound setup. "
-        "Upper box touch with catalyst = breakout watch; without catalyst = trim / short-risk watch.\n\n"
-    )
-
-    report += "**Today Action**\n"
-    report += "-----------------------------------------\n"
-    report += "**Long Rebound Setup**\n"
+    report += "**LONG Candidates**\n"
     report += (
         "\n".join(
             _box_row(idx, ticker, res, "near lower box", catalyst_text)
@@ -448,7 +442,7 @@ def scan_total_universe(universe_list):
         )
         or "None"
     )
-    report += "\n\n**Trim / Short-Risk Watch**\n"
+    report += "\n\n**SHORT Candidates**\n"
     report += (
         "\n".join(
             _box_row(idx, ticker, res, "near upper box", catalyst_text)
@@ -462,11 +456,10 @@ def scan_total_universe(universe_list):
         report += "Backtest Summary\n"
         report += "-----------------------------------------\n"
         report += (
-            f"Default exit: {EXIT_MODE_LABELS[DEFAULT_EXIT_MODE]} "
-            "(test other modes with /boxbt TICKER)\n"
-            "Rule: no-lookahead side-matched box signals, signal close -> next open, "
-            "average trade return\n"
-            "Guard: catalyst affects today's classification only, not historical entries.\n"
+            "Entry: 20-day box width <=20%; lower touch for LONG, upper touch for "
+            "SHORT; enter next open.\n"
+            "Exit: LONG takes 50% at center and targets the opposite edge; SHORT exits "
+            "near center. Both stop on box break.\n"
         )
         total_return_sum = 0.0
         total_wins = 0.0
@@ -481,17 +474,25 @@ def scan_total_universe(universe_list):
             total_wins += (win_rate / 100.0) * count
             total_trades += count
             period_text = f" | period {period_label}" if period_label != "N/A" else ""
-            report += (
-                f"{side} *{ticker} ({action})*: "
-                f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% | "
-                f"{count} trades{period_text}\n"
-            )
+            if count:
+                wins = round((win_rate / 100.0) * count)
+                report += (
+                    f"{side} *{ticker} ({action})*: "
+                    f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% "
+                    f"({wins}/{count}){period_text}\n"
+                )
+            else:
+                report += (
+                    f"{side} *{ticker} ({action})*: "
+                    f"no closed trades{period_text}\n"
+                )
         total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
         portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
+        total_win_count = round(total_wins)
         report += "\nSelected Candidate History Summary\n"
         report += (
             f"*Avg trade return {portfolio_avg:+.1f}%* | "
-            f"win {total_win_rate:.1f}% | {total_trades} trades\n"
+            f"win {total_win_rate:.1f}% ({total_win_count}/{total_trades})\n"
         )
         report += "-----------------------------------------\n"
         report += "============================="

@@ -313,22 +313,6 @@ def scan_ma_cross(universe_list):
     long_rows = _format_ranked_rows(top_longs, long_side=True)
     short_rows = _format_ranked_rows(top_shorts, long_side=False)
 
-    long_watch = (
-        ", ".join(
-            f"{row['ticker']}(combo {row['combined_score']:.1f})"
-            for row in enriched_longs[5:]
-        )
-        or "None"
-    )
-    short_watch = (
-        ", ".join(
-            f"{row['ticker']}(combo {row['combined_score']:.1f})"
-            for row in enriched_shorts[5:]
-        )
-        or "None"
-    )
-    exit_names = ", ".join(t for t, _ in exit_list) or "None"
-
     target_tickers = [(t, "LONG NEW") for t in new_longs] + [
         (t, "SHORT NEW") for t in new_shorts
     ]
@@ -346,9 +330,9 @@ def scan_ma_cross(universe_list):
         backtest_report += "\nBacktest Summary\n"
         backtest_report += "-----------------------------------------\n"
         backtest_report += (
-            "Rule: no-lookahead side-matched MA signals, signal close -> next open, "
-            "average trade return\n"
-            "Guard: catalyst affects today's ranking only, not historical entries.\n"
+            "Entry: MA 5/20/60 alignment and same-direction slopes at close; "
+            "enter next open.\n"
+            f"Exit: close after {MOMENTUM_HOLDING_DAYS} trading days.\n"
         )
         total_return_sum = 0.0
         total_wins = 0.0
@@ -364,10 +348,11 @@ def scan_ma_cross(universe_list):
             total_trades += count
             period_text = f" | period {period_label}" if period_label != "N/A" else ""
             if count:
+                wins = round((win_rate / 100.0) * count)
                 backtest_report += (
                     f"{side} *{ticker} ({tag})*: "
-                    f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% | "
-                    f"{count} trades{period_text}\n"
+                    f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% "
+                    f"({wins}/{count}){period_text}\n"
                 )
             else:
                 backtest_report += (
@@ -376,34 +361,28 @@ def scan_ma_cross(universe_list):
                 )
         total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
         portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
+        total_win_count = round(total_wins)
         backtest_report += "\nSelected Candidate History Summary\n"
         backtest_report += (
             f"*Avg trade return {portfolio_avg:+.1f}%* | "
-            f"win {total_win_rate:.1f}% | {total_trades} trades\n"
+            f"win {total_win_rate:.1f}% ({total_win_count}/{total_trades})\n"
         )
         backtest_report += "-----------------------------------------\n"
 
     msg = (
-        "**[MA Momentum Scan Report]**\n"
+        "**MA Momentum Scan Report**\n"
         "=============================\n\n"
-        "**Scoring**\n"
-        "Final rank = strategy score 80% + catalyst factor 20%.\n"
-        "Signal rule = MA 5/20/60 alignment with same-direction slopes; "
-        "default test hold = 20 trading days.\n"
-        "For SHORT candidates, positive catalyst reduces rank.\n\n"
         "**New Signals Today**\n"
         f"- New LONG: {', '.join(new_longs) if new_longs else 'None'}\n"
         f"- New SHORT: {', '.join(new_shorts) if new_shorts else 'None'}\n\n"
         "-----------------------------\n"
         "**LONG Candidates**\n"
         "Top 5 by combined score:\n"
-        f"{long_rows}"
-        f"Watch list: {long_watch}\n\n"
+        f"{long_rows}\n"
         "-----------------------------\n"
         "**SHORT Candidates**\n"
         "Top 5 by combined score:\n"
-        f"{short_rows}"
-        f"Watch list: {short_watch}\n\n"
+        f"{short_rows}\n"
         f"{backtest_report}"
         "============================="
     )
