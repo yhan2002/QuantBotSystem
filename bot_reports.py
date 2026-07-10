@@ -2,16 +2,15 @@
 # Generates strategy scan, quick-check, and box backtest reports.
 import ma_cross_engine
 import box_range_engine
-import config
 import market_data_store
 import value_reversion_engine
+import local_settings
 
 from bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
 
 
 def _should_hide_backtest_detail(chat_id):
-    hidden_ids = getattr(config, "BACKTEST_DETAIL_HIDDEN_CHAT_IDS", set())
-    return str(chat_id) in {str(item) for item in hidden_ids}
+    return str(chat_id) in local_settings.hidden_backtest_chat_ids()
 
 
 def run_compiled_scan(chat_id, progress_callback=None):
