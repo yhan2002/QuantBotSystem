@@ -28,6 +28,43 @@ def _bt_line(label, avg_return, win_rate, count, side_label):
     )
 
 
+def _momentum_explanation(signal):
+    meanings = {
+        "LONG_ENTRY": "uptrend entry; MA5 > MA10 > MA20 and all MA slopes are above +1%.",
+        "SHORT_ENTRY": "downtrend entry; MA5 < MA10 < MA20 and all MA slopes are below -1%.",
+        "EXIT_SIGNAL": "no active trend entry; MA alignment or slope strength is not enough.",
+        "INSUFFICIENT_DATA": "not enough local price data for MA signal.",
+        "NO_SIGNAL": "MA data exists, but no clean entry condition.",
+        "ERROR": "signal calculation failed.",
+    }
+    return meanings.get(signal, "unclassified momentum state.")
+
+
+def _box_explanation(status):
+    meanings = {
+        "TOUCH_LOWER": "price is near the lower edge of a valid box; rebound watch.",
+        "TOUCH_UPPER": "price is near the upper edge of a valid box; breakout or trim-risk watch.",
+        "BOX_FORMED": "range is narrow enough, but price is not near either edge.",
+        "NORMAL": "no active box setup; recent range is too wide or not near an edge.",
+        "DATA_INSUFFICIENT": "not enough local price data for box signal.",
+        "ERROR": "box calculation failed.",
+    }
+    return meanings.get(status, "unclassified box state.")
+
+
+def _reversion_explanation(signal):
+    meanings = {
+        "LONG_BIAS": "price/value proxy is below its short-term norm; rebound bias.",
+        "SHORT_BIAS": "price/value proxy is above its short-term norm; reversal-risk bias.",
+        "FUNDAMENTAL_MISSING": "fundamental data is missing, so value signal is unavailable.",
+        "DATA_INSUFFICIENT": "not enough local price data for value signal.",
+        "DATA_SUSPECT": "fundamental ratio looks abnormal, so signal is ignored.",
+        "NO_SIGNAL": "value data exists, but z-score is not usable.",
+        "ERROR": "value reversion calculation failed.",
+    }
+    return meanings.get(signal, "unclassified value reversion state.")
+
+
 def run_compiled_scan(chat_id, progress_callback=None):
     session = get_or_create_session(chat_id)
     compiled_universe = compile_selected_universe(session)
@@ -157,11 +194,17 @@ def quick_report(ticker):
     report = f"**[Quick Check] {ticker}**\n\n"
     report += "**Signals**\n"
     report += f"- Momentum: `{ma_signal}` | strength {ma_strength:+.2f}\n"
+    report += f"  Meaning: {_momentum_explanation(ma_signal)}\n"
+    report += "  Benchmark: strength above +1 supports LONG, below -1 supports SHORT.\n"
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
+    report += f"  Meaning: {_box_explanation(box_status)}\n"
+    report += "  Benchmark: valid box width is 20% or less; edge touch buffer is 1%.\n"
     report += f"- Value Reversion: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"
     report += "\n"
+    report += f"  Meaning: {_reversion_explanation(reversion_signal)}\n"
+    report += "  Benchmark: score magnitude near 1 is meaningful, near 2 is strong.\n"
     if box.get("message"):
         report += f"\nBox Detail: {box['message']}\n"
     report += f"\nView: {view}\n\n"
