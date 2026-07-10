@@ -23,6 +23,8 @@ def _period_to_rows(period):
         return 35
     if period == "3mo":
         return 90
+    if period == "6mo":
+        return 130
     if period == "1y":
         return 260
     return None
@@ -112,10 +114,10 @@ def calculate_portfolio_weights(top_longs, top_shorts):
     return weights
 
 
-def run_isolated_backtest(ticker, threshold_pct=1.0, side_filter=None):
-    """Run a simple one-year isolated MA momentum backtest."""
+def run_isolated_backtest(ticker, threshold_pct=1.0, side_filter=None, period="1y"):
+    """Run a simple isolated MA momentum backtest."""
     try:
-        df = _load_ohlcv(ticker, period="1y")
+        df = _load_ohlcv(ticker, period=period)
         if df.empty or len(df) < 22:
             return 0.0, 0.0, 0, "N/A"
 

@@ -13,6 +13,21 @@ def _should_hide_backtest_detail(chat_id):
     return str(chat_id) in local_settings.hidden_backtest_chat_ids()
 
 
+def _wins_text(win_rate, count):
+    wins = round((win_rate / 100.0) * count) if count else 0
+    return f"{win_rate:.1f}% ({wins}/{count})"
+
+
+def _bt_line(label, avg_return, win_rate, count, side_label):
+    side_text = f" | {side_label}" if side_label else ""
+    if count <= 0:
+        return f"- {label}{side_text}: avg N/A | win N/A (0/0)"
+    return (
+        f"- {label}{side_text}: avg {avg_return:+.1f}% | "
+        f"win {_wins_text(win_rate, count)}"
+    )
+
+
 def run_compiled_scan(chat_id, progress_callback=None):
     session = get_or_create_session(chat_id)
     compiled_universe = compile_selected_universe(session)
@@ -68,35 +83,102 @@ def quick_report(ticker):
     market_data_store.ensure_price_data([ticker], min_period="1y")
     ma_signal, ma_strength = ma_cross_engine.analyze_trend_strict_signals(ticker)
     box = box_range_engine.analyze_box_range(ticker)
-    box_rows = box_range_engine.compare_box_exit_modes(ticker)
+    reversion = value_reversion_engine.analyze_value_reversion(ticker)
 
     box_status = box.get("status", "ERROR")
     box_width = box.get("box_width_pct")
     box_width_text = f"{box_width * 100:.1f}%" if isinstance(box_width, float) else "N/A"
+    reversion_status = reversion.get("status", "ERROR")
+    reversion_score = reversion.get("score", 0.0)
+    if reversion_status == "OK":
+        reversion_signal = "LONG_BIAS" if reversion_score >= 0 else "SHORT_BIAS"
+    else:
+        reversion_signal = reversion_status
 
     if ma_signal == "LONG_ENTRY" and box_status == "TOUCH_LOWER":
         view = "Strong long watch: MA uptrend plus lower box touch."
     elif ma_signal == "SHORT_ENTRY" and box_status == "TOUCH_UPPER":
         view = "Strong short watch: MA downtrend plus upper box touch."
+    elif reversion_signal == "LONG_BIAS" and box_status == "TOUCH_LOWER":
+        view = "Reversion long bias with lower box support. Check chart timing."
+    elif reversion_signal == "SHORT_BIAS" and box_status == "TOUCH_UPPER":
+        view = "Reversion short bias near upper box risk area."
     elif box_status in ["TOUCH_UPPER", "TOUCH_LOWER"]:
         view = "Box boundary event. Check chart and liquidity before action."
     elif ma_signal in ["LONG_ENTRY", "SHORT_ENTRY"]:
         view = "Trend signal active. Box signal is not the main driver."
+    elif reversion_status == "OK":
+        view = "Value reversion signal is available, but no strong MA/box confirmation."
     else:
         view = "No high-priority action signal."
 
-    report = f"**[Quick Check] {ticker}**\n\n"
-    report += f"MA Signal: `{ma_signal}` ({ma_strength:+.2f})\n"
-    report += f"Box Signal: `{box_status}` | width {box_width_text}\n"
-    if box.get("message"):
-        report += f"Box Detail: {box['message']}\n"
-    report += f"\nView: {view}\n\n"
-    report += "**Box TP/SL Test**\n"
-    for row in box_rows:
-        report += (
-            f"- {row['label']}: avg {row['avg_return']:+.1f}% | "
-            f"win {row['win_rate']:.1f}% ({row['count']} trades)\n"
+    ma_side = None
+    ma_side_label = "LONG+SHORT"
+    if ma_signal == "LONG_ENTRY":
+        ma_side = "LONG"
+        ma_side_label = "LONG"
+    elif ma_signal == "SHORT_ENTRY":
+        ma_side = "SHORT"
+        ma_side_label = "SHORT"
+
+    box_side = None
+    box_side_label = "LONG+SHORT"
+    if box_status == "TOUCH_LOWER":
+        box_side = "LONG"
+        box_side_label = "LONG"
+    elif box_status == "TOUCH_UPPER":
+        box_side = "SHORT"
+        box_side_label = "SHORT"
+
+    ma_bt = ma_cross_engine.run_isolated_backtest(
+        ticker,
+        threshold_pct=1.0,
+        side_filter=ma_side,
+        period="6mo",
+    )
+    box_bt = box_range_engine.run_box_backtest(
+        ticker,
+        side_filter=box_side,
+        period="6mo",
+    )
+
+    reversion_side = None
+    reversion_side_label = ""
+    reversion_bt = (0.0, 0.0, 0, "N/A")
+    if reversion_status == "OK":
+        reversion_side = "LONG" if reversion_score >= 0 else "SHORT"
+        reversion_side_label = reversion_side
+        reversion_bt = value_reversion_engine.run_reversion_backtest(
+            ticker,
+            reversion_side,
+            period_days=130,
         )
+
+    report = f"**[Quick Check] {ticker}**\n\n"
+    report += "**Signals**\n"
+    report += f"- Momentum: `{ma_signal}` | strength {ma_strength:+.2f}\n"
+    report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
+    report += f"- Value Reversion: `{reversion_signal}`"
+    if reversion_status == "OK":
+        report += f" | score {reversion_score:+.2f}"
+    report += "\n"
+    if box.get("message"):
+        report += f"\nBox Detail: {box['message']}\n"
+    report += f"\nView: {view}\n\n"
+    report += "**6M Backtest Summary**\n"
+    report += "Rule: signal close -> next open, no-lookahead historical entries.\n"
+    report += _bt_line("Momentum", ma_bt[0], ma_bt[1], ma_bt[2], ma_side_label) + "\n"
+    report += _bt_line("Box Range", box_bt[0], box_bt[1], box_bt[2], box_side_label) + "\n"
+    report += (
+        _bt_line(
+            "Value Reversion",
+            reversion_bt[0],
+            reversion_bt[1],
+            reversion_bt[2],
+            reversion_side_label,
+        )
+        + "\n"
+    )
     return report
 
 

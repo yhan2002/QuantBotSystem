@@ -28,6 +28,8 @@ def _period_to_rows(period):
         return 35
     if period == "3mo":
         return 90
+    if period == "6mo":
+        return 130
     if period == "1y":
         return 260
     return None
@@ -203,6 +205,7 @@ def run_box_backtest(
     max_holding_days=20,
     side_filter=None,
     df=None,
+    period="1y",
 ):
     """
     One-year box strategy backtest.
@@ -222,7 +225,7 @@ def run_box_backtest(
     """
     try:
         if df is None:
-            df = _load_ohlcv(ticker, period="1y")
+            df = _load_ohlcv(ticker, period=period)
         else:
             df = _normalize_ohlcv(df)
 

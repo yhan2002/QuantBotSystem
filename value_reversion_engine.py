@@ -302,8 +302,8 @@ def _format_rows(items, long_side=True):
     return "\n".join(rows) + "\n"
 
 
-def _build_reversion_history(ticker):
-    prices = market_data_store.get_price_data(ticker, period_days=260)
+def _build_reversion_history(ticker, period_days=260):
+    prices = market_data_store.get_price_data(ticker, period_days=period_days)
     if prices.empty or len(prices) < ZSCORE_WINDOW + REVERSION_HOLDING_DAYS + 1:
         return []
 
@@ -335,8 +335,8 @@ def _build_reversion_history(ticker):
     return history
 
 
-def run_reversion_backtest(ticker, side):
-    history = _build_reversion_history(ticker)
+def run_reversion_backtest(ticker, side, period_days=260):
+    history = _build_reversion_history(ticker, period_days=period_days)
     if not history:
         return 0.0, 0.0, 0, "N/A"
 
