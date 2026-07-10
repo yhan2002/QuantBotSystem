@@ -299,7 +299,7 @@ def handle_menu_callbacks(call):
             session["awaiting"] = "quick"
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
-                "Send one ticker for a Quick Check.\nExample: `TSLA`",
+                "Send up to 5 tickers for Quick Check.\nExample: `PANW MU TSLA`",
                 chat_id,
                 call.message.message_id,
                 parse_mode="Markdown",
@@ -459,12 +459,27 @@ def handle_pending_text(message):
             )
         elif awaiting == "quick":
             session["awaiting"] = None
-            bot.reply_to(message, f"Running Quick Check for {tickers[0]}...")
-            bot.send_message(
+            if len(tickers) > 5:
+                bot.reply_to(
+                    message,
+                    "Quick Check supports up to 5 tickers at once. Please try again with 5 or fewer.",
+                    reply_markup=build_back_home_markup(),
+                )
+                return
+            bot.reply_to(
+                message,
+                f"Running Quick Check for {len(tickers)} ticker(s): {', '.join(tickers)}...",
+            )
+            reports = []
+            for idx, ticker in enumerate(tickers, start=1):
+                report = quick_report(ticker)
+                if len(tickers) > 1:
+                    report = f"**[{idx}/{len(tickers)}]**\n" + report
+                reports.append(report)
+            send_long_message(
                 chat_id,
-                quick_report(tickers[0]),
-                parse_mode="Markdown",
-                reply_markup=build_back_home_markup(),
+                "\n\n----------------------------------------\n\n".join(reports),
+                markup=build_back_home_markup(),
             )
         elif awaiting == "boxbt":
             session["awaiting"] = None
