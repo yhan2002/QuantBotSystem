@@ -8,6 +8,7 @@ import config
 
 
 CUSTOM_GROUP_CODE = "CUSTOM"
+DEFAULT_GROUPS = {"CH_UNIV", "JP_UNIV", "CSQ_UNIV"}
 
 UNIVERSE_MENUS = [
     ("18C", "18C"),
@@ -106,7 +107,7 @@ def parse_tickers(text):
 def get_or_create_session(chat_id):
     if chat_id not in USER_SESSIONS:
         USER_SESSIONS[chat_id] = {
-            "selected_groups": set(["CSQ_MP"]),
+            "selected_groups": set(DEFAULT_GROUPS),
             "strategy": "MA_CROSS",
             "custom_tickers": [],
             "scheduler_active": True,
@@ -153,7 +154,7 @@ def clear_direct_input(session):
     session["custom_tickers"] = []
     session["selected_groups"].discard(CUSTOM_GROUP_CODE)
     if not session["selected_groups"]:
-        session["selected_groups"].add("CSQ_MP")
+        session["selected_groups"].update(DEFAULT_GROUPS)
 
 
 def sync_config_file(base_dir):

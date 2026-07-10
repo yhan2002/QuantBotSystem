@@ -1,11 +1,14 @@
 ﻿# File name: box_range_engine.py
 # Runs box-range signal analysis and box strategy backtests.
 import pandas as pd
+import catalyst_factor
 import market_data_store
 
 
-DEFAULT_EXIT_MODE = "center_band"
+DEFAULT_EXIT_MODE = "long_scale_short_center"
 EXIT_MODE_LABELS = {
+    "long_scale_short_center": "Long scale-out, short-risk center exit",
+    "scale_center_opposite": "50% center + 50% opposite edge, breakeven guard",
     "center_band": "Center band +/-10%",
     "opposite_touch": "Opposite box edge touch",
     "fixed_return": "Fixed return TP/SL",
@@ -74,30 +77,61 @@ def _entry_signal(stats, box_threshold_pct, touch_buffer_pct):
     return "BOX_FORMED"
 
 
+def _pnl_pct(position, exit_price, entry_price):
+    if position == "LONG":
+        return (exit_price - entry_price) / entry_price * 100.0
+    return (entry_price - exit_price) / entry_price * 100.0
+
+
+def _box_break_stop(position, c_price, entry_stats, box_break_buffer_pct):
+    if position == "LONG":
+        stop_level = entry_stats["lowest"] * (1 - box_break_buffer_pct)
+        return c_price < stop_level
+    stop_level = entry_stats["highest"] * (1 + box_break_buffer_pct)
+    return c_price > stop_level
+
+
+def _center_reached(position, c_price, entry_stats):
+    if position == "LONG":
+        return c_price >= entry_stats["mid"]
+    return c_price <= entry_stats["mid"]
+
+
+def _opposite_reached(position, c_price, entry_stats):
+    if position == "LONG":
+        return c_price >= entry_stats["highest"]
+    return c_price <= entry_stats["lowest"]
+
+
+def _breakeven_guard_reached(position, c_price, entry_price):
+    if position == "LONG":
+        return c_price <= entry_price
+    return c_price >= entry_price
+
+
 def _close_position(
     position,
     c_price,
     entry_price,
-    stats,
+    entry_stats,
     exit_mode,
     center_band_pct,
     fixed_tp_pct,
     fixed_sl_pct,
+    box_break_buffer_pct,
 ):
-    if position == "LONG":
-        pnl_pct = (c_price - entry_price) / entry_price * 100.0
-    else:
-        pnl_pct = (entry_price - c_price) / entry_price * 100.0
+    pnl_pct = _pnl_pct(position, c_price, entry_price)
+
+    if _box_break_stop(position, c_price, entry_stats, box_break_buffer_pct):
+        return True
 
     if exit_mode == "center_band":
-        lower = stats["mid"] * (1 - center_band_pct)
-        upper = stats["mid"] * (1 + center_band_pct)
-        return lower <= c_price <= upper or pnl_pct <= -5.0
+        lower = entry_stats["mid"] * (1 - center_band_pct)
+        upper = entry_stats["mid"] * (1 + center_band_pct)
+        return lower <= c_price <= upper
 
     if exit_mode == "opposite_touch":
-        if position == "LONG":
-            return c_price >= stats["highest"]
-        return c_price <= stats["lowest"]
+        return _opposite_reached(position, c_price, entry_stats)
 
     if exit_mode == "fixed_return":
         return pnl_pct >= fixed_tp_pct or pnl_pct <= -fixed_sl_pct
@@ -165,15 +199,26 @@ def run_box_backtest(
     center_band_pct=0.10,
     fixed_tp_pct=4.0,
     fixed_sl_pct=2.0,
+    box_break_buffer_pct=0.00,
+    max_holding_days=20,
+    side_filter=None,
     df=None,
 ):
     """
     One-year box strategy backtest.
 
     exit_mode:
+    - long_scale_short_center: use the scale-out rule for LONG rebound signals and
+      center exit for SHORT/TRIM risk signals.
+    - scale_center_opposite: close 50% at the box midpoint, then protect the rest
+      near breakeven while aiming for the opposite side.
     - center_band: close when price reaches the box midpoint +/- center_band_pct.
     - opposite_touch: close when price touches the opposite side of the box.
     - fixed_return: close at fixed_tp_pct profit or fixed_sl_pct loss.
+
+    Stop rule:
+    - LONG exits when price closes below the entry box low.
+    - SHORT exits when price closes above the entry box high.
     """
     try:
         if df is None:
@@ -182,10 +227,17 @@ def run_box_backtest(
             df = _normalize_ohlcv(df)
 
         if df.empty or len(df) < lookback_days + 5:
-            return 0.0, 0.0, 0
+            return 0.0, 0.0, 0, "N/A"
+
+        period_label = f"{df.index[0].date()} to {df.index[-1].date()}"
 
         position = None
         entry_price = 0.0
+        entry_stats = None
+        entry_index = None
+        center_taken = False
+        realized_pnl = 0.0
+        remaining_weight = 1.0
         trades = []
 
         for i in range(lookback_days, len(df) - 1):
@@ -196,53 +248,128 @@ def run_box_backtest(
             signal = _entry_signal(stats, box_threshold_pct, touch_buffer_pct)
 
             if position is None:
-                if signal == "TOUCH_LOWER":
+                if signal == "TOUCH_LOWER" and side_filter in (None, "LONG"):
                     position = "LONG"
                     entry_price = next_open
-                elif signal == "TOUCH_UPPER":
+                    entry_stats = stats.copy()
+                    entry_index = i + 1
+                    center_taken = False
+                    realized_pnl = 0.0
+                    remaining_weight = 1.0
+                elif signal == "TOUCH_UPPER" and side_filter in (None, "SHORT"):
                     position = "SHORT"
                     entry_price = next_open
+                    entry_stats = stats.copy()
+                    entry_index = i + 1
+                    center_taken = False
+                    realized_pnl = 0.0
+                    remaining_weight = 1.0
+                continue
+
+            effective_exit_mode = exit_mode
+            if exit_mode == "long_scale_short_center":
+                effective_exit_mode = (
+                    "scale_center_opposite" if position == "LONG" else "center_band"
+                )
+
+            if effective_exit_mode == "scale_center_opposite":
+                if _box_break_stop(
+                    position,
+                    c_price,
+                    entry_stats,
+                    box_break_buffer_pct,
+                ):
+                    pnl = realized_pnl + remaining_weight * _pnl_pct(
+                        position,
+                        next_open,
+                        entry_price,
+                    )
+                    trades.append(pnl)
+                    position = None
+                    continue
+
+                if not center_taken and _center_reached(position, c_price, entry_stats):
+                    realized_pnl += 0.5 * _pnl_pct(position, next_open, entry_price)
+                    remaining_weight = 0.5
+                    center_taken = True
+
+                if center_taken and _breakeven_guard_reached(
+                    position,
+                    c_price,
+                    entry_price,
+                ):
+                    pnl = realized_pnl + remaining_weight * _pnl_pct(
+                        position,
+                        next_open,
+                        entry_price,
+                    )
+                    trades.append(pnl)
+                    position = None
+                    continue
+
+                if center_taken and _opposite_reached(position, c_price, entry_stats):
+                    pnl = realized_pnl + remaining_weight * _pnl_pct(
+                        position,
+                        next_open,
+                        entry_price,
+                    )
+                    trades.append(pnl)
+                    position = None
+                    continue
+
+                if entry_index is not None and i - entry_index >= max_holding_days:
+                    pnl = realized_pnl + remaining_weight * _pnl_pct(
+                        position,
+                        next_open,
+                        entry_price,
+                    )
+                    trades.append(pnl)
+                    position = None
                 continue
 
             should_close = _close_position(
                 position,
                 c_price,
                 entry_price,
-                stats,
-                exit_mode,
+                entry_stats,
+                effective_exit_mode,
                 center_band_pct,
                 fixed_tp_pct,
                 fixed_sl_pct,
+                box_break_buffer_pct,
             )
 
             if should_close:
-                if position == "LONG":
-                    trades.append((next_open - entry_price) / entry_price * 100.0)
-                else:
-                    trades.append((entry_price - next_open) / entry_price * 100.0)
+                trades.append(_pnl_pct(position, next_open, entry_price))
                 position = None
 
         if not trades:
-            return 0.0, 0.0, 0
+            return 0.0, 0.0, 0, period_label
 
-        total_pnl = sum(trades)
+        avg_return = sum(trades) / len(trades)
         win_rate = sum(1 for pnl in trades if pnl > 0) / len(trades) * 100.0
-        return total_pnl, win_rate, len(trades)
+        return avg_return, win_rate, len(trades), period_label
 
     except Exception:
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, "N/A"
 
 
 def compare_box_exit_modes(ticker, **kwargs):
     df = _load_ohlcv(ticker, period="1y")
     results = []
     for mode in EXIT_MODE_LABELS:
-        pnl, win_rate, count = run_box_backtest(ticker, exit_mode=mode, df=df, **kwargs)
+        avg_return, win_rate, count, _ = run_box_backtest(
+            ticker,
+            exit_mode=mode,
+            df=df,
+            **kwargs,
+        )
         results.append(
             {
                 "mode": mode,
                 "label": EXIT_MODE_LABELS[mode],
-                "pnl": pnl,
+                "pnl": avg_return,
+                "avg_return": avg_return,
                 "win_rate": win_rate,
                 "count": count,
             }
@@ -250,11 +377,28 @@ def compare_box_exit_modes(ticker, **kwargs):
     return results
 
 
+def _catalyst_label(catalyst_map, ticker):
+    score = catalyst_factor.confirmed_score(catalyst_map, ticker)
+    if score > 0:
+        return f"catalyst {score:.1f}"
+    return "no catalyst"
+
+
+def _box_row(idx, ticker, res, action, catalyst_text):
+    width = res["box_width_pct"] * 100.0
+    return (
+        f"{idx}. {ticker:<6} | {action} | "
+        f"width {width:.1f}% | {catalyst_text}"
+    )
+
+
 def scan_total_universe(universe_list):
-    boxed_items = []
-    touch_alerts = []
+    long_rebound = []
+    breakout_watch = []
+    trim_risk = []
     failed_tickers = []
     backtest_targets = []
+    catalyst_map = catalyst_factor.latest_catalyst_map(universe_list)
 
     for ticker in universe_list:
         res = analyze_box_range(ticker)
@@ -263,35 +407,90 @@ def scan_total_universe(universe_list):
             failed_tickers.append(ticker)
             continue
 
-        if res["status"] in ["TOUCH_UPPER", "TOUCH_LOWER"]:
-            touch_alerts.append(f"- *{ticker}*: {res['message']}")
-            backtest_targets.append((ticker, res["status"]))
-        elif res["status"] == "BOX_FORMED":
-            boxed_items.append(f"- *{ticker}*: {res['message']}")
+        catalyst_score = catalyst_factor.confirmed_score(catalyst_map, ticker)
+        catalyst_text = _catalyst_label(catalyst_map, ticker)
+
+        if res["status"] == "TOUCH_LOWER":
+            long_rebound.append((ticker, res, catalyst_text))
+            backtest_targets.append((ticker, "LONG REBOUND", res["status"]))
+        elif res["status"] == "TOUCH_UPPER" and catalyst_score > 0:
+            breakout_watch.append((ticker, res, catalyst_text))
+        elif res["status"] == "TOUCH_UPPER":
+            trim_risk.append((ticker, res, catalyst_text))
+            backtest_targets.append((ticker, "TRIM / SHORT-RISK", res["status"]))
 
     report = "**[Box Range Strategy Scan]**\n"
     report += "=============================\n\n"
+    report += (
+        "**Signal logic**\n"
+        "Lower box touch = long rebound setup. "
+        "Upper box touch with catalyst = breakout watch; without catalyst = trim / short-risk watch.\n\n"
+    )
 
-    report += "**Entry watch: boundary-touch names**\n"
-    report += ("\n".join(touch_alerts) if touch_alerts else "None") + "\n\n"
-
-    report += "**Stable box candidates**\n"
-    report += ("\n".join(boxed_items) if boxed_items else "None") + "\n\n"
+    report += "**Today Action**\n"
+    report += "-----------------------------------------\n"
+    report += "**Long Rebound Setup**\n"
+    report += (
+        "\n".join(
+            _box_row(idx, ticker, res, "near lower box", catalyst_text)
+            for idx, (ticker, res, catalyst_text) in enumerate(long_rebound[:10], 1)
+        )
+        or "None"
+    )
+    report += "\n\n**Breakout Watch**\n"
+    report += (
+        "\n".join(
+            _box_row(idx, ticker, res, "near upper box", catalyst_text)
+            for idx, (ticker, res, catalyst_text) in enumerate(breakout_watch[:10], 1)
+        )
+        or "None"
+    )
+    report += "\n\n**Trim / Short-Risk Watch**\n"
+    report += (
+        "\n".join(
+            _box_row(idx, ticker, res, "near upper box", catalyst_text)
+            for idx, (ticker, res, catalyst_text) in enumerate(trim_risk[:10], 1)
+        )
+        or "None"
+    )
+    report += "\n\n"
 
     if backtest_targets:
         report += "Backtest Summary\n"
-        report += "-----------------------------\n"
+        report += "-----------------------------------------\n"
         report += (
             f"Default exit: {EXIT_MODE_LABELS[DEFAULT_EXIT_MODE]} "
             "(test other modes with /boxbt TICKER)\n"
+            "Rule: no-lookahead side-matched box signals, signal close -> next open, "
+            "average trade return\n"
+            "Guard: catalyst affects today's classification only, not historical entries.\n"
         )
-        for ticker, status in backtest_targets:
-            tag = "LONG" if status == "TOUCH_LOWER" else "SHORT"
-            pnl, win_rate, count = run_box_backtest(ticker)
-            report += (
-                f"- *{ticker} ({tag})*: total {pnl:+.1f}% | "
-                f"win {win_rate:.1f}% ({count} trades)\n"
+        total_return_sum = 0.0
+        total_wins = 0.0
+        total_trades = 0
+        for ticker, action, status in backtest_targets[:15]:
+            side = "LONG" if status == "TOUCH_LOWER" else "SHORT"
+            avg_return, win_rate, count, period_label = run_box_backtest(
+                ticker,
+                side_filter=side,
             )
+            total_return_sum += avg_return * count
+            total_wins += (win_rate / 100.0) * count
+            total_trades += count
+            period_text = f" | period {period_label}" if period_label != "N/A" else ""
+            report += (
+                f"{side} *{ticker} ({action})*: "
+                f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% | "
+                f"{count} trades{period_text}\n"
+            )
+        total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
+        portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
+        report += "\nSelected Candidate History Summary\n"
+        report += (
+            f"*Avg trade return {portfolio_avg:+.1f}%* | "
+            f"win {total_win_rate:.1f}% | {total_trades} trades\n"
+        )
+        report += "-----------------------------------------\n"
         report += "============================="
 
     if failed_tickers:

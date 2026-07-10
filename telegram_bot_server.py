@@ -36,6 +36,15 @@ from bot_ui import (
 bot = telebot.TeleBot(config.BOT_TOKEN)
 
 
+def permission_message(chat_id):
+    return (
+        "This chat is not allowed for this test bot.\n"
+        f"chat_id: `{chat_id}`\n\n"
+        "Add this chat_id to ALLOWED_CHAT_IDS in catalyst_test_full/config.py, "
+        "then restart the test bot."
+    )
+
+
 def send_long_message(chat_id, text, first_message_id=None, markup=None):
     max_length = 4000
     if len(text) <= max_length and first_message_id:
@@ -61,6 +70,7 @@ def send_long_message(chat_id, text, first_message_id=None, markup=None):
 def handle_menu(message):
     chat_id = str(message.chat.id)
     if not check_permission(chat_id):
+        bot.reply_to(message, permission_message(chat_id), parse_mode="Markdown")
         return
     session = get_or_create_session(chat_id)
     session["awaiting"] = None
@@ -76,6 +86,7 @@ def handle_menu(message):
 def handle_menu_callbacks(call):
     chat_id = str(call.message.chat.id)
     if not check_permission(chat_id):
+        bot.answer_callback_query(call.id, "This chat is not allowed.", show_alert=True)
         return
 
     session = get_or_create_session(chat_id)
@@ -317,6 +328,12 @@ def handle_menu_callbacks(call):
             call.message.message_id,
             reply_markup=build_back_home_markup(),
         )
+
+
+@bot.message_handler(commands=["whoami", "chatid"])
+def handle_whoami(message):
+    chat_id = str(message.chat.id)
+    bot.reply_to(message, f"chat_id: `{chat_id}`", parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["custom"])

@@ -89,7 +89,7 @@ def quick_report(ticker):
     report += "**Box TP/SL Test**\n"
     for row in box_rows:
         report += (
-            f"- {row['label']}: {row['pnl']:+.1f}% | "
+            f"- {row['label']}: avg {row['avg_return']:+.1f}% | "
             f"win {row['win_rate']:.1f}% ({row['count']} trades)\n"
         )
     return report
@@ -102,7 +102,7 @@ def boxbt_report(ticker):
     report += "Period: 1Y | Entry: Donchian box upper/lower touch\n\n"
     for row in rows:
         report += (
-            f"- {row['label']}: total {row['pnl']:+.1f}% | "
+            f"- {row['label']}: avg {row['avg_return']:+.1f}% | "
             f"win {row['win_rate']:.1f}% ({row['count']} trades)\n"
         )
     return report
