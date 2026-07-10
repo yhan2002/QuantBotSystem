@@ -17,6 +17,8 @@ data/
 *.log
 config.py
 config_backup.py
+config.local.py
+config_local.py
 
 # Proprietary source workbooks and generated office artifacts.
 *.xlsx

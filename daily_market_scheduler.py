@@ -9,6 +9,7 @@ import schedule
 
 import box_range_engine
 import config
+import local_settings
 import ma_cross_engine
 import market_data_store
 import value_reversion_engine
@@ -21,8 +22,7 @@ SCHEDULED_SCAN_TIME = "19:10"
 
 
 def _should_hide_backtest_detail(chat_id):
-    hidden_ids = getattr(config, "BACKTEST_DETAIL_HIDDEN_CHAT_IDS", set())
-    return str(chat_id) in {str(item) for item in hidden_ids}
+    return str(chat_id) in local_settings.hidden_backtest_chat_ids()
 
 
 def send_split_telegram_message(chat_id, text):
