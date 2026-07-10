@@ -30,8 +30,8 @@ def _bt_line(label, avg_return, win_rate, count, side_label):
 
 def _momentum_explanation(signal):
     meanings = {
-        "LONG_ENTRY": "uptrend entry; MA5 > MA10 > MA20 and all MA slopes are above +1%.",
-        "SHORT_ENTRY": "downtrend entry; MA5 < MA10 < MA20 and all MA slopes are below -1%.",
+        "LONG_ENTRY": "uptrend entry; MA5 > MA20 > MA60 and all MA slopes are positive.",
+        "SHORT_ENTRY": "downtrend entry; MA5 < MA20 < MA60 and all MA slopes are negative.",
         "EXIT_SIGNAL": "no active trend entry; MA alignment or slope strength is not enough.",
         "INSUFFICIENT_DATA": "not enough local price data for MA signal.",
         "NO_SIGNAL": "MA data exists, but no clean entry condition.",
@@ -169,7 +169,6 @@ def quick_report(ticker):
 
     ma_bt = ma_cross_engine.run_isolated_backtest(
         ticker,
-        threshold_pct=1.0,
         side_filter=ma_side,
         period="6mo",
     )
@@ -195,7 +194,7 @@ def quick_report(ticker):
     report += "**Signals**\n"
     report += f"- Momentum: `{ma_signal}` | strength {ma_strength:+.2f}\n"
     report += f"  Meaning: {_momentum_explanation(ma_signal)}\n"
-    report += "  Benchmark: strength above +1 supports LONG, below -1 supports SHORT.\n"
+    report += "  Benchmark: strength above 0 supports LONG, below 0 supports SHORT; stronger magnitude means stronger slope.\n"
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
     report += "  Benchmark: valid box width is 20% or less; edge touch buffer is 1%.\n"

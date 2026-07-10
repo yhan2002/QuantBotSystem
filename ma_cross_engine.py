@@ -8,6 +8,9 @@ import market_data_store
 
 MOMENTUM_STRATEGY_WEIGHT = 0.80
 MOMENTUM_CATALYST_WEIGHT = 0.20
+MOMENTUM_MA_WINDOWS = (5, 20, 60)
+MOMENTUM_SLOPE_THRESHOLD = 0.0
+MOMENTUM_HOLDING_DAYS = 20
 
 
 def _normalize_ohlcv(df):
@@ -23,6 +26,8 @@ def _period_to_rows(period):
         return 35
     if period == "3mo":
         return 90
+    if period == "4mo":
+        return 120
     if period == "6mo":
         return 130
     if period == "1y":
@@ -44,44 +49,76 @@ def _load_ohlcv(ticker, period="3mo", allow_download=False):
     return pd.DataFrame()
 
 
-def analyze_trend_strict_signals(ticker, threshold_pct=1.0, period="3mo"):
+def _add_ma_signal_columns(df, windows=MOMENTUM_MA_WINDOWS, threshold_pct=MOMENTUM_SLOPE_THRESHOLD):
+    fast, mid, slow = windows
+    out = df.copy()
+    out["MA_FAST"] = out["Close"].rolling(window=fast).mean()
+    out["MA_MID"] = out["Close"].rolling(window=mid).mean()
+    out["MA_SLOW"] = out["Close"].rolling(window=slow).mean()
+
+    out["S_FAST"] = out["MA_FAST"].pct_change() * 100
+    out["S_MID"] = out["MA_MID"].pct_change() * 100
+    out["S_SLOW"] = out["MA_SLOW"].pct_change() * 100
+
+    out["LONG_SIGNAL"] = (
+        (out["MA_FAST"] > out["MA_MID"])
+        & (out["MA_MID"] > out["MA_SLOW"])
+        & (out["S_FAST"] > threshold_pct)
+        & (out["S_MID"] > threshold_pct)
+        & (out["S_SLOW"] > threshold_pct)
+    )
+    out["SHORT_SIGNAL"] = (
+        (out["MA_FAST"] < out["MA_MID"])
+        & (out["MA_MID"] < out["MA_SLOW"])
+        & (out["S_FAST"] < -threshold_pct)
+        & (out["S_MID"] < -threshold_pct)
+        & (out["S_SLOW"] < -threshold_pct)
+    )
+    out["SIGNAL_STRENGTH"] = (out["S_FAST"] + out["S_MID"] + out["S_SLOW"]) / 3.0
+    return out
+
+
+def _position_state(df, side_filter=None):
+    position = None
+    entry_idx = None
+    for idx in range(len(df) - 1):
+        if position is None:
+            if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG"):
+                position = "LONG"
+                entry_idx = idx + 1
+            elif df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT"):
+                position = "SHORT"
+                entry_idx = idx + 1
+        elif idx - entry_idx >= MOMENTUM_HOLDING_DAYS:
+            position = None
+            entry_idx = None
+    return position, entry_idx
+
+
+def analyze_trend_strict_signals(
+    ticker,
+    threshold_pct=MOMENTUM_SLOPE_THRESHOLD,
+    period="4mo",
+    windows=MOMENTUM_MA_WINDOWS,
+):
     """Calculate MA alignment and slope signal for one ticker."""
     try:
         df = _load_ohlcv(ticker, period=period)
 
-        if df.empty or len(df) < 22:
+        if df.empty or len(df) < max(windows) + 2:
             return "INSUFFICIENT_DATA", 0.0
 
-        df["MA5"] = df["Close"].rolling(window=5).mean()
-        df["MA10"] = df["Close"].rolling(window=10).mean()
-        df["MA20"] = df["Close"].rolling(window=20).mean()
-
-        df["slope_pct5"] = df["MA5"].pct_change() * 100
-        df["slope_pct10"] = df["MA10"].pct_change() * 100
-        df["slope_pct20"] = df["MA20"].pct_change() * 100
-
+        df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
         latest = df.iloc[-1]
-        ma5, ma10, ma20 = latest["MA5"], latest["MA10"], latest["MA20"]
-        sp5, sp10, sp20 = (
-            latest["slope_pct5"],
-            latest["slope_pct10"],
-            latest["slope_pct20"],
-        )
-
-        if pd.isna([ma5, ma10, ma20, sp5, sp10, sp20]).any():
+        required = ["MA_FAST", "MA_MID", "MA_SLOW", "S_FAST", "S_MID", "S_SLOW"]
+        if pd.isna([latest[name] for name in required]).any():
             return "NO_SIGNAL", 0.0
 
-        signal_strength = (sp5 + sp10 + sp20) / 3.0
-        all_slopes_positive = (
-            sp5 > threshold_pct and sp10 > threshold_pct and sp20 > threshold_pct
-        )
-        all_slopes_negative = (
-            sp5 < -threshold_pct and sp10 < -threshold_pct and sp20 < -threshold_pct
-        )
+        signal_strength = float(latest["SIGNAL_STRENGTH"])
 
-        if (ma5 > ma10 > ma20) and all_slopes_positive:
+        if bool(latest["LONG_SIGNAL"]):
             return "LONG_ENTRY", signal_strength
-        if (ma5 < ma10 < ma20) and all_slopes_negative:
+        if bool(latest["SHORT_SIGNAL"]):
             return "SHORT_ENTRY", signal_strength
         return "EXIT_SIGNAL", signal_strength
     except Exception:
@@ -114,66 +151,44 @@ def calculate_portfolio_weights(top_longs, top_shorts):
     return weights
 
 
-def run_isolated_backtest(ticker, threshold_pct=1.0, side_filter=None, period="1y"):
+def run_isolated_backtest(
+    ticker,
+    threshold_pct=MOMENTUM_SLOPE_THRESHOLD,
+    side_filter=None,
+    period="1y",
+    windows=MOMENTUM_MA_WINDOWS,
+    holding_days=MOMENTUM_HOLDING_DAYS,
+):
     """Run a simple isolated MA momentum backtest."""
     try:
         df = _load_ohlcv(ticker, period=period)
-        if df.empty or len(df) < 22:
+        if df.empty or len(df) < max(windows) + holding_days + 2:
             return 0.0, 0.0, 0, "N/A"
 
         start_date = df.index[0].date().isoformat()
         end_date = df.index[-1].date().isoformat()
         period_label = f"{start_date} to {end_date}"
 
-        df["MA5"] = df["Close"].rolling(window=5).mean()
-        df["MA10"] = df["Close"].rolling(window=10).mean()
-        df["MA20"] = df["Close"].rolling(window=20).mean()
+        df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
 
-        df["slope_pct5"] = df["MA5"].pct_change() * 100
-        df["slope_pct10"] = df["MA10"].pct_change() * 100
-        df["slope_pct20"] = df["MA20"].pct_change() * 100
-
-        df["all_slopes_positive"] = (
-            (df["slope_pct5"] > threshold_pct)
-            & (df["slope_pct10"] > threshold_pct)
-            & (df["slope_pct20"] > threshold_pct)
-        )
-        df["all_slopes_negative"] = (
-            (df["slope_pct5"] < -threshold_pct)
-            & (df["slope_pct10"] < -threshold_pct)
-            & (df["slope_pct20"] < -threshold_pct)
-        )
-
-        df["LONG_SIGNAL"] = (
-            (df["MA5"] > df["MA10"])
-            & (df["MA10"] > df["MA20"])
-            & df["all_slopes_positive"]
-        )
-        df["SHORT_SIGNAL"] = (
-            (df["MA5"] < df["MA10"])
-            & (df["MA10"] < df["MA20"])
-            & df["all_slopes_negative"]
-        )
-
-        position = None
-        entry_price = 0.0
         trades = []
 
-        for idx in range(len(df) - 1):
-            next_open = float(df["Open"].iloc[idx + 1])
-            if position is None:
-                if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG"):
-                    position = "LONG"
-                    entry_price = next_open
-                elif df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT"):
-                    position = "SHORT"
-                    entry_price = next_open
-            elif position == "LONG" and not df["LONG_SIGNAL"].iloc[idx]:
-                trades.append((next_open - entry_price) / entry_price * 100.0)
-                position = None
-            elif position == "SHORT" and not df["SHORT_SIGNAL"].iloc[idx]:
-                trades.append((entry_price - next_open) / entry_price * 100.0)
-                position = None
+        next_available_idx = 0
+        for idx in range(max(windows), len(df) - holding_days):
+            if idx + 1 < next_available_idx:
+                continue
+            entry_idx = idx + 1
+            exit_idx = idx + holding_days
+            entry_price = float(df["Open"].iloc[entry_idx])
+            exit_price = float(df["Close"].iloc[exit_idx])
+            if entry_price <= 0:
+                continue
+            if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG"):
+                trades.append((exit_price / entry_price - 1.0) * 100.0)
+                next_available_idx = exit_idx + 1
+            elif df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT"):
+                trades.append((entry_price - exit_price) / entry_price * 100.0)
+                next_available_idx = exit_idx + 1
 
         if not trades:
             return 0.0, 0.0, 0, period_label
@@ -185,43 +200,23 @@ def run_isolated_backtest(ticker, threshold_pct=1.0, side_filter=None, period="1
         return 0.0, 0.0, 0, "N/A"
 
 
-def check_new_signal_status(ticker, signal_type, threshold_pct=1.0):
+def check_new_signal_status(
+    ticker,
+    signal_type,
+    threshold_pct=MOMENTUM_SLOPE_THRESHOLD,
+    windows=MOMENTUM_MA_WINDOWS,
+):
     """Detect whether today's signal is the first day of a new entry signal."""
     try:
-        df = _load_ohlcv(ticker, period="1mo")
-        if df.empty or len(df) < 22:
+        df = _load_ohlcv(ticker, period="4mo")
+        if df.empty or len(df) < max(windows) + 2:
             return False
 
-        df["MA5"] = df["Close"].rolling(window=5).mean()
-        df["MA10"] = df["Close"].rolling(window=10).mean()
-        df["MA20"] = df["Close"].rolling(window=20).mean()
-        df["slope_pct5"] = df["MA5"].pct_change() * 100
-        df["slope_pct10"] = df["MA10"].pct_change() * 100
-        df["slope_pct20"] = df["MA20"].pct_change() * 100
-        df["all_slopes_positive"] = (
-            (df["slope_pct5"] > threshold_pct)
-            & (df["slope_pct10"] > threshold_pct)
-            & (df["slope_pct20"] > threshold_pct)
-        )
-        df["all_slopes_negative"] = (
-            (df["slope_pct5"] < -threshold_pct)
-            & (df["slope_pct10"] < -threshold_pct)
-            & (df["slope_pct20"] < -threshold_pct)
-        )
-        df["LONG"] = (
-            (df["MA5"] > df["MA10"])
-            & (df["MA10"] > df["MA20"])
-            & df["all_slopes_positive"]
-        )
-        df["SHORT"] = (
-            (df["MA5"] < df["MA10"])
-            & (df["MA10"] < df["MA20"])
-            & df["all_slopes_negative"]
-        )
+        df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
 
         if signal_type == "LONG":
-            return bool(df["LONG"].iloc[-1] and not df["LONG"].iloc[-2])
-        return bool(df["SHORT"].iloc[-1] and not df["SHORT"].iloc[-2])
+            return bool(df["LONG_SIGNAL"].iloc[-1] and not df["LONG_SIGNAL"].iloc[-2])
+        return bool(df["SHORT_SIGNAL"].iloc[-1] and not df["SHORT_SIGNAL"].iloc[-2])
     except Exception:
         return False
 
@@ -285,7 +280,7 @@ def scan_ma_cross(universe_list):
 
     for ticker in universe_list:
         try:
-            signal, strength = analyze_trend_strict_signals(ticker, threshold_pct=1.0)
+            signal, strength = analyze_trend_strict_signals(ticker)
 
             if signal in ["INSUFFICIENT_DATA", "ERROR", "NO_SIGNAL"]:
                 failed_tickers.append(ticker)
@@ -293,11 +288,11 @@ def scan_ma_cross(universe_list):
 
             if signal == "LONG_ENTRY":
                 long_list.append((ticker, strength))
-                if check_new_signal_status(ticker, "LONG", threshold_pct=1.0):
+                if check_new_signal_status(ticker, "LONG"):
                     new_longs.append(ticker)
             elif signal == "SHORT_ENTRY":
                 short_list.append((ticker, strength))
-                if check_new_signal_status(ticker, "SHORT", threshold_pct=1.0):
+                if check_new_signal_status(ticker, "SHORT"):
                     new_shorts.append(ticker)
             elif signal == "EXIT_SIGNAL":
                 exit_list.append((ticker, strength))
@@ -362,18 +357,23 @@ def scan_ma_cross(universe_list):
             side = "LONG" if "LONG" in tag else "SHORT"
             avg_return, win_rate, count, period_label = run_isolated_backtest(
                 ticker,
-                threshold_pct=1.0,
                 side_filter=side,
             )
             total_return_sum += avg_return * count
             total_wins += (win_rate / 100.0) * count
             total_trades += count
             period_text = f" | period {period_label}" if period_label != "N/A" else ""
-            backtest_report += (
-                f"{side} *{ticker} ({tag})*: "
-                f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% | "
-                f"{count} trades{period_text}\n"
-            )
+            if count:
+                backtest_report += (
+                    f"{side} *{ticker} ({tag})*: "
+                    f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% | "
+                    f"{count} trades{period_text}\n"
+                )
+            else:
+                backtest_report += (
+                    f"{side} *{ticker} ({tag})*: "
+                    f"no closed trades{period_text}\n"
+                )
         total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
         portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
         backtest_report += "\nSelected Candidate History Summary\n"
@@ -388,6 +388,8 @@ def scan_ma_cross(universe_list):
         "=============================\n\n"
         "**Scoring**\n"
         "Final rank = strategy score 80% + catalyst factor 20%.\n"
+        "Signal rule = MA 5/20/60 alignment with same-direction slopes; "
+        "default test hold = 20 trading days.\n"
         "For SHORT candidates, positive catalyst reduces rank.\n\n"
         "**New Signals Today**\n"
         f"- New LONG: {', '.join(new_longs) if new_longs else 'None'}\n"
