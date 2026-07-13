@@ -81,6 +81,8 @@ def _candidate_rows(price_map, overlay, holding_days, windows, threshold, sector
                 "tier": factor["catalyst_long_tier"],
                 "catalyst_strength": factor["catalyst_strength"],
                 "catalyst_decay": factor["catalyst_decay"],
+                "fresh_tier2": factor["catalyst_long_tier"] == 2 and factor["catalyst_age_trading_days"] is not None,
+                "catalyst_age_trading_days": factor["catalyst_age_trading_days"],
                 "country": metadata.get("country") or factor.get("country") or _country_from_ticker(ticker),
                 "sector": metadata.get("sector") or "Unknown",
                 "diagnostics": factor,
@@ -102,6 +104,26 @@ def _rank(candidates, side, long_tilt, short_penalties):
             adjusted = base_percentile - short_penalties.get(tier, 0.0) * row["catalyst_decay"]
         ranked.append((adjusted, base_percentile, row))
     return [row for _, _, row in sorted(ranked, key=lambda item: (-item[0], -item[1], item[2]["ticker"]))]
+
+
+def _apply_fresh_long_tiebreaker(ranked, slots, fresh_days, max_rank_gap):
+    """Allow a fresh tier-2 name just below the cut-off to replace a non-fresh name."""
+    if slots <= 0 or max_rank_gap <= 0:
+        return ranked
+    result = list(ranked)
+    last_challenger = min(len(result), slots + max_rank_gap)
+    for challenger_idx in range(slots, last_challenger):
+        challenger = result[challenger_idx]
+        if not challenger["fresh_tier2"] or challenger["catalyst_age_trading_days"] > fresh_days:
+            continue
+        incumbent_idx = next(
+            (idx for idx in range(slots - 1, -1, -1) if not result[idx]["fresh_tier2"] or result[idx]["catalyst_age_trading_days"] > fresh_days),
+            None,
+        )
+        if incumbent_idx is None:
+            break
+        result[incumbent_idx], result[challenger_idx] = result[challenger_idx], result[incumbent_idx]
+    return result
 
 
 def _daily_trade_returns(trade, weight, cost_rate):
@@ -155,7 +177,17 @@ def _group_summary(trades, group_key, max_positions, calendar_days):
     return dict(grouped)
 
 
-def simulate(candidates_by_date, long_tilt, short_penalties, max_positions, cost_bps):
+def simulate(
+    candidates_by_date,
+    long_tilt,
+    short_penalties,
+    max_positions,
+    cost_bps,
+    fresh_long_tiebreaker=False,
+    fresh_short_exclusion=False,
+    fresh_days=3,
+    tiebreak_max_rank_gap=1,
+):
     booked, trades = {}, []
     cost_rate = cost_bps / 10_000.0
     for signal_date in sorted(candidates_by_date):
@@ -166,7 +198,15 @@ def simulate(candidates_by_date, long_tilt, short_penalties, max_positions, cost
             available = max_positions - sum(1 for row in booked.values() if row["side"] == side)
             if available <= 0:
                 continue
-            ranked = _rank([row for row in day if row["side"] == side and row["ticker"] not in booked], side, long_tilt if side == "LONG" else 0.0, short_penalties)
+            eligible = [row for row in day if row["side"] == side and row["ticker"] not in booked]
+            if side == "SHORT" and fresh_short_exclusion:
+                eligible = [
+                    row for row in eligible
+                    if not (row["fresh_tier2"] and row["catalyst_age_trading_days"] <= fresh_days)
+                ]
+            ranked = _rank(eligible, side, long_tilt if side == "LONG" else 0.0, short_penalties)
+            if side == "LONG" and fresh_long_tiebreaker:
+                ranked = _apply_fresh_long_tiebreaker(ranked, available, fresh_days, tiebreak_max_rank_gap)
             for row in ranked[:available]:
                 booked[row["ticker"]] = row
                 trades.append(row)
