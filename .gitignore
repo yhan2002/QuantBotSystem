@@ -1,0 +1,18 @@
+# Local credentials and machine-specific settings
+**/config.local.py
+**/local_settings.py
+**/config_backup.py
+*.env
+
+# Runtime data and generated outputs
+**/data/
+**/__pycache__/
+*.py[cod]
+*.log
+*.sqlite
+*.db
+
+# Editor and OS files
+.vscode/*.log
+.DS_Store
+Thumbs.db
