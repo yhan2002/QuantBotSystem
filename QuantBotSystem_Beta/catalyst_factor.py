@@ -3,7 +3,9 @@
 import os
 
 import config
+import market_data_store
 import scalping_catalyst_engine as catalyst
+from catalyst_pit_overlay import PointInTimeCatalystOverlay
 
 
 def _resolve_workbook_path():
@@ -42,6 +44,30 @@ def latest_catalyst_map(universe):
             enriched["confirmed"] = score >= catalyst.FIXED_THRESHOLD
             latest[ticker] = enriched
     return latest
+
+
+def latest_point_in_time_map(universe):
+    """Return current, non-leaking catalyst diagnostics for the Beta engines.
+
+    This intentionally leaves ``latest_catalyst_map`` intact for legacy Beta
+    engines. Momentum calls this function instead of the fixed-score API.
+    """
+    workbook_path = _resolve_workbook_path()
+    if not os.path.exists(workbook_path):
+        return {}
+    price_map = {}
+    for ticker in sorted(set(universe)):
+        prices = market_data_store.get_price_data(ticker)
+        if not prices.empty:
+            price_map[ticker] = prices
+    if not price_map:
+        return {}
+    overlay = PointInTimeCatalystOverlay(catalyst.load_scalping_events(workbook_path), price_map)
+    result = {}
+    for ticker, prices in price_map.items():
+        as_of_date = prices.index[-1].date()
+        result[ticker] = overlay.factor_on(ticker, as_of_date)
+    return result
 
 
 def confirmed_score(catalyst_map, ticker):

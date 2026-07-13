@@ -6,11 +6,14 @@ import catalyst_factor
 import market_data_store
 
 
-MOMENTUM_STRATEGY_WEIGHT = 0.80
-MOMENTUM_CATALYST_WEIGHT = 0.20
 MOMENTUM_MA_WINDOWS = (5, 20, 60)
 MOMENTUM_SLOPE_THRESHOLD = 0.0
 MOMENTUM_HOLDING_DAYS = 20
+# Keep execution impact off until a validation-backed configuration exists.
+MOMENTUM_PIT_LONG_TIEBREAK_ENABLED = False
+MOMENTUM_PIT_SHORT_EXCLUSION_ENABLED = False
+MOMENTUM_PIT_FRESH_DAYS = 10
+MOMENTUM_PIT_TIEBREAK_MAX_RANK_GAP = 1
 
 
 def _normalize_ohlcv(df):
@@ -221,34 +224,46 @@ def check_new_signal_status(
         return False
 
 
-def _enrich_with_catalyst(items, catalyst_map, side):
+def _is_fresh_tier2(row):
+    return row["catalyst_long_tier"] == 2 and row["catalyst_age_trading_days"] is not None and row["catalyst_age_trading_days"] <= MOMENTUM_PIT_FRESH_DAYS
+
+
+def _apply_pit_long_tiebreaker(rows, slots):
+    """Bounded promotion: only fresh tier-2 names just below the cut-off move up."""
+    result = list(rows)
+    last_challenger = min(len(result), slots + MOMENTUM_PIT_TIEBREAK_MAX_RANK_GAP)
+    for challenger_idx in range(slots, last_challenger):
+        if not _is_fresh_tier2(result[challenger_idx]):
+            continue
+        incumbent_idx = next((idx for idx in range(slots - 1, -1, -1) if not _is_fresh_tier2(result[idx])), None)
+        if incumbent_idx is None:
+            break
+        result[incumbent_idx], result[challenger_idx] = result[challenger_idx], result[incumbent_idx]
+    return result
+
+
+def _enrich_with_pit_catalyst(items, catalyst_map, side):
     if not items:
         return []
     max_strength = max(abs(item[1]) for item in items) or 1.0
     enriched = []
     for ticker, strength in items:
         strategy_norm = abs(strength) / max_strength * 100.0
-        cat_score = catalyst_factor.confirmed_score(catalyst_map, ticker)
-        if side == "SHORT":
-            combined = (
-                strategy_norm * MOMENTUM_STRATEGY_WEIGHT
-                - cat_score * MOMENTUM_CATALYST_WEIGHT
-            )
-        else:
-            combined = (
-                strategy_norm * MOMENTUM_STRATEGY_WEIGHT
-                + cat_score * MOMENTUM_CATALYST_WEIGHT
-            )
+        factor = catalyst_map.get(ticker, {})
         enriched.append(
             {
                 "ticker": ticker,
                 "strength": strength,
                 "strategy_norm": strategy_norm,
-                "catalyst_score": cat_score,
-                "combined_score": combined,
+                "combined_score": strategy_norm,
+                "catalyst_long_tier": factor.get("catalyst_long_tier", 0),
+                "catalyst_age_trading_days": factor.get("catalyst_age_trading_days"),
+                "author_impact_score": factor.get("author_impact_score", 0.0),
             }
         )
-    enriched.sort(key=lambda row: row["combined_score"], reverse=True)
+    enriched.sort(key=lambda row: (-row["strategy_norm"], row["ticker"]))
+    if side == "SHORT" and MOMENTUM_PIT_SHORT_EXCLUSION_ENABLED:
+        enriched = [row for row in enriched if not _is_fresh_tier2(row)]
     return enriched
 
 
@@ -261,14 +276,15 @@ def _format_ranked_rows(items, long_side=True):
         ticker = row["ticker"]
         strength = row["strength"]
         sign = "+" if long_side else ""
+        age = row["catalyst_age_trading_days"]
         catalyst_text = (
-            f" | catalyst {row['catalyst_score']:.1f}"
-            if row["catalyst_score"] > 0
+            f" | PIT tier {row['catalyst_long_tier']} age {age} author {row['author_impact_score']:+.1f}"
+            if row["catalyst_long_tier"]
             else ""
         )
         rows.append(
             f"{idx}. {ticker:<6} | strength {sign}{strength:.2f}% | "
-            f"combined {row['combined_score']:.1f}{catalyst_text}"
+            f"momentum {row['strategy_norm']:.1f}{catalyst_text}"
         )
     return "\n".join(rows) + "\n"
 
@@ -299,13 +315,15 @@ def scan_ma_cross(universe_list):
         except Exception:
             failed_tickers.append(ticker)
 
-    catalyst_map = catalyst_factor.latest_catalyst_map(universe_list)
+    catalyst_map = catalyst_factor.latest_point_in_time_map(universe_list)
     long_list.sort(key=lambda item: item[1], reverse=True)
     short_list.sort(key=lambda item: item[1])
     exit_list.sort(key=lambda item: item[0])
 
-    enriched_longs = _enrich_with_catalyst(long_list, catalyst_map, side="LONG")
-    enriched_shorts = _enrich_with_catalyst(short_list, catalyst_map, side="SHORT")
+    enriched_longs = _enrich_with_pit_catalyst(long_list, catalyst_map, side="LONG")
+    enriched_shorts = _enrich_with_pit_catalyst(short_list, catalyst_map, side="SHORT")
+    if MOMENTUM_PIT_LONG_TIEBREAK_ENABLED:
+        enriched_longs = _apply_pit_long_tiebreaker(enriched_longs, slots=5)
 
     top_longs = enriched_longs[:5]
     top_shorts = enriched_shorts[:5]
@@ -377,11 +395,11 @@ def scan_ma_cross(universe_list):
         f"- New SHORT: {', '.join(new_shorts) if new_shorts else 'None'}\n\n"
         "-----------------------------\n"
         "**LONG Candidates**\n"
-        "Top 5 by combined score:\n"
+        "Top 5 by momentum score (PIT catalyst shown as diagnostic):\n"
         f"{long_rows}\n"
         "-----------------------------\n"
         "**SHORT Candidates**\n"
-        "Top 5 by combined score:\n"
+        "Top 5 by momentum score (PIT catalyst shown as diagnostic):\n"
         f"{short_rows}\n"
         f"{backtest_report}"
         "============================="
