@@ -22,6 +22,16 @@ DEFAULT_WINDOWS = (5, 20, 60)
 DEFAULT_HOLDING_DAYS = 20
 
 
+def _parse_windows(value):
+    try:
+        windows = tuple(int(part.strip()) for part in value.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("windows must be three comma-separated integers, e.g. 5,20,60") from exc
+    if len(windows) != 3 or any(window <= 0 for window in windows) or tuple(sorted(windows)) != windows:
+        raise argparse.ArgumentTypeError("windows must be three ascending positive integers")
+    return windows
+
+
 def _country_from_ticker(ticker):
     if ticker.endswith((".KS", ".KQ")):
         return "KR"
@@ -69,6 +79,8 @@ def _candidate_rows(price_map, overlay, holding_days, windows, threshold, sector
                 "exit_date": pd.Timestamp(signals.index[exit_idx]).date(),
                 "prices": prices,
                 "tier": factor["catalyst_long_tier"],
+                "catalyst_strength": factor["catalyst_strength"],
+                "catalyst_decay": factor["catalyst_decay"],
                 "country": metadata.get("country") or factor.get("country") or _country_from_ticker(ticker),
                 "sector": metadata.get("sector") or "Unknown",
                 "diagnostics": factor,
@@ -85,9 +97,9 @@ def _rank(candidates, side, long_tilt, short_penalties):
         tier = row["tier"]
         adjusted = base_percentile
         if side == "LONG" and long_tilt:
-            adjusted = (1.0 - long_tilt) * base_percentile + long_tilt * (tier / 2.0)
+            adjusted = (1.0 - long_tilt) * base_percentile + long_tilt * row["catalyst_strength"]
         elif side == "SHORT":
-            adjusted = base_percentile - short_penalties.get(tier, 0.0)
+            adjusted = base_percentile - short_penalties.get(tier, 0.0) * row["catalyst_decay"]
         ranked.append((adjusted, base_percentile, row))
     return [row for _, _, row in sorted(ranked, key=lambda item: (-item[0], -item[1], item[2]["ticker"]))]
 
@@ -203,17 +215,22 @@ def main():
     parser.add_argument("--tilts", default="0.00,0.05,0.10,0.15")
     parser.add_argument("--short-penalty-tier1", type=float, default=0.03)
     parser.add_argument("--short-penalty-tier2", type=float, default=0.08)
+    parser.add_argument("--windows", type=_parse_windows, default=DEFAULT_WINDOWS, help="Momentum MA windows: fast,mid,slow")
+    parser.add_argument("--slope-threshold", type=float, default=0.0, help="Minimum MA slope threshold in percent")
+    parser.add_argument("--holding-days", type=int, default=DEFAULT_HOLDING_DAYS, help="Position holding period in trading days")
     parser.add_argument("--train-end")
     parser.add_argument("--validation-end")
     parser.add_argument("--sector-map", help="optional CSV: ticker,sector[,country]")
     args = parser.parse_args()
     if not args.workbook or not os.path.exists(args.workbook):
         raise SystemExit("Workbook not found. Pass its local path as the first argument; it is never written to Git.")
+    if args.holding_days <= 0:
+        raise SystemExit("--holding-days must be positive")
 
     price_map = load_price_map(selected_universe())
     records = load_scalping_events(args.workbook)
     overlay = PointInTimeCatalystOverlay(records, price_map)
-    candidates = _candidate_rows(price_map, overlay, DEFAULT_HOLDING_DAYS, DEFAULT_WINDOWS, 0.0, _load_sector_map(args.sector_map))
+    candidates = _candidate_rows(price_map, overlay, args.holding_days, args.windows, args.slope_threshold, _load_sector_map(args.sector_map))
     if not candidates:
         raise SystemExit("No valid candidates. Verify cached price history and workbook ticker mapping.")
     penalties = {0: 0.0, 1: args.short_penalty_tier1, 2: args.short_penalty_tier2}
@@ -224,7 +241,7 @@ def main():
         models[f"B_long_overlay_{tilt:.2f}"] = (tilt, {0: 0.0, 1: 0.0, 2: 0.0})
         models[f"C_short_penalty_{tilt:.2f}"] = (0.0, penalties)
         models[f"D_combined_{tilt:.2f}"] = (tilt, penalties)
-    output = {"assumptions": {"signal": "t close", "entry": "t+1 open", "holding_days": 20, "author_outcome_rule": "exit_date < current_signal_date", "cost_bps_one_way": args.cost_bps}, "segments": {}}
+    output = {"assumptions": {"signal": "t close", "entry": "t+1 open", "holding_days": args.holding_days, "momentum_windows": args.windows, "slope_threshold": args.slope_threshold, "author_outcome_rule": "exit_date < current_signal_date", "cost_bps_one_way": args.cost_bps}, "segments": {}}
     for segment, selector in _segments(candidates, args.train_end, args.validation_end).items():
         scoped = {date_value: rows for date_value, rows in candidates.items() if selector(date_value)}
         results = {name: simulate(scoped, tilt, penalties_for_model, args.top_n, args.cost_bps) for name, (tilt, penalties_for_model) in models.items()}
