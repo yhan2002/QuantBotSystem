@@ -10,6 +10,7 @@ This repository tracks two code lines:
 The **QuantBot: publish weekly update** VS Code task safely stages source changes, creates one weekly commit, and pushes it when an `origin` remote is configured. Local credentials, runtime data, and generated files are excluded.
 
 The scheduled Codex task then summarizes that week's deployment and beta changes in the Notion database **QuantBot 주간 업데이트** for the meeting.
+It also appends the same release/beta summary to `CHANGELOG.md` in this project.
 
 To connect GitHub after creating an empty private repository:
 
@@ -17,4 +18,3 @@ To connect GitHub after creating an empty private repository:
 git remote add origin https://github.com/<your-account>/QuantBot.git
 git push -u origin main
 ```
-
