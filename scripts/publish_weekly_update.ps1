@@ -6,7 +6,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $repoRoot
 
-git add -- .gitignore README.md scripts .vscode QuantBotSystem QuantBotSystem_Beta
+git add -- .gitignore README.md CHANGELOG.md scripts .vscode QuantBotSystem QuantBotSystem_Beta
 
 $staged = git diff --cached --quiet
 if ($LASTEXITCODE -eq 0) {
