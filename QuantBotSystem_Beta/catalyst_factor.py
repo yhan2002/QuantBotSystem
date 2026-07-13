@@ -16,6 +16,7 @@ def _resolve_workbook_path():
     candidates = [path] if os.path.isabs(path) else [
         os.path.abspath(os.path.join(base_dir, path)),
         os.path.abspath(os.path.join(base_dir, "../스캘핑 ver 2.0 - 복사본.xlsx")),
+        os.path.abspath(os.path.join(base_dir, "../../스캘핑 ver 2.0 - 복사본.xlsx")),
         os.path.abspath(os.path.join(base_dir, "../scalping_sandbox.xlsx")),
     ]
     for candidate in candidates:
