@@ -4,6 +4,7 @@ from datetime import date
 import pandas as pd
 
 from catalyst_pit_overlay import PointInTimeCatalystOverlay
+from run_catalyst_overlay_ab import _apply_fresh_long_tiebreaker
 
 
 def _prices():
@@ -57,6 +58,16 @@ class PointInTimeOverlayTests(unittest.TestCase):
         self.assertEqual(reset_day["catalyst_event_date"], dates[5].date().isoformat())
         self.assertAlmostEqual(reset_day["catalyst_decay"], 1.0)
         self.assertEqual(expired["catalyst_long_tier"], 0)
+
+    def test_fresh_tier2_can_only_replace_a_name_just_below_the_cutoff(self):
+        ranked = [
+            {"ticker": "A", "fresh_tier2": False, "catalyst_age_trading_days": None},
+            {"ticker": "B", "fresh_tier2": False, "catalyst_age_trading_days": None},
+            {"ticker": "C", "fresh_tier2": True, "catalyst_age_trading_days": 2},
+            {"ticker": "D", "fresh_tier2": True, "catalyst_age_trading_days": 1},
+        ]
+        adjusted = _apply_fresh_long_tiebreaker(ranked, slots=2, fresh_days=3, max_rank_gap=1)
+        self.assertEqual([row["ticker"] for row in adjusted[:2]], ["A", "C"])
 
 
 if __name__ == "__main__":
