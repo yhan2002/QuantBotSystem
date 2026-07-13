@@ -11,6 +11,8 @@
 *.log
 *.sqlite
 *.db
+**/catalyst_overlay_results*.json
+**/catalyst_overlay_tuning*.csv
 
 # Editor and OS files
 .vscode/*.log

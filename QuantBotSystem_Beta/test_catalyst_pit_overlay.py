@@ -39,6 +39,25 @@ class PointInTimeOverlayTests(unittest.TestCase):
         factor = overlay.factor_on("AAA", date(2025, 2, 11))
         self.assertEqual(factor["catalyst_long_tier"], 2)
 
+    def test_linear_decay_uses_trading_days_and_new_signal_resets_it(self):
+        prices = {"AAA": _prices()}
+        dates = prices["AAA"].index
+        records = [
+            {"ticker": "AAA", "author": "a", "event_date": dates[1], "is_estimate_up": True},
+            {"ticker": "AAA", "author": "a", "event_date": dates[5], "is_estimate_up": True},
+        ]
+        overlay = PointInTimeCatalystOverlay(records, prices)
+        first_day = overlay.factor_on("AAA", dates[1].date())
+        next_day = overlay.factor_on("AAA", dates[2].date())
+        reset_day = overlay.factor_on("AAA", dates[5].date())
+        expired = overlay.factor_on("AAA", dates[25].date())
+        self.assertEqual(first_day["catalyst_age_trading_days"], 0)
+        self.assertAlmostEqual(first_day["catalyst_decay"], 1.0)
+        self.assertAlmostEqual(next_day["catalyst_decay"], 19 / 20)
+        self.assertEqual(reset_day["catalyst_event_date"], dates[5].date().isoformat())
+        self.assertAlmostEqual(reset_day["catalyst_decay"], 1.0)
+        self.assertEqual(expired["catalyst_long_tier"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,20 +113,25 @@ class PointInTimeCatalystOverlay:
             for author, score in raw_scores.items()
         }
 
-    def factor_on(self, ticker: str, current_signal_date: date) -> dict[str, Any]:
-        """Return the active, non-leaking tier for a ticker on signal date t."""
-        scores = self.author_scores_on(current_signal_date)
-        active = [
-            row
-            for row in self.records
-            if row["ticker"] == ticker
-            and row["event_date"] <= current_signal_date <= row["exit_date"]
-        ]
-        if not active:
-            return self._empty_factor()
+    def _trading_age(self, record: dict[str, Any], current_signal_date: date) -> int:
+        """Trading days elapsed since the event close: 0 on the signal date."""
+        dates = pd.DatetimeIndex(self.price_map[record["ticker"]].index).date
+        event_position = int(np.searchsorted(dates, record["event_date"], side="right"))
+        current_position = int(np.searchsorted(dates, current_signal_date, side="right"))
+        return max(0, current_position - event_position)
 
+    def factor_on(self, ticker: str, current_signal_date: date) -> dict[str, Any]:
+        """Return the latest eligible, linearly decayed catalyst known on t."""
+        scores = self.author_scores_on(current_signal_date)
         candidates = []
-        for row in active:
+        active_rows = []
+        for row in self.records:
+            if row["ticker"] != ticker or row["event_date"] > current_signal_date:
+                continue
+            age = self._trading_age(row, current_signal_date)
+            if age >= HOLDING_DAYS:
+                continue
+            active_rows.append((row["event_date"], age, row))
             author_score = scores.get(row["author"], 0.0)
             eligible_long = (
                 row["estimate_up"]
@@ -136,10 +141,36 @@ class PointInTimeCatalystOverlay:
             tier = 0
             if eligible_long and author_score > -2:
                 tier = 2 if author_score > 0 else 1
-            candidates.append((tier, author_score, row))
-        tier, author_score, row = max(candidates, key=lambda item: (item[0], item[1], item[2]["event_date"]))
+            if tier:
+                candidates.append((row["event_date"], tier, author_score, age, row))
+        if not candidates:
+            if active_rows:
+                _, age, row = max(active_rows, key=lambda item: item[0])
+                return {
+                    "catalyst_long_tier": 0,
+                    "catalyst_strength": 0.0,
+                    "catalyst_decay": (HOLDING_DAYS - age) / HOLDING_DAYS,
+                    "catalyst_age_trading_days": age,
+                    "catalyst_event_date": row["event_date"].isoformat(),
+                    "author_impact_score": scores.get(row["author"], 0.0),
+                    "estimate_up": row["estimate_up"],
+                    "is_7pct_up": row["is_7pct_up"],
+                    "is_turnover_top10": row["is_turnover_top10"],
+                    "is_52w_high": row["is_52w_high"],
+                    "is_52w_low": row["is_52w_low"],
+                    "country": row["country"],
+                }
+            return self._empty_factor()
+
+        # A newer valid catalyst renews the 20-trading-day clock for its ticker.
+        _, tier, author_score, age, row = max(candidates, key=lambda item: (item[0], item[1], item[2]))
+        decay = (HOLDING_DAYS - age) / HOLDING_DAYS
         return {
             "catalyst_long_tier": tier,
+            "catalyst_strength": (tier / 2.0) * decay,
+            "catalyst_decay": decay,
+            "catalyst_age_trading_days": age,
+            "catalyst_event_date": row["event_date"].isoformat(),
             "author_impact_score": author_score,
             "estimate_up": row["estimate_up"],
             "is_7pct_up": row["is_7pct_up"],
@@ -153,6 +184,10 @@ class PointInTimeCatalystOverlay:
     def _empty_factor() -> dict[str, Any]:
         return {
             "catalyst_long_tier": 0,
+            "catalyst_strength": 0.0,
+            "catalyst_decay": 0.0,
+            "catalyst_age_trading_days": None,
+            "catalyst_event_date": None,
             "author_impact_score": 0.0,
             "estimate_up": False,
             "is_7pct_up": False,
