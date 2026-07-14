@@ -19,6 +19,12 @@
 - Stage only task-relevant files. Commit clear work units; push only when requested.
 - `CHANGELOG.md` is the project change record. Keep meeting-thread notes concise and link back to it.
 
+## AGENTS Maintenance
+
+- Update this file when a durable scope, safety, validation, or release convention changes.
+- Do not add weekly history, experiment results, or implementation detail; record those in `CHANGELOG.md`.
+- Keep this file concise and remove superseded rules when adding a replacement.
+
 ## Model Selection
 
 - Sol: architecture, security review, multi-file refactors
