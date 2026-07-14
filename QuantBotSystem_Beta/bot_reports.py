@@ -42,10 +42,11 @@ def _momentum_explanation(signal):
 
 def _box_explanation(status):
     meanings = {
-        "TOUCH_LOWER": "price is near the lower edge of a valid box; rebound watch.",
-        "TOUCH_UPPER": "price is near the upper edge of a valid box; breakout or trim-risk watch.",
-        "BOX_FORMED": "range is narrow enough, but price is not near either edge.",
-        "NORMAL": "no active box setup; recent range is too wide or not near an edge.",
+        "LONG_RECLAIM": "intraday lower-boundary break recovered by the close; LONG at next open.",
+        "SHORT_RECLAIM": "intraday upper-boundary break recovered by the close; SHORT at next open.",
+        "BOX_QUALIFIED": "11%~20% box is valid; waiting for a false-break reclaim.",
+        "VOLUME_VETO": "box setup exists but turnover surge is too large, so entry is blocked.",
+        "NORMAL": "no valid 11%~20% box setup.",
         "DATA_INSUFFICIENT": "not enough local price data for box signal.",
         "ERROR": "box calculation failed.",
     }
@@ -54,12 +55,10 @@ def _box_explanation(status):
 
 def _reversion_explanation(signal):
     meanings = {
-        "LONG_BIAS": "price/value proxy is below its short-term norm; rebound bias.",
-        "SHORT_BIAS": "price/value proxy is above its short-term norm; reversal-risk bias.",
-        "FUNDAMENTAL_MISSING": "fundamental data is missing, so value signal is unavailable.",
-        "DATA_INSUFFICIENT": "not enough local price data for value signal.",
-        "DATA_SUSPECT": "fundamental ratio looks abnormal, so signal is ignored.",
-        "NO_SIGNAL": "value data exists, but z-score is not usable.",
+        "LONG_BIAS": "downside shock has reversed at the close within a non-negative MA60 trend.",
+        "SHORT_BIAS": "upside shock has reversed at the close within a non-positive MA60 trend.",
+        "DATA_INSUFFICIENT": "not enough local OHLCV data for the 60-day trend filter.",
+        "NO_SIGNAL": "no confirmed price/liquidity reversion setup today.",
         "ERROR": "value reversion calculation failed.",
     }
     return meanings.get(signal, "unclassified value reversion state.")
@@ -132,20 +131,20 @@ def quick_report(ticker):
     else:
         reversion_signal = reversion_status
 
-    if ma_signal == "LONG_ENTRY" and box_status == "TOUCH_LOWER":
-        view = "Strong long watch: MA uptrend plus lower box touch."
-    elif ma_signal == "SHORT_ENTRY" and box_status == "TOUCH_UPPER":
-        view = "Strong short watch: MA downtrend plus upper box touch."
-    elif reversion_signal == "LONG_BIAS" and box_status == "TOUCH_LOWER":
-        view = "Reversion long bias with lower box support. Check chart timing."
-    elif reversion_signal == "SHORT_BIAS" and box_status == "TOUCH_UPPER":
-        view = "Reversion short bias near upper box risk area."
-    elif box_status in ["TOUCH_UPPER", "TOUCH_LOWER"]:
-        view = "Box boundary event. Check chart and liquidity before action."
+    if ma_signal == "LONG_ENTRY" and box_status == "LONG_RECLAIM":
+        view = "Strong long watch: MA uptrend plus lower false-break reclaim."
+    elif ma_signal == "SHORT_ENTRY" and box_status == "SHORT_RECLAIM":
+        view = "Strong short watch: MA downtrend plus upper false-break reclaim."
+    elif reversion_signal == "LONG_BIAS" and box_status == "LONG_RECLAIM":
+        view = "Reversion long bias with lower false-break reclaim."
+    elif reversion_signal == "SHORT_BIAS" and box_status == "SHORT_RECLAIM":
+        view = "Reversion short bias with upper false-break reclaim."
+    elif box_status in ["LONG_RECLAIM", "SHORT_RECLAIM"]:
+        view = "Box reclaim signal is active for next-open entry."
     elif ma_signal in ["LONG_ENTRY", "SHORT_ENTRY"]:
         view = "Trend signal active. Box signal is not the main driver."
     elif reversion_status == "OK":
-        view = "Value reversion signal is available, but no strong MA/box confirmation."
+        view = "Price/liquidity reversion signal is active for next-open entry."
     else:
         view = "No high-priority action signal."
 
@@ -160,10 +159,10 @@ def quick_report(ticker):
 
     box_side = None
     box_side_label = "LONG+SHORT"
-    if box_status == "TOUCH_LOWER":
+    if box_status == "LONG_RECLAIM":
         box_side = "LONG"
         box_side_label = "LONG"
-    elif box_status == "TOUCH_UPPER":
+    elif box_status == "SHORT_RECLAIM":
         box_side = "SHORT"
         box_side_label = "SHORT"
 
@@ -197,13 +196,13 @@ def quick_report(ticker):
     report += "  Benchmark: strength above 0 supports LONG, below 0 supports SHORT; stronger magnitude means stronger slope.\n"
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
-    report += "  Benchmark: valid box width is 20% or less; edge touch buffer is 1%.\n"
-    report += f"- Value Reversion: `{reversion_signal}`"
+    report += "  Benchmark: prior 20d box width 11%~20%, 2+ same-side bounces, close reclaim, and turnover below 2x its 20d average.\n"
+    report += f"- Price/Liquidity Reversion v2: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"
     report += "\n"
     report += f"  Meaning: {_reversion_explanation(reversion_signal)}\n"
-    report += "  Benchmark: score magnitude near 1 is meaningful, near 2 is strong.\n"
+    report += "  Benchmark: 5d shock within 3d, near-flat/trend-aligned MA60, reversal close, and turnover below 2.0x its 20d average.\n"
     if box.get("message"):
         report += f"\nBox Detail: {box['message']}\n"
     report += f"\nView: {view}\n\n"
@@ -214,7 +213,7 @@ def quick_report(ticker):
     report += _bt_line("Box Range", box_bt[0], box_bt[1], box_bt[2], box_side_label) + "\n"
     report += (
         _bt_line(
-            "Value Reversion",
+            "Reversion v2",
             reversion_bt[0],
             reversion_bt[1],
             reversion_bt[2],
@@ -229,7 +228,7 @@ def boxbt_report(ticker):
     market_data_store.ensure_price_data([ticker], min_period="1y")
     rows = box_range_engine.compare_box_exit_modes(ticker)
     report = f"**[Box TP/SL Test] {ticker}**\n"
-    report += "Period: 1Y | Entry: Donchian box upper/lower touch\n\n"
+    report += "Period: 1Y | Entry: false-break reclaim at close; enter next open\n\n"
     for row in rows:
         report += (
             f"- {row['label']}: avg {row['avg_return']:+.1f}% | "

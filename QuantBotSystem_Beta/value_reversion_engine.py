@@ -1,409 +1,347 @@
 # File name: value_reversion_engine.py
-# Ranks cap-to-equity mean reversion signals using cached fundamentals.
+# Price/liquidity reversion: excess move, reversal confirmation, and scale-out exits.
 import math
-import os
-import sqlite3
-from datetime import datetime, timedelta, timezone
 
 import pandas as pd
-import yfinance as yf
 
 import market_data_store
 
 
-FUNDAMENTAL_TTL_DAYS = 30
-ZSCORE_WINDOW = 5
-REVERSION_HOLDING_DAYS = 20
+REVERSION_SHOCK_DAYS = 5
+REVERSION_VOL_WINDOW = 20
+REVERSION_MA_WINDOW = 60
+REVERSION_ATR_WINDOW = 14
+REVERSION_TURNOVER_LOOKBACK = 20
+REVERSION_LONG_THRESHOLD = -1.40
+REVERSION_SHORT_THRESHOLD = 1.60
+REVERSION_MAX_TURNOVER_RATIO = 2.00
+REVERSION_LONG_CLOSE_LOCATION = 0.55
+REVERSION_SHORT_CLOSE_LOCATION = 0.45
+REVERSION_TREND_SLOPE_TOLERANCE = 0.001
+REVERSION_PARTIAL_LEVEL = 0.50
+REVERSION_NO_PROGRESS_DAYS = 3
+REVERSION_MAX_HOLDING_DAYS = 10
+REVERSION_STOP_ATR = 1.50
 
 
-def _get_connection():
-    os.makedirs(market_data_store.DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(market_data_store.DB_PATH)
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS fundamentals (
-            ticker TEXT PRIMARY KEY,
-            shares_outstanding REAL,
-            total_equity REAL,
-            market_cap REAL,
-            updated_at TEXT NOT NULL
-        )
-        """
+def _normalize_ohlcv(prices):
+    if prices is None or prices.empty:
+        return pd.DataFrame()
+    if isinstance(prices.columns, pd.MultiIndex):
+        prices = prices.copy()
+        prices.columns = prices.columns.get_level_values(0)
+    required = ["Open", "High", "Low", "Close", "Volume"]
+    if any(column not in prices.columns for column in required):
+        return pd.DataFrame()
+    return prices.dropna(subset=required).copy()
+
+
+def _add_reversion_features(prices):
+    prices = _normalize_ohlcv(prices)
+    if prices.empty:
+        return prices
+
+    close = prices["Close"].astype(float)
+    high = prices["High"].astype(float)
+    low = prices["Low"].astype(float)
+    volume = prices["Volume"].astype(float)
+    daily_return = close.pct_change()
+    volatility = daily_return.rolling(REVERSION_VOL_WINDOW).std(ddof=0)
+
+    prices["SHOCK"] = close.pct_change(REVERSION_SHOCK_DAYS) / (
+        volatility * math.sqrt(REVERSION_SHOCK_DAYS)
     )
-    return conn
-
-
-def _is_fresh(updated_at):
-    try:
-        timestamp = datetime.fromisoformat(updated_at)
-        if timestamp.tzinfo is None:
-            timestamp = timestamp.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) - timestamp <= timedelta(days=FUNDAMENTAL_TTL_DAYS)
-    except Exception:
-        return False
-
-
-def _read_cached_fundamentals(conn, ticker):
-    row = conn.execute(
-        """
-        SELECT shares_outstanding, total_equity, market_cap, updated_at
-        FROM fundamentals
-        WHERE ticker = ?
-        """,
-        (ticker,),
-    ).fetchone()
-    if not row:
-        return None
-    shares, equity, market_cap, updated_at = row
-    if not _is_fresh(updated_at):
-        return None
-    if not shares or not equity or shares <= 0 or equity <= 0:
-        return None
-    return {
-        "shares_outstanding": float(shares),
-        "total_equity": float(equity),
-        "market_cap": float(market_cap) if market_cap else None,
-        "updated_at": updated_at,
-    }
-
-
-def _first_numeric(series):
-    if series is None:
-        return None
-    for value in series:
-        if pd.notna(value):
-            try:
-                value = float(value)
-                if value > 0:
-                    return value
-            except Exception:
-                continue
-    return None
-
-
-def _fetch_fundamentals(ticker):
-    yf_ticker = yf.Ticker(ticker)
-    info = {}
-    try:
-        info = yf_ticker.get_info()
-    except Exception:
-        info = {}
-
-    market_cap = info.get("marketCap")
-    shares = info.get("sharesOutstanding") or info.get("impliedSharesOutstanding")
-
-    equity_labels = [
-        "Stockholders Equity",
-        "Total Stockholder Equity",
-        "Common Stock Equity",
-        "Total Equity Gross Minority Interest",
-        "Total Equity",
-        "Shareholders Equity",
-    ]
-
-    total_equity = None
-    for statement_name in ["balance_sheet", "quarterly_balance_sheet"]:
-        try:
-            balance_sheet = getattr(yf_ticker, statement_name)
-            for label in equity_labels:
-                if label in balance_sheet.index:
-                    total_equity = _first_numeric(balance_sheet.loc[label])
-                    if total_equity:
-                        break
-            if total_equity:
-                break
-        except Exception:
-            continue
-
-    if (not shares or shares <= 0) and market_cap:
-        prices = market_data_store.get_price_data(ticker, period_days=5)
-        if not prices.empty:
-            latest_close = float(prices["Close"].iloc[-1])
-            if latest_close > 0:
-                shares = float(market_cap) / latest_close
-
-    book_value = info.get("bookValue")
-    if (not total_equity or total_equity <= 0) and shares and book_value:
-        try:
-            total_equity = float(shares) * float(book_value)
-        except Exception:
-            total_equity = None
-
-    price_to_book = info.get("priceToBook")
-    if (not total_equity or total_equity <= 0) and shares and price_to_book:
-        prices = market_data_store.get_price_data(ticker, period_days=5)
-        if not prices.empty:
-            latest_close = float(prices["Close"].iloc[-1])
-            if latest_close > 0 and float(price_to_book) > 0:
-                total_equity = float(shares) * latest_close / float(price_to_book)
-
-    if not shares or not total_equity or shares <= 0 or total_equity <= 0:
-        return None
-
-    return {
-        "shares_outstanding": float(shares),
-        "total_equity": float(total_equity),
-        "market_cap": float(market_cap) if market_cap else None,
-    }
-
-
-def _upsert_fundamentals(conn, ticker, data):
-    updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    conn.execute(
-        """
-        INSERT INTO fundamentals (
-            ticker, shares_outstanding, total_equity, market_cap, updated_at
-        )
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(ticker) DO UPDATE SET
-            shares_outstanding=excluded.shares_outstanding,
-            total_equity=excluded.total_equity,
-            market_cap=excluded.market_cap,
-            updated_at=excluded.updated_at
-        """,
-        (
-            ticker,
-            data["shares_outstanding"],
-            data["total_equity"],
-            data.get("market_cap"),
-            updated_at,
-        ),
+    prices["MA60"] = close.rolling(REVERSION_MA_WINDOW).mean()
+    prices["MA60_SLOPE"] = prices["MA60"].pct_change(5)
+    prices["TURNOVER_RATIO"] = (volume * close) / (
+        (volume * close).shift(1).rolling(REVERSION_TURNOVER_LOOKBACK).mean()
     )
-    conn.commit()
-    data["updated_at"] = updated_at
+
+    previous_close = close.shift(1)
+    true_range = pd.concat(
+        [high - low, (high - previous_close).abs(), (low - previous_close).abs()],
+        axis=1,
+    ).max(axis=1)
+    prices["ATR"] = true_range.rolling(REVERSION_ATR_WINDOW).mean()
+    range_size = (high - low).replace(0, pd.NA)
+    prices["CLOSE_LOCATION"] = ((close - low) / range_size).fillna(0.5)
+
+    # Permit a close-confirmed reversal up to three sessions after the shock.
+    recent_long_extreme = (
+        prices["SHOCK"].shift(1).rolling(3).min() <= REVERSION_LONG_THRESHOLD
+    )
+    recent_short_extreme = (
+        prices["SHOCK"].shift(1).rolling(3).max() >= REVERSION_SHORT_THRESHOLD
+    )
+    confirmation_long = (close > close.shift(1)) & (
+        prices["CLOSE_LOCATION"] >= REVERSION_LONG_CLOSE_LOCATION
+    )
+    confirmation_short = (close < close.shift(1)) & (
+        prices["CLOSE_LOCATION"] <= REVERSION_SHORT_CLOSE_LOCATION
+    )
+    liquid_enough = prices["TURNOVER_RATIO"] < REVERSION_MAX_TURNOVER_RATIO
+    prices["LONG_SIGNAL"] = (
+        recent_long_extreme
+        & confirmation_long
+        & liquid_enough
+        & (prices["MA60_SLOPE"] >= -REVERSION_TREND_SLOPE_TOLERANCE)
+    ).fillna(False)
+    prices["SHORT_SIGNAL"] = (
+        recent_short_extreme
+        & confirmation_short
+        & liquid_enough
+        & (prices["MA60_SLOPE"] <= REVERSION_TREND_SLOPE_TOLERANCE)
+    ).fillna(False)
+    return prices
 
 
-def get_fundamentals(ticker, allow_download=True):
-    conn = _get_connection()
-    try:
-        cached = _read_cached_fundamentals(conn, ticker)
-        if cached:
-            return cached
-        if not allow_download:
-            return None
-        fetched = _fetch_fundamentals(ticker)
-        if not fetched:
-            return None
-        _upsert_fundamentals(conn, ticker, fetched)
-        return fetched
-    finally:
-        conn.close()
-
-
-def _zscore_latest(series, window=ZSCORE_WINDOW):
-    values = series.dropna().tail(window)
-    if len(values) < window:
-        return None
-    std = float(values.std(ddof=0))
-    if std == 0 or math.isnan(std):
-        return None
-    return (float(values.iloc[-1]) - float(values.mean())) / std
-
-
-def _reversion_signal_series(prices):
-    # Avoid injecting today's fundamentals into historical signal dates.
-    # Over a short window, zscore(price * constant) is equivalent to zscore(price).
-    return prices["Close"].astype(float)
-
-
-def analyze_value_reversion(ticker, allow_fundamental_download=True):
-    prices = market_data_store.get_price_data(ticker, period_days=40)
-    if prices.empty or len(prices) < ZSCORE_WINDOW:
+def analyze_value_reversion(ticker, allow_fundamental_download=True, df=None):
+    """Return a confirmed price/liquidity reversion signal known at today's close."""
+    del allow_fundamental_download
+    prices = (
+        market_data_store.get_price_data(ticker, period_days=130)
+        if df is None
+        else df
+    )
+    features = _add_reversion_features(prices)
+    minimum_rows = REVERSION_MA_WINDOW + REVERSION_SHOCK_DAYS + 2
+    if features.empty or len(features) < minimum_rows:
         return {"status": "DATA_INSUFFICIENT", "score": 0.0}
 
-    fundamentals = get_fundamentals(ticker, allow_download=allow_fundamental_download)
-    if not fundamentals:
-        return {"status": "FUNDAMENTAL_MISSING", "score": 0.0}
+    latest = features.iloc[-1]
+    recent_shocks = features["SHOCK"].iloc[-4:-1].dropna()
+    previous_shock = float(recent_shocks.iloc[-1]) if not recent_shocks.empty else 0.0
+    if bool(latest["LONG_SIGNAL"]):
+        return {
+            "status": "OK",
+            "score": abs(float(recent_shocks.min())),
+            "side": "LONG",
+            "shock": previous_shock,
+            "turnover_ratio": float(latest["TURNOVER_RATIO"]),
+            "current_price": float(latest["Close"]),
+        }
+    if bool(latest["SHORT_SIGNAL"]):
+        return {
+            "status": "OK",
+            "score": -abs(float(recent_shocks.max())),
+            "side": "SHORT",
+            "shock": previous_shock,
+            "turnover_ratio": float(latest["TURNOVER_RATIO"]),
+            "current_price": float(latest["Close"]),
+        }
+    return {"status": "NO_SIGNAL", "score": 0.0}
 
-    signal_series = _reversion_signal_series(prices)
-    zscore = _zscore_latest(signal_series)
-    if zscore is None:
-        return {"status": "NO_SIGNAL", "score": 0.0}
 
-    score = -zscore
-    ratio = prices["Close"].astype(float) * fundamentals["shares_outstanding"]
-    ratio = ratio / fundamentals["total_equity"]
-    latest_ratio = float(ratio.iloc[-1])
-    if latest_ratio <= 0.05 or latest_ratio >= 500:
-        return {"status": "DATA_SUSPECT", "score": 0.0}
+def _pnl_pct(side, exit_price, entry_price):
+    direction = 1.0 if side == "LONG" else -1.0
+    return direction * (exit_price - entry_price) / entry_price * 100.0
 
-    return {
-        "status": "OK",
-        "score": score,
-        "cap_to_equity": latest_ratio,
-        "current_price": float(prices["Close"].iloc[-1]),
-        "updated_at": fundamentals.get("updated_at"),
-    }
+
+def _stop_hit(side, day, stop_price):
+    return day["Low"] <= stop_price if side == "LONG" else day["High"] >= stop_price
+
+
+def _stop_fill(side, day_open, stop_price):
+    return min(day_open, stop_price) if side == "LONG" else max(day_open, stop_price)
 
 
 def _format_price(value):
-    if value is None:
-        return "N/A"
-    if value >= 1000:
-        return f"{value:,.0f}"
-    if value >= 100:
-        return f"{value:,.1f}"
-    return f"{value:,.2f}"
+    return f"{value:,.2f}" if value < 1000 else f"{value:,.0f}"
 
 
 def _format_rows(items, long_side=True):
     if not items:
         return "None\n"
-    rows = []
-    for idx, row in enumerate(items, start=1):
-        direction = "LONG" if long_side else "SHORT"
-        row_text = (
-            f"{idx}. {row['ticker']:<8} | {direction} | "
-            f"price {_format_price(row.get('current_price'))} | "
-            f"value score {row['score']:+.2f}"
+    direction = "LONG" if long_side else "SHORT"
+    return "\n".join(
+        f"{idx}. {row['ticker']:<8} | {direction} | price {_format_price(row['current_price'])} | "
+        f"reversion score {row['score']:+.2f} | turnover {row['turnover_ratio']:.1f}x"
+        for idx, row in enumerate(items, start=1)
+    ) + "\n"
+
+
+def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, df=None):
+    """Backtest confirmed reversion entries and B-style two-stage profit taking.
+
+    All indicator exits are confirmed at the close and filled at the next open.
+    ATR stops are intraday protective exits and use a conservative gap fill.
+    """
+    prices = market_data_store.get_price_data(ticker, period_days=period_days) if df is None else df
+    features = _add_reversion_features(prices)
+    # MA60 needs five additional observations for its trend slope.
+    warmup = REVERSION_MA_WINDOW + 5
+    if features.empty or len(features) < warmup + 2:
+        result = (0.0, 0.0, 0, "N/A", [])
+        return result if include_trades else result[:4]
+
+    period_label = f"{features.index[warmup].date()} to {features.index[-1].date()}"
+    trades, trade_details = [], []
+    position = None
+
+    def add_exit(current_position, idx, reason, weight, price):
+        current_position["realized"] += weight * _pnl_pct(
+            current_position["side"], price, current_position["entry_price"]
         )
-        rows.append(row_text)
-    return "\n".join(rows) + "\n"
-
-
-def _build_reversion_history(ticker, period_days=260):
-    prices = market_data_store.get_price_data(ticker, period_days=period_days)
-    if prices.empty or len(prices) < ZSCORE_WINDOW + REVERSION_HOLDING_DAYS + 1:
-        return []
-
-    signal_series = _reversion_signal_series(prices)
-    history = []
-    for idx in range(ZSCORE_WINDOW - 1, len(prices) - REVERSION_HOLDING_DAYS):
-        window = signal_series.iloc[: idx + 1]
-        zscore = _zscore_latest(window)
-        if zscore is None:
-            continue
-        score = -zscore
-        entry_idx = idx + 1
-        exit_idx = idx + REVERSION_HOLDING_DAYS
-        entry = float(prices["Open"].iloc[entry_idx])
-        exit_price = float(prices["Close"].iloc[exit_idx])
-        if entry <= 0:
-            continue
-        history.append(
+        current_position["remaining"] -= weight
+        current_position["exit_events"].append(
             {
-                "date": prices.index[idx].date().isoformat(),
-                "exit_date": prices.index[exit_idx].date().isoformat(),
-                "entry_idx": entry_idx,
-                "exit_idx": exit_idx,
-                "score": score,
-                "long_return": (exit_price / entry - 1.0) * 100.0,
-                "short_return": (entry - exit_price) / entry * 100.0,
+                "date": features.index[idx].date().isoformat(),
+                "reason": reason,
+                "weight": weight,
+                "price": price,
             }
         )
-    return history
 
+    def finish_trade(current_position):
+        trades.append(current_position["realized"])
+        trade_details.append(
+            {
+                "side": current_position["side"],
+                "entry_date": current_position["entry_date"],
+                "exit_events": current_position["exit_events"],
+                "return": current_position["realized"],
+            }
+        )
 
-def run_reversion_backtest(ticker, side, period_days=260):
-    history = _build_reversion_history(ticker, period_days=period_days)
-    if not history:
-        return 0.0, 0.0, 0, "N/A"
+    for idx in range(warmup, len(features) - 1):
+        day = features.iloc[idx]
+        if position is not None and position.get("pending_exit"):
+            pending = position.pop("pending_exit")
+            fill = float(day["Open"])
+            weight = position["remaining"] if pending["final"] else position["remaining"] * 0.5
+            add_exit(position, idx, pending["reason"], weight, fill)
+            if pending["final"]:
+                finish_trade(position)
+                position = None
+                continue
 
-    trades = []
-    next_available_idx = 0
-    for row in history:
-        if row["entry_idx"] < next_available_idx:
+        if position is None:
+            signal_side = "LONG" if bool(day["LONG_SIGNAL"]) else "SHORT" if bool(day["SHORT_SIGNAL"]) else None
+            if signal_side is None or side not in (None, signal_side):
+                continue
+            entry_idx = idx + 1
+            entry_price = float(features["Open"].iloc[entry_idx])
+            atr = float(day["ATR"])
+            if entry_price <= 0 or not pd.notna(atr) or atr <= 0:
+                continue
+            stop_price = entry_price - REVERSION_STOP_ATR * atr if signal_side == "LONG" else entry_price + REVERSION_STOP_ATR * atr
+            position = {
+                "side": signal_side,
+                "entry_price": entry_price,
+                "entry_idx": entry_idx,
+                "entry_date": features.index[entry_idx].date().isoformat(),
+                "atr": atr,
+                "stop_price": stop_price,
+                "remaining": 1.0,
+                "realized": 0.0,
+                "partial_taken": False,
+                "best_price": entry_price,
+                "exit_events": [],
+            }
             continue
-        if side == "LONG" and row["score"] > 0:
-            trades.append(row["long_return"])
-            next_available_idx = row["exit_idx"] + 1
-        elif side == "SHORT" and row["score"] < 0:
-            trades.append(row["short_return"])
-            next_available_idx = row["exit_idx"] + 1
 
-    period_label = f"{history[0]['date']} to {history[-1]['exit_date']}"
+        side_name = position["side"]
+        if _stop_hit(side_name, day, position["stop_price"]):
+            fill = _stop_fill(side_name, float(day["Open"]), position["stop_price"])
+            add_exit(position, idx, "ATR stop", position["remaining"], fill)
+            finish_trade(position)
+            position = None
+            continue
+
+        if side_name == "LONG":
+            position["best_price"] = max(position["best_price"], float(day["High"]))
+            partial_reached = float(day["SHOCK"]) >= -REVERSION_PARTIAL_LEVEL
+            mean_reached = float(day["SHOCK"]) >= 0.0
+            progressed = position["best_price"] >= position["entry_price"] + 0.5 * position["atr"]
+        else:
+            position["best_price"] = min(position["best_price"], float(day["Low"]))
+            partial_reached = float(day["SHOCK"]) <= REVERSION_PARTIAL_LEVEL
+            mean_reached = float(day["SHOCK"]) <= 0.0
+            progressed = position["best_price"] <= position["entry_price"] - 0.5 * position["atr"]
+
+        held_days = idx - position["entry_idx"] + 1
+        if mean_reached:
+            position["pending_exit"] = {"reason": "mean reversion", "final": True}
+        elif not position["partial_taken"] and partial_reached:
+            position["pending_exit"] = {"reason": "partial at ±0.5σ", "final": False}
+            position["partial_taken"] = True
+        elif held_days >= REVERSION_NO_PROGRESS_DAYS and not progressed:
+            position["pending_exit"] = {"reason": "3d no progress", "final": True}
+        elif held_days >= REVERSION_MAX_HOLDING_DAYS:
+            position["pending_exit"] = {"reason": "10d time exit", "final": True}
+
     if not trades:
-        return 0.0, 0.0, 0, period_label
-
+        result = (0.0, 0.0, 0, period_label, [])
+        return result if include_trades else result[:4]
     avg_return = sum(trades) / len(trades)
-    win_rate = sum(1 for value in trades if value > 0) / len(trades) * 100.0
-    return avg_return, win_rate, len(trades), period_label
+    win_rate = sum(value > 0 for value in trades) / len(trades) * 100.0
+    result = (avg_return, win_rate, len(trades), period_label, trade_details)
+    return result if include_trades else result[:4]
+
+
+def _format_trade_dates(trade):
+    events = ", ".join(f"{item['date']} ({item['reason']})" for item in trade["exit_events"])
+    return f"{trade['entry_date']} -> {events} {trade['return']:+.1f}%"
 
 
 def _format_backtest(targets):
     if not targets:
         return ""
-
-    report = "\nBacktest Summary\n"
-    report += "-----------------------------------------\n"
+    report = "\nBacktest Summary\n-----------------------------------------\n"
     report += (
-        "Entry: positive value score for LONG or negative value score for SHORT at "
-        "close; enter next open.\n"
-        f"Exit: close after {REVERSION_HOLDING_DAYS} trading days; no overlapping entries.\n"
+        "Entry: shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, "
+        "and turnover <2.0x at close; enter next open.\n"
+        "Exit: 50% at ±0.5σ, remainder at mean (0σ); ATR stop, 3d no-progress, or 10d time exit.\n"
     )
-
-    total_return_sum = 0.0
-    total_wins = 0.0
+    total_return_sum = total_wins = 0.0
     total_trades = 0
     for row, side in targets:
-        avg_return, win_rate, count, period_label = run_reversion_backtest(row["ticker"], side)
+        avg_return, win_rate, count, period_label, details = run_reversion_backtest(
+            row["ticker"], side, include_trades=True
+        )
         total_return_sum += avg_return * count
-        total_wins += (win_rate / 100.0) * count
+        total_wins += win_rate / 100.0 * count
         total_trades += count
-        period_text = f" | period {period_label}" if period_label != "N/A" else ""
         if count:
-            wins = round((win_rate / 100.0) * count)
             report += (
                 f"{side} *{row['ticker']}*: avg *{avg_return:+.1f}%* | "
-                f"win {win_rate:.1f}% ({wins}/{count}){period_text}\n"
+                f"win {win_rate:.1f}% ({round(win_rate / 100.0 * count)}/{count}) | "
+                f"period {period_label}\n"
+                f"  trades: {'; '.join(_format_trade_dates(trade) for trade in details)}\n"
             )
         else:
-            report += f"{side} *{row['ticker']}*: no closed trades{period_text}\n"
-
-    total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
-    portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
-    total_win_count = round(total_wins)
+            report += f"{side} *{row['ticker']}*: no closed trades\n"
+    avg = total_return_sum / total_trades if total_trades else 0.0
+    win = total_wins / total_trades * 100.0 if total_trades else 0.0
     report += "\nSelected Candidate History Summary\n"
-    report += (
-        f"*Avg trade return {portfolio_avg:+.1f}%* | "
-        f"win {total_win_rate:.1f}% ({total_win_count}/{total_trades})\n"
-    )
+    report += f"*Avg trade return {avg:+.1f}%* | win {win:.1f}% ({round(total_wins)}/{total_trades})\n"
     report += "-----------------------------------------\n"
     return report
 
 
 def scan_value_reversion(universe_list):
-    scored = []
-    failed = []
-
+    scored, failed = [], []
     for ticker in universe_list:
-        result = analyze_value_reversion(ticker)
-        if result["status"] != "OK":
-            failed.append(f"{ticker}({result['status']})")
-            continue
-        scored.append(
-            {
-                "ticker": ticker,
-                "score": result["score"],
-                "cap_to_equity": result["cap_to_equity"],
-                "current_price": result["current_price"],
-            }
-        )
+        result = analyze_value_reversion(ticker, allow_fundamental_download=False)
+        if result["status"] == "OK":
+            scored.append({"ticker": ticker, **result})
+        elif result["status"] == "DATA_INSUFFICIENT":
+            failed.append(ticker)
 
-    long_pool = [row for row in scored if row["score"] > 0]
-    short_pool = [row for row in scored if row["score"] < 0]
-    top_longs = sorted(long_pool, key=lambda row: row["score"], reverse=True)[:5]
-    top_shorts = sorted(short_pool, key=lambda row: row["score"])[:5]
-    backtest_targets = [(row, "LONG") for row in top_longs] + [
-        (row, "SHORT") for row in top_shorts
-    ]
-
+    top_longs = sorted((row for row in scored if row["side"] == "LONG"), key=lambda row: row["score"], reverse=True)[:3]
+    top_shorts = sorted((row for row in scored if row["side"] == "SHORT"), key=lambda row: row["score"])[:3]
+    targets = [(row, "LONG") for row in top_longs] + [(row, "SHORT") for row in top_shorts]
     msg = (
-        "**Value Reversion Scan Report**\n"
+        "**Price/Liquidity Reversion v2 Scan Report**\n"
         "=============================\n\n"
         "**LONG Candidates**\n"
-        "Benchmark: positive score; +1.0 is meaningful and +2.0 is strong.\n"
+        "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, rebound close, turnover <2.0x.\n"
         f"{_format_rows(top_longs, long_side=True)}\n"
         "**SHORT Candidates**\n"
-        "Benchmark: negative score; -1.0 is meaningful and -2.0 is strong.\n"
+        "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
-        f"{_format_backtest(backtest_targets)}"
+        f"{_format_backtest(targets)}"
     )
-
     if failed:
-        msg += (
-            "\n----------------------------------------\n"
-            "Use Admin -> Refresh Selected Universe if coverage looks unusually low."
-        )
-
+        msg += "\n----------------------------------------\nInsufficient local data: " + ", ".join(sorted(failed))
     return msg
