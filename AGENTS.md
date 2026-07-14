@@ -1,5 +1,26 @@
+# QuantBot
+
+## Scope
+
+- `QuantBotSystem/` is the deployment line: do not edit it without explicit approval.
+- Make strategy and UI changes in `QuantBotSystem_Beta/` first.
+- Preserve user changes; inspect `git status` before editing or committing.
+
+## Workflow
+
+- Use Korean for user-facing messages.
+- Keep changes small. Read relevant files before editing.
+- For Python, run focused `unittest` and `py_compile`; do not run long backtests, downloads, or bot delivery without request.
+- Signals use information available at the close and may enter no earlier than the next open. Do not introduce lookahead.
+
+## Data and Git
+
+- Never commit secrets, `config.local.py`, `local_settings.py`, `.env`, SQLite, caches, logs, generated CSV/JSON, or Excel files.
+- Stage only task-relevant files. Commit clear work units; push only when requested.
+- `CHANGELOG.md` is the project change record. Keep meeting-thread notes concise and link back to it.
+
 ## Model Selection
 
-- Sol: 아키텍처 결정, 보안 리뷰, 멀티파일 리팩터링
-- Terra: 일반 기능 개발, 버그 수정, 테스트 작성 (기본값)
-- Luna: 문서화, 포맷팅, 서브에이전트 반복 작업
+- Sol: architecture, security review, multi-file refactors
+- Terra: default for features, fixes, and tests
+- Luna: documentation, formatting, repetitive subagent work
