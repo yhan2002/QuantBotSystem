@@ -167,11 +167,53 @@ def ensure_price_data(
     return summary
 
 
+def backfill_price_data(
+    tickers,
+    period="2y",
+    sleep_seconds=DOWNLOAD_SLEEP_SECONDS,
+    progress_callback=None,
+):
+    """Download a full history window even when a ticker already has recent rows."""
+    tickers = sorted(set(tickers))
+    summary = {
+        "requested": len(tickers),
+        "updated": 0,
+        "failed": [],
+        "latest_dates": {},
+        "db_path": DB_PATH,
+    }
+    if not tickers:
+        return summary
+
+    conn = get_connection()
+    try:
+        for idx, ticker in enumerate(tickers, start=1):
+            try:
+                if progress_callback:
+                    progress_callback(idx, len(tickers), ticker)
+                downloaded = _download_history(ticker, period=period)
+                if downloaded.empty:
+                    summary["failed"].append(ticker)
+                else:
+                    summary["updated"] += _upsert_ohlcv(conn, ticker, downloaded)
+                latest_date = _get_latest_cached_date(conn, ticker)
+                if latest_date:
+                    summary["latest_dates"][ticker] = latest_date
+            except Exception:
+                summary["failed"].append(ticker)
+            if sleep_seconds and idx < len(tickers):
+                time.sleep(sleep_seconds)
+    finally:
+        conn.close()
+
+    return summary
+
+
 def preload_all_universe(config_module, progress_callback=None):
     tickers = sorted(set(config_module.universe))
     return ensure_price_data(
         tickers,
-        min_period="1y",
+        min_period="2y",
         refresh_recent=True,
         progress_callback=progress_callback,
     )

@@ -40,7 +40,7 @@ def permission_message(chat_id):
     return (
         "This chat is not allowed for this test bot.\n"
         f"chat_id: `{chat_id}`\n\n"
-        "Add this chat_id to ALLOWED_CHAT_IDS in catalyst_test_full/config.py, "
+        "Add this chat_id to ALLOWED_CHAT_IDS in QuantBotSystem_Beta/config.py, "
         "then restart the test bot."
     )
 
@@ -266,7 +266,7 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
             )
-            summary = market_data_store.ensure_price_data(selected, min_period="1y")
+            summary = market_data_store.ensure_price_data(selected, min_period="2y")
             report = market_data_store.format_cache_summary(
                 summary, title="Selected Universe Refresh Complete"
             )

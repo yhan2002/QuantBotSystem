@@ -26,7 +26,7 @@ def build_home_markup():
 
 def build_admin_markup():
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("Preload All Market Data", callback_data="admin_preload_all"))
+    markup.row(InlineKeyboardButton("Preload 2Y Market Data", callback_data="admin_preload_all"))
     markup.row(
         InlineKeyboardButton(
             "Refresh Selected Universe", callback_data="admin_refresh_selected"
@@ -40,8 +40,8 @@ def build_admin_markup():
 def admin_text():
     return (
         "**Admin**\n\n"
-        "Preload All Market Data: update every configured universe ticker.\n"
-        "Refresh Selected Universe: update only the current menu selection.\n"
+        "Preload 2Y Market Data: build the history required for volume-confirmed momentum.\n"
+        "Refresh Selected Universe: build or update two years for the current selection.\n"
         "Show Data Cache Status: show the current cache date range."
     )
 

@@ -1,7 +1,6 @@
 ﻿# File name: box_range_engine.py
 # Runs box-range signal analysis and box strategy backtests.
 import pandas as pd
-import catalyst_factor
 import market_data_store
 
 
@@ -380,20 +379,11 @@ def compare_box_exit_modes(ticker, **kwargs):
     return results
 
 
-def _catalyst_label(catalyst_map, ticker):
-    row = catalyst_map.get(ticker)
-    if not row:
-        return "catalyst unavailable"
-    if row.get("confirmed"):
-        return "catalyst confirmed"
-    return "catalyst unconfirmed"
-
-
-def _box_row(idx, ticker, res, action, catalyst_text):
+def _box_row(idx, ticker, res, action):
     width = res["box_width_pct"] * 100.0
     return (
         f"{idx}. {ticker:<6} | {action} | "
-        f"width {width:.1f}% | {catalyst_text}"
+        f"width {width:.1f}%"
     )
 
 
@@ -403,7 +393,6 @@ def scan_total_universe(universe_list):
     trim_risk = []
     failed_tickers = []
     backtest_targets = []
-    catalyst_map = catalyst_factor.latest_catalyst_map(universe_list)
 
     for ticker in universe_list:
         res = analyze_box_range(ticker)
@@ -412,16 +401,11 @@ def scan_total_universe(universe_list):
             failed_tickers.append(ticker)
             continue
 
-        catalyst_score = catalyst_factor.confirmed_score(catalyst_map, ticker)
-        catalyst_text = _catalyst_label(catalyst_map, ticker)
-
         if res["status"] == "TOUCH_LOWER":
-            long_rebound.append((ticker, res, catalyst_text))
+            long_rebound.append((ticker, res))
             backtest_targets.append((ticker, "LONG REBOUND", res["status"]))
-        elif res["status"] == "TOUCH_UPPER" and catalyst_score > 0:
-            breakout_watch.append((ticker, res, catalyst_text))
         elif res["status"] == "TOUCH_UPPER":
-            trim_risk.append((ticker, res, catalyst_text))
+            trim_risk.append((ticker, res))
             backtest_targets.append((ticker, "TRIM / SHORT-RISK", res["status"]))
 
     report = "**Box Range Scan Report**\n"
@@ -429,24 +413,16 @@ def scan_total_universe(universe_list):
     report += "**LONG Candidates**\n"
     report += (
         "\n".join(
-            _box_row(idx, ticker, res, "near lower box", catalyst_text)
-            for idx, (ticker, res, catalyst_text) in enumerate(long_rebound[:10], 1)
-        )
-        or "None"
-    )
-    report += "\n\n**Breakout Watch**\n"
-    report += (
-        "\n".join(
-            _box_row(idx, ticker, res, "near upper box", catalyst_text)
-            for idx, (ticker, res, catalyst_text) in enumerate(breakout_watch[:10], 1)
+            _box_row(idx, ticker, res, "near lower box")
+            for idx, (ticker, res) in enumerate(long_rebound[:10], 1)
         )
         or "None"
     )
     report += "\n\n**SHORT Candidates**\n"
     report += (
         "\n".join(
-            _box_row(idx, ticker, res, "near upper box", catalyst_text)
-            for idx, (ticker, res, catalyst_text) in enumerate(trim_risk[:10], 1)
+            _box_row(idx, ticker, res, "near upper box")
+            for idx, (ticker, res) in enumerate(trim_risk[:10], 1)
         )
         or "None"
     )
