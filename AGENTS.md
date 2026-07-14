@@ -17,7 +17,8 @@
 
 - Never commit secrets, `config.local.py`, `local_settings.py`, `.env`, SQLite, caches, logs, generated CSV/JSON, or Excel files.
 - Stage only task-relevant files. Commit clear work units; push only when requested.
-- `CHANGELOG.md` is the project change record. Keep meeting-thread notes concise and link back to it.
+- `CHANGELOG.md` is the project change record. For material strategy, validation, release, or risk changes, also append a concise delta to the pinned `주간회의 메모 - QuantBot` thread.
+- Do not post routine refactors, formatting, cache refreshes, or ordinary test passes to the meeting thread.
 
 ## AGENTS Maintenance
 
