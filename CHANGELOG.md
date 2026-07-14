@@ -11,6 +11,12 @@
 - 2년 가격 이력 backfill·캐시 갱신 흐름과, 거래대금 급증 alpha를 기존 Momentum과 비교하는 A/B 스크립트 및 단위 테스트를 추가했습니다.
 - Value Reversion과 Box Range도 독립 전략 점수만으로 후보를 정렬하도록 정리했습니다.
 
+### 신호 엔진 정교화
+
+- Box Range를 단순 경계 터치 대신 false-break reclaim·거래대금 veto·단계적 청산 구조로 개편했습니다.
+- Value Reversion을 60일 추세, 5일 충격 반전, 거래대금 조건을 사용하는 Price/Liquidity Reversion v2로 교체했습니다.
+- 보고서·세션·일일 스케줄러 표기를 새 전략 규칙에 맞추고, 두 전략의 회귀 테스트를 추가했습니다.
+
 ## 2026-07-13
 
 ### 운영·추적 설정

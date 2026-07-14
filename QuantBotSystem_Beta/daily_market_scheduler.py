@@ -74,7 +74,7 @@ def daily_market_scanner():
                 report_content = value_reversion_engine.scan_value_reversion(
                     compiled_universe
                 )
-                header = f"*Scheduled Alert* Value Reversion Scan ({now_str})\n"
+                header = f"*Scheduled Alert* Price/Liquidity Reversion v2 Scan ({now_str})\n"
             else:
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"

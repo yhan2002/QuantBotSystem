@@ -23,7 +23,7 @@ UNIVERSE_MENUS = [
 STRATEGY_LABELS = {
     "MA_CROSS": "MA Momentum",
     "BOX_RANGE": "Box Range",
-    "VALUE_REVERSION": "Value Reversion",
+    "VALUE_REVERSION": "Price/Liquidity Reversion v2",
 }
 
 USER_SESSIONS = {}
