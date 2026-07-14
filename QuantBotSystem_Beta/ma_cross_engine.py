@@ -2,18 +2,14 @@
 # Generates moving-average momentum signals and backtest reports.
 import numpy as np
 import pandas as pd
-import catalyst_factor
 import market_data_store
 
 
 MOMENTUM_MA_WINDOWS = (5, 20, 60)
 MOMENTUM_SLOPE_THRESHOLD = 0.0
 MOMENTUM_HOLDING_DAYS = 20
-# Keep execution impact off until a validation-backed configuration exists.
-MOMENTUM_PIT_LONG_TIEBREAK_ENABLED = False
-MOMENTUM_PIT_SHORT_EXCLUSION_ENABLED = False
-MOMENTUM_PIT_FRESH_DAYS = 10
-MOMENTUM_PIT_TIEBREAK_MAX_RANK_GAP = 1
+TURNOVER_LOOKBACK_DAYS = 252
+TURNOVER_MULTIPLE = 3.0
 
 
 def _normalize_ohlcv(df):
@@ -21,7 +17,7 @@ def _normalize_ohlcv(df):
         return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    return df.dropna(subset=["Open", "Close"]).copy()
+    return df.dropna(subset=["Open", "Close", "Volume"]).copy()
 
 
 def _period_to_rows(period):
@@ -35,16 +31,20 @@ def _period_to_rows(period):
         return 130
     if period == "1y":
         return 260
+    if period == "14mo":
+        return 330
+    if period == "2y":
+        return 540
     return None
 
 
-def _load_ohlcv(ticker, period="3mo", allow_download=False):
+def _load_ohlcv(ticker, period="14mo", allow_download=False):
     df = market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
     if not df.empty:
         return _normalize_ohlcv(df)
 
     if allow_download:
-        market_data_store.ensure_price_data([ticker], min_period="1y")
+        market_data_store.ensure_price_data([ticker], min_period="2y")
         df = market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
         if not df.empty:
             return _normalize_ohlcv(df)
@@ -62,21 +62,33 @@ def _add_ma_signal_columns(df, windows=MOMENTUM_MA_WINDOWS, threshold_pct=MOMENT
     out["S_FAST"] = out["MA_FAST"].pct_change() * 100
     out["S_MID"] = out["MA_MID"].pct_change() * 100
     out["S_SLOW"] = out["MA_SLOW"].pct_change() * 100
+    out["TURNOVER_PROXY"] = out["Volume"].astype(float) * out["Close"].astype(float)
+    out["TURNOVER_MEAN"] = out["TURNOVER_PROXY"].rolling(
+        TURNOVER_LOOKBACK_DAYS,
+        min_periods=TURNOVER_LOOKBACK_DAYS,
+    ).mean()
+    out["TURNOVER_SURGE"] = (
+        (out["TURNOVER_MEAN"] > 0)
+        & (out["TURNOVER_PROXY"] > TURNOVER_MULTIPLE * out["TURNOVER_MEAN"])
+    )
 
-    out["LONG_SIGNAL"] = (
+    long_ma = (
         (out["MA_FAST"] > out["MA_MID"])
         & (out["MA_MID"] > out["MA_SLOW"])
         & (out["S_FAST"] > threshold_pct)
         & (out["S_MID"] > threshold_pct)
         & (out["S_SLOW"] > threshold_pct)
     )
-    out["SHORT_SIGNAL"] = (
+    short_ma = (
         (out["MA_FAST"] < out["MA_MID"])
         & (out["MA_MID"] < out["MA_SLOW"])
         & (out["S_FAST"] < -threshold_pct)
         & (out["S_MID"] < -threshold_pct)
         & (out["S_SLOW"] < -threshold_pct)
     )
+    out["LONG_SIGNAL"] = long_ma & out["TURNOVER_SURGE"]
+    out["SHORT_SIGNAL"] = short_ma & out["TURNOVER_SURGE"]
+    out["MOMENTUM_ALIGNED"] = long_ma | short_ma
     out["SIGNAL_STRENGTH"] = (out["S_FAST"] + out["S_MID"] + out["S_SLOW"]) / 3.0
     return out
 
@@ -101,19 +113,22 @@ def _position_state(df, side_filter=None):
 def analyze_trend_strict_signals(
     ticker,
     threshold_pct=MOMENTUM_SLOPE_THRESHOLD,
-    period="4mo",
+    period="14mo",
     windows=MOMENTUM_MA_WINDOWS,
 ):
     """Calculate MA alignment and slope signal for one ticker."""
     try:
         df = _load_ohlcv(ticker, period=period)
 
-        if df.empty or len(df) < max(windows) + 2:
+        if df.empty or len(df) < max(max(windows), TURNOVER_LOOKBACK_DAYS) + 1:
             return "INSUFFICIENT_DATA", 0.0
 
         df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
         latest = df.iloc[-1]
-        required = ["MA_FAST", "MA_MID", "MA_SLOW", "S_FAST", "S_MID", "S_SLOW"]
+        required = [
+            "MA_FAST", "MA_MID", "MA_SLOW", "S_FAST", "S_MID", "S_SLOW",
+            "TURNOVER_MEAN",
+        ]
         if pd.isna([latest[name] for name in required]).any():
             return "NO_SIGNAL", 0.0
 
@@ -123,6 +138,8 @@ def analyze_trend_strict_signals(
             return "LONG_ENTRY", signal_strength
         if bool(latest["SHORT_SIGNAL"]):
             return "SHORT_ENTRY", signal_strength
+        if bool(latest["MOMENTUM_ALIGNED"]):
+            return "WAIT_VOLUME", signal_strength
         return "EXIT_SIGNAL", signal_strength
     except Exception:
         return "ERROR", 0.0
@@ -158,26 +175,33 @@ def run_isolated_backtest(
     ticker,
     threshold_pct=MOMENTUM_SLOPE_THRESHOLD,
     side_filter=None,
-    period="1y",
+    period="2y",
     windows=MOMENTUM_MA_WINDOWS,
     holding_days=MOMENTUM_HOLDING_DAYS,
+    include_trades=False,
 ):
     """Run a simple isolated MA momentum backtest."""
     try:
         df = _load_ohlcv(ticker, period=period)
-        if df.empty or len(df) < max(windows) + holding_days + 2:
-            return 0.0, 0.0, 0, "N/A"
+        if df.empty or len(df) < TURNOVER_LOOKBACK_DAYS + holding_days + 1:
+            result = (0.0, 0.0, 0, "N/A", [])
+            return result if include_trades else result[:4]
 
-        start_date = df.index[0].date().isoformat()
+        first_signal_idx = max(max(windows), TURNOVER_LOOKBACK_DAYS)
+        start_date = df.index[first_signal_idx + 1].date().isoformat()
         end_date = df.index[-1].date().isoformat()
         period_label = f"{start_date} to {end_date}"
 
         df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
 
         trades = []
+        trade_details = []
 
         next_available_idx = 0
-        for idx in range(max(windows), len(df) - holding_days):
+        for idx in range(
+            max(max(windows), TURNOVER_LOOKBACK_DAYS),
+            len(df) - holding_days,
+        ):
             if idx + 1 < next_available_idx:
                 continue
             entry_idx = idx + 1
@@ -187,20 +211,41 @@ def run_isolated_backtest(
             if entry_price <= 0:
                 continue
             if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG"):
-                trades.append((exit_price / entry_price - 1.0) * 100.0)
+                trade_return = (exit_price / entry_price - 1.0) * 100.0
+                trades.append(trade_return)
+                trade_details.append(
+                    {
+                        "side": "LONG",
+                        "entry_date": df.index[entry_idx].date().isoformat(),
+                        "exit_date": df.index[exit_idx].date().isoformat(),
+                        "return": trade_return,
+                    }
+                )
                 next_available_idx = exit_idx + 1
             elif df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT"):
-                trades.append((entry_price - exit_price) / entry_price * 100.0)
+                trade_return = (entry_price - exit_price) / entry_price * 100.0
+                trades.append(trade_return)
+                trade_details.append(
+                    {
+                        "side": "SHORT",
+                        "entry_date": df.index[entry_idx].date().isoformat(),
+                        "exit_date": df.index[exit_idx].date().isoformat(),
+                        "return": trade_return,
+                    }
+                )
                 next_available_idx = exit_idx + 1
 
         if not trades:
-            return 0.0, 0.0, 0, period_label
+            result = (0.0, 0.0, 0, period_label, [])
+            return result if include_trades else result[:4]
 
         avg_return = sum(trades) / len(trades)
         win_rate = sum(1 for pnl in trades if pnl > 0) / len(trades) * 100.0
-        return avg_return, win_rate, len(trades), period_label
+        result = (avg_return, win_rate, len(trades), period_label, trade_details)
+        return result if include_trades else result[:4]
     except Exception:
-        return 0.0, 0.0, 0, "N/A"
+        result = (0.0, 0.0, 0, "N/A", [])
+        return result if include_trades else result[:4]
 
 
 def check_new_signal_status(
@@ -211,8 +256,8 @@ def check_new_signal_status(
 ):
     """Detect whether today's signal is the first day of a new entry signal."""
     try:
-        df = _load_ohlcv(ticker, period="4mo")
-        if df.empty or len(df) < max(windows) + 2:
+        df = _load_ohlcv(ticker, period="14mo")
+        if df.empty or len(df) < max(max(windows), TURNOVER_LOOKBACK_DAYS) + 2:
             return False
 
         df = _add_ma_signal_columns(df, windows=windows, threshold_pct=threshold_pct)
@@ -224,67 +269,16 @@ def check_new_signal_status(
         return False
 
 
-def _is_fresh_tier2(row):
-    return row["catalyst_long_tier"] == 2 and row["catalyst_age_trading_days"] is not None and row["catalyst_age_trading_days"] <= MOMENTUM_PIT_FRESH_DAYS
-
-
-def _apply_pit_long_tiebreaker(rows, slots):
-    """Bounded promotion: only fresh tier-2 names just below the cut-off move up."""
-    result = list(rows)
-    last_challenger = min(len(result), slots + MOMENTUM_PIT_TIEBREAK_MAX_RANK_GAP)
-    for challenger_idx in range(slots, last_challenger):
-        if not _is_fresh_tier2(result[challenger_idx]):
-            continue
-        incumbent_idx = next((idx for idx in range(slots - 1, -1, -1) if not _is_fresh_tier2(result[idx])), None)
-        if incumbent_idx is None:
-            break
-        result[incumbent_idx], result[challenger_idx] = result[challenger_idx], result[incumbent_idx]
-    return result
-
-
-def _enrich_with_pit_catalyst(items, catalyst_map, side):
-    if not items:
-        return []
-    max_strength = max(abs(item[1]) for item in items) or 1.0
-    enriched = []
-    for ticker, strength in items:
-        strategy_norm = abs(strength) / max_strength * 100.0
-        factor = catalyst_map.get(ticker, {})
-        enriched.append(
-            {
-                "ticker": ticker,
-                "strength": strength,
-                "strategy_norm": strategy_norm,
-                "combined_score": strategy_norm,
-                "catalyst_long_tier": factor.get("catalyst_long_tier", 0),
-                "catalyst_age_trading_days": factor.get("catalyst_age_trading_days"),
-                "author_impact_score": factor.get("author_impact_score", 0.0),
-            }
-        )
-    enriched.sort(key=lambda row: (-row["strategy_norm"], row["ticker"]))
-    if side == "SHORT" and MOMENTUM_PIT_SHORT_EXCLUSION_ENABLED:
-        enriched = [row for row in enriched if not _is_fresh_tier2(row)]
-    return enriched
-
-
 def _format_ranked_rows(items, long_side=True):
     if not items:
         return "None\n"
 
     rows = []
-    for idx, row in enumerate(items, start=1):
-        ticker = row["ticker"]
-        strength = row["strength"]
+    for idx, (ticker, strength) in enumerate(items, start=1):
         sign = "+" if long_side else ""
-        age = row["catalyst_age_trading_days"]
-        catalyst_text = (
-            f" | PIT tier {row['catalyst_long_tier']} age {age} author {row['author_impact_score']:+.1f}"
-            if row["catalyst_long_tier"]
-            else ""
-        )
         rows.append(
             f"{idx}. {ticker:<6} | strength {sign}{strength:.2f}% | "
-            f"momentum {row['strategy_norm']:.1f}{catalyst_text}"
+            "momentum rank"
         )
     return "\n".join(rows) + "\n"
 
@@ -315,18 +309,12 @@ def scan_ma_cross(universe_list):
         except Exception:
             failed_tickers.append(ticker)
 
-    catalyst_map = catalyst_factor.latest_point_in_time_map(universe_list)
     long_list.sort(key=lambda item: item[1], reverse=True)
     short_list.sort(key=lambda item: item[1])
     exit_list.sort(key=lambda item: item[0])
 
-    enriched_longs = _enrich_with_pit_catalyst(long_list, catalyst_map, side="LONG")
-    enriched_shorts = _enrich_with_pit_catalyst(short_list, catalyst_map, side="SHORT")
-    if MOMENTUM_PIT_LONG_TIEBREAK_ENABLED:
-        enriched_longs = _apply_pit_long_tiebreaker(enriched_longs, slots=5)
-
-    top_longs = enriched_longs[:5]
-    top_shorts = enriched_shorts[:5]
+    top_longs = long_list[:5]
+    top_shorts = short_list[:5]
 
     long_rows = _format_ranked_rows(top_longs, long_side=True)
     short_rows = _format_ranked_rows(top_shorts, long_side=False)
@@ -334,12 +322,10 @@ def scan_ma_cross(universe_list):
     target_tickers = [(t, "LONG NEW") for t in new_longs] + [
         (t, "SHORT NEW") for t in new_shorts
     ]
-    for row in top_longs:
-        ticker = row["ticker"]
+    for ticker, _ in top_longs:
         if (ticker, "LONG NEW") not in target_tickers:
             target_tickers.append((ticker, "LONG"))
-    for row in top_shorts:
-        ticker = row["ticker"]
+    for ticker, _ in top_shorts:
         if (ticker, "SHORT NEW") not in target_tickers:
             target_tickers.append((ticker, "SHORT"))
 
@@ -348,34 +334,42 @@ def scan_ma_cross(universe_list):
         backtest_report += "\nBacktest Summary\n"
         backtest_report += "-----------------------------------------\n"
         backtest_report += (
-            "Entry: MA 5/20/60 alignment and same-direction slopes at close; "
-            "enter next open.\n"
-            f"Exit: close after {MOMENTUM_HOLDING_DAYS} trading days.\n"
+            "Entry: MA 5/20/60 alignment and same-direction slopes plus "
+            f"turnover > {TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
+            "at close; enter next open.\n"
+            f"Warm-up: first {TURNOVER_LOOKBACK_DAYS} trading days excluded from evaluation.\n"
+            f"Exit: close after {MOMENTUM_HOLDING_DAYS} trading days; "
+            "no overlapping entries.\n"
         )
         total_return_sum = 0.0
         total_wins = 0.0
         total_trades = 0
         for ticker, tag in target_tickers:
             side = "LONG" if "LONG" in tag else "SHORT"
-            avg_return, win_rate, count, period_label = run_isolated_backtest(
+            avg_return, win_rate, count, period_label, trade_details = run_isolated_backtest(
                 ticker,
                 side_filter=side,
+                include_trades=True,
             )
             total_return_sum += avg_return * count
             total_wins += (win_rate / 100.0) * count
             total_trades += count
-            period_text = f" | period {period_label}" if period_label != "N/A" else ""
             if count:
                 wins = round((win_rate / 100.0) * count)
+                trade_text = "; ".join(
+                    f"{row['entry_date']}->{row['exit_date']} {row['return']:+.1f}%"
+                    for row in trade_details
+                )
                 backtest_report += (
                     f"{side} *{ticker} ({tag})*: "
                     f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% "
-                    f"({wins}/{count}){period_text}\n"
+                    f"({wins}/{count})\n"
+                    f"  trades: {trade_text}\n"
                 )
             else:
                 backtest_report += (
                     f"{side} *{ticker} ({tag})*: "
-                    f"no closed trades{period_text}\n"
+                    "no closed trades\n"
                 )
         total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
         portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
@@ -388,18 +382,20 @@ def scan_ma_cross(universe_list):
         backtest_report += "-----------------------------------------\n"
 
     msg = (
-        "**MA Momentum Scan Report**\n"
+        "**MA Momentum + Volume Confirmation Scan Report**\n"
         "=============================\n\n"
+        "Rule: MA 5/20/60 alignment + same-direction slopes + "
+        f"turnover > {TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average.\n\n"
         "**New Signals Today**\n"
         f"- New LONG: {', '.join(new_longs) if new_longs else 'None'}\n"
         f"- New SHORT: {', '.join(new_shorts) if new_shorts else 'None'}\n\n"
         "-----------------------------\n"
         "**LONG Candidates**\n"
-        "Top 5 by momentum score (PIT catalyst shown as diagnostic):\n"
+        "Top 5 by momentum score:\n"
         f"{long_rows}\n"
         "-----------------------------\n"
         "**SHORT Candidates**\n"
-        "Top 5 by momentum score (PIT catalyst shown as diagnostic):\n"
+        "Top 5 by momentum score:\n"
         f"{short_rows}\n"
         f"{backtest_report}"
         "============================="

@@ -8,16 +8,12 @@ from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
 
-import catalyst_factor
 import market_data_store
 
 
 FUNDAMENTAL_TTL_DAYS = 30
 ZSCORE_WINDOW = 5
-REVERSION_STRATEGY_WEIGHT = 0.50
-REVERSION_CATALYST_WEIGHT = 0.50
 REVERSION_HOLDING_DAYS = 20
-REPORT_SHOW_RESEARCH_FIELDS = False
 
 
 def _get_connection():
@@ -250,33 +246,6 @@ def _format_price(value):
     return f"{value:,.2f}"
 
 
-def _enrich_with_catalyst(items, catalyst_map, side):
-    if not items:
-        return []
-    max_score = max(abs(row["score"]) for row in items) or 1.0
-    enriched = []
-    for row in items:
-        strategy_norm = abs(row["score"]) / max_score * 100.0
-        cat_score = catalyst_factor.confirmed_score(catalyst_map, row["ticker"])
-        if side == "SHORT":
-            combined = (
-                strategy_norm * REVERSION_STRATEGY_WEIGHT
-                - cat_score * REVERSION_CATALYST_WEIGHT
-            )
-        else:
-            combined = (
-                strategy_norm * REVERSION_STRATEGY_WEIGHT
-                + cat_score * REVERSION_CATALYST_WEIGHT
-            )
-        copied = dict(row)
-        copied["strategy_norm"] = strategy_norm
-        copied["catalyst_score"] = cat_score
-        copied["combined_score"] = combined
-        enriched.append(copied)
-    enriched.sort(key=lambda row: row["combined_score"], reverse=True)
-    return enriched
-
-
 def _format_rows(items, long_side=True):
     if not items:
         return "None\n"
@@ -288,16 +257,6 @@ def _format_rows(items, long_side=True):
             f"price {_format_price(row.get('current_price'))} | "
             f"value score {row['score']:+.2f}"
         )
-        if REPORT_SHOW_RESEARCH_FIELDS:
-            catalyst_text = (
-                f" | catalyst {row['catalyst_score']:.1f}"
-                if row.get("catalyst_score", 0.0) > 0
-                else ""
-            )
-            row_text += (
-                f" | combined {row['combined_score']:.1f}"
-                f"{catalyst_text} | cap/equity {row['cap_to_equity']:.2f}"
-            )
         rows.append(row_text)
     return "\n".join(rows) + "\n"
 
@@ -421,12 +380,10 @@ def scan_value_reversion(universe_list):
             }
         )
 
-    catalyst_map = catalyst_factor.latest_catalyst_map(universe_list)
-
     long_pool = [row for row in scored if row["score"] > 0]
     short_pool = [row for row in scored if row["score"] < 0]
-    top_longs = _enrich_with_catalyst(long_pool, catalyst_map, side="LONG")[:5]
-    top_shorts = _enrich_with_catalyst(short_pool, catalyst_map, side="SHORT")[:5]
+    top_longs = sorted(long_pool, key=lambda row: row["score"], reverse=True)[:5]
+    top_shorts = sorted(short_pool, key=lambda row: row["score"])[:5]
     backtest_targets = [(row, "LONG") for row in top_longs] + [
         (row, "SHORT") for row in top_shorts
     ]

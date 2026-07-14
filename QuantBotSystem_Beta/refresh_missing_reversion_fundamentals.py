@@ -95,7 +95,7 @@ def refresh_missing():
     if still_missing:
         print(f"Still missing sample: {', '.join(still_missing[:40])}")
     print("")
-    print("DB updated in place. You can rerun tune_reversion_catalyst_weight.py now.")
+    print("DB updated in place. You can rerun the value-reversion scan now.")
 
 
 if __name__ == "__main__":

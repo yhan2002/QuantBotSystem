@@ -283,7 +283,7 @@ def main():
     print("No-Lookahead MA Momentum Tuner", flush=True)
     print("=" * 72, flush=True)
     print("Rule: signal uses today's close; trade uses next open.", flush=True)
-    print("Catalyst overlay is excluded in this tuner to avoid event-date leakage.", flush=True)
+    print("Pure price-and-volume momentum tuner; no external overlay is applied.", flush=True)
     print(f"DB: {DB_PATH}", flush=True)
 
     universe = selected_universe()
