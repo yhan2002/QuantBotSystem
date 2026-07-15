@@ -2,7 +2,8 @@
 # Box false-breakout/reclaim strategy. Signals use the close and enter next open.
 import pandas as pd
 
-import market_data_store
+import core_market_data_store
+import core_universe_backtest
 
 
 BOX_MIN_WIDTH_PCT = 0.11
@@ -11,9 +12,10 @@ BOUNCE_BUFFER_PCT = 0.01
 VOLUME_LOOKBACK_DAYS = 20
 VOLUME_SURGE_MULTIPLE = 2.0
 TIME_EXIT_DAYS = 10
+POST_CENTER_TIME_EXIT_DAYS = 10
 DEFAULT_EXIT_MODE = "reclaim_scale_out"
 EXIT_MODE_LABELS = {
-    DEFAULT_EXIT_MODE: "Reclaim: 50% center / 50% opposite edge, -7%/-10% stops",
+    DEFAULT_EXIT_MODE: "Reclaim: 50% center / 50% opposite edge, 10d post-center exit, -7%/-10% stops",
 }
 
 
@@ -29,17 +31,17 @@ def _normalize_ohlcv(df):
 
 
 def _period_to_rows(period):
-    return {"1mo": 35, "3mo": 90, "6mo": 130, "1y": 260}.get(period)
+    return {"1mo": 35, "3mo": 90, "6mo": 130, "1y": 260, "2y": 540}.get(period)
 
 
 def _load_ohlcv(ticker, period="3mo", allow_download=False):
-    df = market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
+    df = core_market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
     if not df.empty:
         return _normalize_ohlcv(df)
     if allow_download:
-        market_data_store.ensure_price_data([ticker], min_period="1y")
+        core_market_data_store.ensure_price_data([ticker], min_period="1y")
         return _normalize_ohlcv(
-            market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
+            core_market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
         )
     return pd.DataFrame()
 
@@ -73,7 +75,7 @@ def _turnover_ratio(history, current):
 
 
 def _entry_signal(history, current, min_width_pct=BOX_MIN_WIDTH_PCT, max_width_pct=BOX_MAX_WIDTH_PCT):
-    """Return a close-known false-breakout reclaim signal for the next open."""
+    """Return a close-known lower-boundary reclaim signal for the next open."""
     stats = _box_stats(history)
     lower_bounces, upper_bounces = _boundary_bounces(history, stats)
     turnover_ratio = _turnover_ratio(history, current)
@@ -90,11 +92,8 @@ def _entry_signal(history, current, min_width_pct=BOX_MIN_WIDTH_PCT, max_width_p
         return "VOLUME_VETO", stats
 
     lower_reclaim = current["Low"] < stats["lowest"] and stats["lowest"] < current["Close"] <= stats["highest"]
-    upper_reclaim = current["High"] > stats["highest"] and stats["lowest"] <= current["Close"] < stats["highest"]
     if lower_reclaim and lower_bounces >= 2:
         return "LONG_RECLAIM", stats
-    if upper_reclaim and upper_bounces >= 2:
-        return "SHORT_RECLAIM", stats
     return "BOX_QUALIFIED", stats
 
 
@@ -115,6 +114,11 @@ def _stop_hit(position, day, level):
     return day["Low"] <= level if position == "LONG" else day["High"] >= level
 
 
+def _valid_next_open(entry_price, stats):
+    """Only enter while the reclaimed lower boundary holds and upside remains."""
+    return stats["lowest"] < entry_price < stats["mid"]
+
+
 def analyze_box_range(ticker, lookback_days=20, df=None):
     """Live signal: prior box, today's intraday breach and close reclaim."""
     try:
@@ -128,12 +132,10 @@ def analyze_box_range(ticker, lookback_days=20, df=None):
         box_text = f"{stats['lowest']:,.2f}~{stats['highest']:,.2f}"
         if status == "LONG_RECLAIM":
             message = f"lower false-break reclaim; box {box_text}, lower bounces {stats['lower_bounces']}, turnover {stats['turnover_ratio']:.1f}x"
-        elif status == "SHORT_RECLAIM":
-            message = f"upper false-break reclaim; box {box_text}, upper bounces {stats['upper_bounces']}, turnover {stats['turnover_ratio']:.1f}x"
         elif status == "VOLUME_VETO":
             message = f"qualified box {box_text}, but turnover {stats['turnover_ratio']:.1f}x blocks entry"
         elif status == "BOX_QUALIFIED":
-            message = f"qualified box {box_text}; waiting for intraday breach and close reclaim"
+            message = f"qualified box {box_text}; waiting for lower-boundary breach and close reclaim"
         else:
             message = "box width must be 11%~20%"
         return {"status": status, "message": message, **stats}
@@ -156,8 +158,9 @@ def run_box_backtest(
     df=None,
     period="1y",
     include_trades=False,
+    evaluation_days=None,
 ):
-    """Backtest the reclaim strategy using only the signal-day close and next open.
+    """Backtest the long-only reclaim strategy using only the signal-day close and next open.
 
     Intraday target/stop collisions are resolved stop-first. Gap-through stops use
     the opening price when it is worse than the stop level.
@@ -170,7 +173,12 @@ def run_box_backtest(
         if df.empty or len(df) < lookback_days + 2:
             result = (0.0, 0.0, 0, "N/A", [])
             return result if include_trades else result[:4]
-        period_label = f"{df.index[0].date()} to {df.index[-1].date()}"
+        signal_start_idx = (
+            max(lookback_days, len(df) - evaluation_days)
+            if evaluation_days
+            else lookback_days
+        )
+        period_label = f"{df.index[signal_start_idx].date()} to {df.index[-1].date()}"
         trades = []
         trade_details = []
         position = None
@@ -186,22 +194,26 @@ def run_box_backtest(
                 }
             )
 
-        for i in range(lookback_days, len(df) - 1):
+        for i in range(signal_start_idx, len(df) - 1):
             day = df.iloc[i]
             if position is None:
                 history = df.iloc[i - lookback_days:i]
                 signal, stats = _entry_signal(history, day)
-                side = "LONG" if signal == "LONG_RECLAIM" else "SHORT" if signal == "SHORT_RECLAIM" else None
-                if side and side_filter in (None, side):
+                side = "LONG" if signal == "LONG_RECLAIM" else None
+                if side and side_filter in (None, "LONG"):
+                    entry_price = float(df["Open"].iloc[i + 1])
+                    if not _valid_next_open(entry_price, stats):
+                        continue
                     position = {
                         "side": side,
-                        "entry_price": float(df["Open"].iloc[i + 1]),
+                        "entry_price": entry_price,
                         "entry_index": i + 1,
                         "entry_date": df.index[i + 1].date().isoformat(),
                         "stats": stats,
                         "remaining": 1.0,
                         "realized": 0.0,
                         "center_taken": False,
+                        "center_index": None,
                         "first_stop_taken": False,
                         "exit_events": [],
                     }
@@ -242,6 +254,7 @@ def run_box_backtest(
                 position["exit_events"].append({"date": df.index[i].date().isoformat(), "reason": "center 50%", "weight": half, "price": position["stats"]["mid"]})
                 position["remaining"] -= half
                 position["center_taken"] = True
+                position["center_index"] = i
 
             if position["center_taken"] and _target_hit(side, day, position["stats"]["highest"] if side == "LONG" else position["stats"]["lowest"]):
                 target = position["stats"]["highest"] if side == "LONG" else position["stats"]["lowest"]
@@ -258,6 +271,14 @@ def run_box_backtest(
                 close_trade(position, df.index[i].date().isoformat())
                 position = None
                 continue
+            if position["center_taken"]:
+                post_center_days = i - position["center_index"] + 1
+                if post_center_days >= POST_CENTER_TIME_EXIT_DAYS:
+                    position["realized"] += position["remaining"] * _pnl_pct(side, float(day["Close"]), entry)
+                    position["exit_events"].append({"date": df.index[i].date().isoformat(), "reason": "10d post-center exit", "weight": position["remaining"], "price": float(day["Close"])})
+                    close_trade(position, df.index[i].date().isoformat())
+                    position = None
+                    continue
         if not trades:
             result = (0.0, 0.0, 0, period_label, [])
             return result if include_trades else result[:4]
@@ -276,55 +297,42 @@ def compare_box_exit_modes(ticker, **kwargs):
 
 
 def _box_row(idx, ticker, res, action):
-    return f"{idx}. {ticker:<6} | {action} | width {res['box_width_pct'] * 100:.1f}% | turnover {res['turnover_ratio']:.1f}x"
-
-
-def _format_trade_dates(trade):
-    exits = ", ".join(
-        f"{event['date']} ({event['reason']})" for event in trade["exit_events"]
+    return (
+        f"{idx}. {ticker:<6} | {action} | width {res['box_width_pct'] * 100:.1f}% | "
+        f"turnover {res['turnover_ratio']:.1f}x | open gate {res['lowest']:.2f} < open < {res['mid']:.2f}"
     )
-    return f"{trade['entry_date']} -> {exits} {trade['return']:+.1f}%"
 
 
 def scan_total_universe(universe_list):
-    long_reclaim, short_reclaim, failed_tickers = [], [], []
+    long_reclaim, failed_tickers = [], []
     for ticker in universe_list:
         res = analyze_box_range(ticker)
         if res["status"] in ["DATA_INSUFFICIENT", "ERROR"]:
             failed_tickers.append(ticker)
         elif res["status"] == "LONG_RECLAIM":
             long_reclaim.append((ticker, res))
-        elif res["status"] == "SHORT_RECLAIM":
-            short_reclaim.append((ticker, res))
 
     report = "**Box Range Scan Report**\n=============================\n\n"
     report += "**LONG Candidates (next open)**\n" + ("\n".join(_box_row(i, ticker, res, "lower reclaim") for i, (ticker, res) in enumerate(long_reclaim[:10], 1)) or "None")
-    report += "\n\n**SHORT Candidates (next open)**\n" + ("\n".join(_box_row(i, ticker, res, "upper reclaim") for i, (ticker, res) in enumerate(short_reclaim[:10], 1)) or "None")
-    report += "\n\nBacktest Summary\n-----------------------------------------\n"
-    report += "Entry: prior 20-day box width 11%~20%, 2+ same-side bounces, intraday boundary breach then close reclaim; turnover <2x 20d average; enter next open.\n"
-    report += "Exit: 50% at center, balance at opposite edge; no center within 10d exits at close; -7% sells half of remaining, -10% closes all.\n"
-
-    targets = [(ticker, "LONG") for ticker, _ in long_reclaim] + [(ticker, "SHORT") for ticker, _ in short_reclaim]
-    total_return_sum = total_wins = 0.0
-    total_trades = 0
-    for ticker, side in targets[:15]:
-        avg_return, win_rate, count, period_label, trade_details = run_box_backtest(
-            ticker, side_filter=side, include_trades=True
-        )
-        total_return_sum += avg_return * count
-        total_wins += win_rate / 100.0 * count
-        total_trades += count
-        if count:
-            report += (
-                f"{side} *{ticker}*: avg *{avg_return:+.1f}%* | "
-                f"win {win_rate:.1f}% ({round(win_rate / 100.0 * count)}/{count})\n"
-                f"  trades: {'; '.join(_format_trade_dates(trade) for trade in trade_details)}\n"
-            )
-    if targets:
-        report += "\nSelected Candidate History Summary\n"
-        avg = total_return_sum / total_trades if total_trades else 0.0
-        win = total_wins / total_trades * 100.0 if total_trades else 0.0
-        report += f"*Avg trade return {avg:+.1f}%* | win {win:.1f}% ({round(total_wins)}/{total_trades})\n"
+    report += "\n\n*Long-only strategy: upper-boundary reclaims are not entry signals.*"
+    universe_result = core_universe_backtest.aggregate_universe_backtest(
+        universe_list,
+        run_box_backtest,
+        period="2y",
+        evaluation_days=252,
+    )
+    report += core_universe_backtest.format_universe_backtest(
+        universe_result,
+        entry_text=(
+            "prior 20-day box width 11%~20%, 2+ lower-boundary bounces, intraday lower-boundary "
+            "breach then close reclaim, and turnover <2x its 20d average; enter only when next "
+            "open remains above the lower boundary and below the midpoint"
+        ),
+        exit_text=(
+            "50% at center and balance at opposite edge; 10d no-center exit; remaining position "
+            "exits 10d after center if the opposite edge is not reached; -7% half stop and -10% final stop"
+        ),
+    )
     if failed_tickers:
         report += "\n**Data failed / insufficient**\n`" + ", ".join(sorted(set(failed_tickers))) + "`"
     return report

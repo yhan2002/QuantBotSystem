@@ -2,7 +2,7 @@
 # Builds Telegram button menus and screen text.
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-from bot_session import (
+from app_bot_session import (
     CUSTOM_GROUP_CODE,
     STRATEGY_LABELS,
     UNIVERSE_MENUS,
@@ -100,6 +100,14 @@ def build_strategy_markup(chat_id):
 
 def build_back_home_markup():
     markup = InlineKeyboardMarkup()
+    markup.row(InlineKeyboardButton("Back to Menu", callback_data="go_home"))
+    return markup
+
+
+def build_scan_result_markup(has_detail=False):
+    markup = InlineKeyboardMarkup()
+    if has_detail:
+        markup.row(InlineKeyboardButton("See Detail", callback_data="scan_detail"))
     markup.row(InlineKeyboardButton("Back to Menu", callback_data="go_home"))
     return markup
 

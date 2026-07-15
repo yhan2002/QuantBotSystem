@@ -3,8 +3,8 @@ import unittest
 import numpy as np
 import pandas as pd
 
-import run_momentum_volume_alpha_ab as subject
-import market_data_store
+import test_experiment_momentum_volume_alpha_ab as subject
+import core_market_data_store
 
 
 class MomentumVolumeAlphaTest(unittest.TestCase):
@@ -56,7 +56,7 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
         self.assertAlmostEqual(event["return"], 10.0)
 
     def test_backfill_with_empty_ticker_list_does_not_download(self):
-        summary = market_data_store.backfill_price_data([])
+        summary = core_market_data_store.backfill_price_data([])
 
         self.assertEqual(summary["requested"], 0)
         self.assertEqual(summary["updated"], 0)

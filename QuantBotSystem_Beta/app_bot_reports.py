@@ -1,12 +1,13 @@
 ﻿# File name: bot_reports.py
 # Generates strategy scan, quick-check, and box backtest reports.
-import ma_cross_engine
-import box_range_engine
-import market_data_store
-import value_reversion_engine
+import strategy_ma_cross
+import strategy_box_range
+import core_market_data_store
+import strategy_price_liquidity_reversion
 import local_settings
+import core_universe_backtest
 
-from bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
+from app_bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
 
 
 def _should_hide_backtest_detail(chat_id):
@@ -74,14 +75,14 @@ def run_compiled_scan(chat_id, progress_callback=None):
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
     custom_tickers = set(session.get("custom_tickers", []))
 
-    missing_before_scan = market_data_store.get_missing_tickers(compiled_universe)
+    missing_before_scan = core_market_data_store.get_missing_tickers(compiled_universe)
     missing_custom = [ticker for ticker in missing_before_scan if ticker in custom_tickers]
     if missing_custom:
         if progress_callback:
             progress_callback(
                 f"Downloading new Direct Input tickers ({len(missing_custom)})..."
             )
-        market_data_store.ensure_price_data(missing_custom, min_period="1y")
+        core_market_data_store.ensure_price_data(missing_custom, min_period="1y")
 
     if progress_callback:
         progress_callback(
@@ -89,20 +90,21 @@ def run_compiled_scan(chat_id, progress_callback=None):
         )
 
     if selected_strategy == "MA_CROSS":
-        report = ma_cross_engine.scan_ma_cross(compiled_universe)
+        report = strategy_ma_cross.scan_ma_cross(compiled_universe)
     elif selected_strategy == "BOX_RANGE":
-        report = box_range_engine.scan_box_range(compiled_universe)
+        report = strategy_box_range.scan_box_range(compiled_universe)
     elif selected_strategy == "VALUE_REVERSION":
-        report = value_reversion_engine.scan_value_reversion(compiled_universe)
+        report = strategy_price_liquidity_reversion.scan_value_reversion(compiled_universe)
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
-    if _should_hide_backtest_detail(chat_id) and "Backtest Summary" in report:
-        report = report.split("Backtest Summary")[0].strip()
-        report += "\n\n*Backtest detail is available in private/admin sessions.*"
+    report, detail = core_universe_backtest.split_summary_detail(report)
+    if _should_hide_backtest_detail(chat_id):
+        detail = None
+    session["last_backtest_detail"] = detail
 
-    cache_line = market_data_store.freshness_summary(compiled_universe)
-    missing = market_data_store.get_missing_tickers(compiled_universe)
+    cache_line = core_market_data_store.freshness_summary(compiled_universe)
+    missing = core_market_data_store.get_missing_tickers(compiled_universe)
     if missing:
         shown = ", ".join(missing[:30])
         suffix = f" ... +{len(missing) - 30} more" if len(missing) > 30 else ""
@@ -116,10 +118,10 @@ def run_compiled_scan(chat_id, progress_callback=None):
 
 
 def quick_report(ticker):
-    market_data_store.ensure_price_data([ticker], min_period="1y")
-    ma_signal, ma_strength = ma_cross_engine.analyze_trend_strict_signals(ticker)
-    box = box_range_engine.analyze_box_range(ticker)
-    reversion = value_reversion_engine.analyze_value_reversion(ticker)
+    core_market_data_store.ensure_price_data([ticker], min_period="1y")
+    ma_signal, ma_strength = strategy_ma_cross.analyze_trend_strict_signals(ticker)
+    box = strategy_box_range.analyze_box_range(ticker)
+    reversion = strategy_price_liquidity_reversion.analyze_value_reversion(ticker)
 
     box_status = box.get("status", "ERROR")
     box_width = box.get("box_width_pct")
@@ -166,12 +168,12 @@ def quick_report(ticker):
         box_side = "SHORT"
         box_side_label = "SHORT"
 
-    ma_bt = ma_cross_engine.run_isolated_backtest(
+    ma_bt = strategy_ma_cross.run_isolated_backtest(
         ticker,
         side_filter=ma_side,
         period="6mo",
     )
-    box_bt = box_range_engine.run_box_backtest(
+    box_bt = strategy_box_range.run_box_backtest(
         ticker,
         side_filter=box_side,
         period="6mo",
@@ -183,7 +185,7 @@ def quick_report(ticker):
     if reversion_status == "OK":
         reversion_side = "LONG" if reversion_score >= 0 else "SHORT"
         reversion_side_label = reversion_side
-        reversion_bt = value_reversion_engine.run_reversion_backtest(
+        reversion_bt = strategy_price_liquidity_reversion.run_reversion_backtest(
             ticker,
             reversion_side,
             period_days=130,
@@ -225,8 +227,8 @@ def quick_report(ticker):
 
 
 def boxbt_report(ticker):
-    market_data_store.ensure_price_data([ticker], min_period="1y")
-    rows = box_range_engine.compare_box_exit_modes(ticker)
+    core_market_data_store.ensure_price_data([ticker], min_period="1y")
+    rows = strategy_box_range.compare_box_exit_modes(ticker)
     report = f"**[Box TP/SL Test] {ticker}**\n"
     report += "Period: 1Y | Entry: false-break reclaim at close; enter next open\n\n"
     for row in rows:

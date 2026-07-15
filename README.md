@@ -35,13 +35,13 @@ API 키, Telegram 설정 등 비밀값은 `config.local.py`, `local_settings.py`
 
 ```powershell
 cd ".\QuantBot\QuantBotSystem_Beta"
-python .\run_momentum_volume_alpha_ab.py
+python .\test_experiment_momentum_volume_alpha_ab.py
 ```
 
 주요 옵션:
 
 ```powershell
-python .\run_momentum_volume_alpha_ab.py `
+python .\test_experiment_momentum_volume_alpha_ab.py `
   --windows 5,20,60 `
   --holding-days 20 `
   --lookback 252 `
@@ -56,8 +56,8 @@ python .\run_momentum_volume_alpha_ab.py `
 
 ```powershell
 cd ".\QuantBot\QuantBotSystem_Beta"
-python -m unittest test_momentum_volume_alpha_ab.py
-python -m py_compile run_momentum_volume_alpha_ab.py ma_cross_engine.py market_data_store.py
+python -m unittest test_core_market_data_store.py
+python -m py_compile RUN_telegram_bot_server.py strategy_ma_cross.py core_market_data_store.py
 ```
 
 ## 변경 이력

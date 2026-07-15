@@ -6,10 +6,11 @@ import telebot
 from telebot.apihelper import ApiTelegramException
 
 import config
-import daily_market_scheduler
-import market_data_store
-from bot_reports import boxbt_report, quick_report, run_compiled_scan
-from bot_session import (
+import local_settings
+import app_daily_market_scheduler
+import core_market_data_store
+from app_bot_reports import boxbt_report, quick_report, run_compiled_scan
+from app_bot_session import (
     CUSTOM_GROUP_CODE,
     STRATEGY_LABELS,
     check_permission,
@@ -20,12 +21,13 @@ from bot_session import (
     set_direct_input,
     sync_config_file,
 )
-from bot_ui import (
+from app_bot_ui import (
     admin_text,
     build_back_home_markup,
     build_admin_markup,
     build_home_markup,
     build_settings_markup,
+    build_scan_result_markup,
     build_strategy_markup,
     build_universe_markup,
     home_text,
@@ -33,14 +35,18 @@ from bot_ui import (
 )
 
 
-bot = telebot.TeleBot(config.BOT_TOKEN)
+BOT_TOKEN = local_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
+if not BOT_TOKEN:
+    raise RuntimeError("Set BOT_TOKEN in ignored QuantBotSystem_Beta/config.local.py before starting the bot.")
+
+bot = telebot.TeleBot(BOT_TOKEN)
 
 
 def permission_message(chat_id):
     return (
         "This chat is not allowed for this test bot.\n"
         f"chat_id: `{chat_id}`\n\n"
-        "Add this chat_id to ALLOWED_CHAT_IDS in QuantBotSystem_Beta/config.py, "
+        "Add this chat_id to ALLOWED_CHAT_IDS in QuantBotSystem_Beta/config.local.py, "
         "then restart the test bot."
     )
 
@@ -60,7 +66,23 @@ def send_long_message(chat_id, text, first_message_id=None, markup=None):
     if first_message_id:
         bot.edit_message_text("Scan complete. Sending report...", chat_id, first_message_id)
 
-    chunks = [text[i : i + max_length] for i in range(0, len(text), max_length)]
+    chunks = []
+    current = ""
+    for line in text.splitlines(keepends=True):
+        if len(line) > max_length:
+            if current:
+                chunks.append(current.rstrip())
+                current = ""
+            chunks.extend(
+                line[i : i + max_length] for i in range(0, len(line), max_length)
+            )
+        elif len(current) + len(line) > max_length:
+            chunks.append(current.rstrip())
+            current = line
+        else:
+            current += line
+    if current:
+        chunks.append(current.rstrip())
     for idx, chunk in enumerate(chunks):
         chunk_markup = markup if idx == len(chunks) - 1 else None
         bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_markup=chunk_markup)
@@ -222,6 +244,7 @@ def handle_menu_callbacks(call):
             )
 
         elif data == "run_scan":
+            session["last_backtest_detail"] = None
             bot.answer_callback_query(call.id, "Starting scan.")
             report = run_compiled_scan(
                 chat_id,
@@ -233,6 +256,24 @@ def handle_menu_callbacks(call):
                 chat_id,
                 report,
                 first_message_id=call.message.message_id,
+                markup=build_scan_result_markup(
+                    has_detail=bool(session.get("last_backtest_detail"))
+                ),
+            )
+
+        elif data == "scan_detail":
+            detail = session.get("last_backtest_detail")
+            if not detail:
+                bot.answer_callback_query(
+                    call.id,
+                    "No detail is available. Run the scan again.",
+                    show_alert=True,
+                )
+                return
+            bot.answer_callback_query(call.id, "Sending backtest detail.")
+            send_long_message(
+                chat_id,
+                detail,
                 markup=build_back_home_markup(),
             )
 
@@ -243,8 +284,8 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
             )
-            summary = market_data_store.preload_all_universe(config)
-            report = market_data_store.format_cache_summary(
+            summary = core_market_data_store.preload_all_universe(config)
+            report = core_market_data_store.format_cache_summary(
                 summary, title="Full Market Data Preload Complete"
             )
             bot.edit_message_text(
@@ -266,8 +307,8 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
             )
-            summary = market_data_store.ensure_price_data(selected, min_period="2y")
-            report = market_data_store.format_cache_summary(
+            summary = core_market_data_store.ensure_price_data(selected, min_period="2y")
+            report = core_market_data_store.format_cache_summary(
                 summary, title="Selected Universe Refresh Complete"
             )
             bot.edit_message_text(
@@ -283,8 +324,8 @@ def handle_menu_callbacks(call):
             report = (
                 "**Data Cache Status**\n\n"
                 f"Configured tickers: {len(all_tickers)}\n"
-                f"{market_data_store.freshness_summary(all_tickers)}\n"
-                f"DB path: `{market_data_store.DB_PATH}`"
+                f"{core_market_data_store.freshness_summary(all_tickers)}\n"
+                f"DB path: `{core_market_data_store.DB_PATH}`"
             )
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
@@ -497,5 +538,5 @@ def handle_pending_text(message):
 
 if __name__ == "__main__":
     print("[DEBUG] Quant Bot server started.")
-    daily_market_scheduler.start_scheduler_thread()
+    app_daily_market_scheduler.start_scheduler_thread()
     bot.infinity_polling()

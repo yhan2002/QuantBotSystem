@@ -4,7 +4,8 @@ import math
 
 import pandas as pd
 
-import market_data_store
+import core_market_data_store
+import core_universe_backtest
 
 
 REVERSION_SHOCK_DAYS = 5
@@ -99,7 +100,7 @@ def analyze_value_reversion(ticker, allow_fundamental_download=True, df=None):
     """Return a confirmed price/liquidity reversion signal known at today's close."""
     del allow_fundamental_download
     prices = (
-        market_data_store.get_price_data(ticker, period_days=130)
+        core_market_data_store.get_price_data(ticker, period_days=130)
         if df is None
         else df
     )
@@ -165,13 +166,20 @@ def _format_rows(items, long_side=True):
     ) + "\n"
 
 
-def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, df=None):
+def run_reversion_backtest(
+    ticker,
+    side=None,
+    period_days=260,
+    include_trades=False,
+    df=None,
+    evaluation_days=None,
+):
     """Backtest confirmed reversion entries and B-style two-stage profit taking.
 
     All indicator exits are confirmed at the close and filled at the next open.
     ATR stops are intraday protective exits and use a conservative gap fill.
     """
-    prices = market_data_store.get_price_data(ticker, period_days=period_days) if df is None else df
+    prices = core_market_data_store.get_price_data(ticker, period_days=period_days) if df is None else df
     features = _add_reversion_features(prices)
     # MA60 needs five additional observations for its trend slope.
     warmup = REVERSION_MA_WINDOW + 5
@@ -179,7 +187,12 @@ def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, 
         result = (0.0, 0.0, 0, "N/A", [])
         return result if include_trades else result[:4]
 
-    period_label = f"{features.index[warmup].date()} to {features.index[-1].date()}"
+    signal_start_idx = (
+        max(warmup, len(features) - evaluation_days)
+        if evaluation_days
+        else warmup
+    )
+    period_label = f"{features.index[signal_start_idx].date()} to {features.index[-1].date()}"
     trades, trade_details = [], []
     position = None
 
@@ -208,7 +221,7 @@ def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, 
             }
         )
 
-    for idx in range(warmup, len(features) - 1):
+    for idx in range(signal_start_idx, len(features) - 1):
         day = features.iloc[idx]
         if position is not None and position.get("pending_exit"):
             pending = position.pop("pending_exit")
@@ -287,47 +300,6 @@ def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, 
     return result if include_trades else result[:4]
 
 
-def _format_trade_dates(trade):
-    events = ", ".join(f"{item['date']} ({item['reason']})" for item in trade["exit_events"])
-    return f"{trade['entry_date']} -> {events} {trade['return']:+.1f}%"
-
-
-def _format_backtest(targets):
-    if not targets:
-        return ""
-    report = "\nBacktest Summary\n-----------------------------------------\n"
-    report += (
-        "Entry: shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, "
-        "positive LONG candle, and turnover <2.0x at close; enter next open.\n"
-        "Exit: 50% at ±0.5σ, move residual stop to entry, then exit at mean (0σ); "
-        "ATR stop, 3d no-progress, or 10d time exit.\n"
-    )
-    total_return_sum = total_wins = 0.0
-    total_trades = 0
-    for row, side in targets:
-        avg_return, win_rate, count, period_label, details = run_reversion_backtest(
-            row["ticker"], side, include_trades=True
-        )
-        total_return_sum += avg_return * count
-        total_wins += win_rate / 100.0 * count
-        total_trades += count
-        if count:
-            report += (
-                f"{side} *{row['ticker']}*: avg *{avg_return:+.1f}%* | "
-                f"win {win_rate:.1f}% ({round(win_rate / 100.0 * count)}/{count}) | "
-                f"period {period_label}\n"
-                f"  trades: {'; '.join(_format_trade_dates(trade) for trade in details)}\n"
-            )
-        else:
-            report += f"{side} *{row['ticker']}*: no closed trades\n"
-    avg = total_return_sum / total_trades if total_trades else 0.0
-    win = total_wins / total_trades * 100.0 if total_trades else 0.0
-    report += "\nSelected Candidate History Summary\n"
-    report += f"*Avg trade return {avg:+.1f}%* | win {win:.1f}% ({round(total_wins)}/{total_trades})\n"
-    report += "-----------------------------------------\n"
-    return report
-
-
 def scan_value_reversion(universe_list):
     scored, failed = [], []
     for ticker in universe_list:
@@ -339,7 +311,12 @@ def scan_value_reversion(universe_list):
 
     top_longs = sorted((row for row in scored if row["side"] == "LONG"), key=lambda row: row["score"], reverse=True)[:3]
     top_shorts = sorted((row for row in scored if row["side"] == "SHORT"), key=lambda row: row["score"])[:3]
-    targets = [(row, "LONG") for row in top_longs] + [(row, "SHORT") for row in top_shorts]
+    universe_result = core_universe_backtest.aggregate_universe_backtest(
+        universe_list,
+        run_reversion_backtest,
+        period_days=520,
+        evaluation_days=252,
+    )
     msg = (
         "**Price/Liquidity Reversion v2 Scan Report**\n"
         "=============================\n\n"
@@ -349,7 +326,7 @@ def scan_value_reversion(universe_list):
         "**SHORT Candidates**\n"
         "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
-        f"{_format_backtest(targets)}"
+        f"{core_universe_backtest.format_universe_backtest(universe_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit')}"
     )
     if failed:
         msg += "\n----------------------------------------\nInsufficient local data: " + ", ".join(sorted(failed))

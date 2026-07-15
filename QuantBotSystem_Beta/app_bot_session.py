@@ -5,6 +5,7 @@ import importlib
 import re
 
 import config
+import local_settings
 
 
 CUSTOM_GROUP_CODE = "CUSTOM"
@@ -18,6 +19,7 @@ UNIVERSE_MENUS = [
     ("CSQ_SMID", "CSQ SMID"),
     ("CSQ_UNIV", "CSQ UNIV"),
     ("JP_UNIV", "JP Universe"),
+    ("US_LARGE_CAP_100_20260630_PROXY", "US Top 100"),
 ]
 
 STRATEGY_LABELS = {
@@ -112,12 +114,14 @@ def get_or_create_session(chat_id):
             "custom_tickers": [],
             "scheduler_active": True,
             "awaiting": None,
+            "last_backtest_detail": None,
         }
     return USER_SESSIONS[chat_id]
 
 
 def check_permission(chat_id):
-    return chat_id in config.ALLOWED_CHAT_IDS
+    allowed_chat_ids = {str(value) for value in local_settings.get_setting("ALLOWED_CHAT_IDS", config.ALLOWED_CHAT_IDS)}
+    return str(chat_id) in allowed_chat_ids
 
 
 def get_group_label(group_code):

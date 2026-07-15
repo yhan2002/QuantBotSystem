@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-import value_reversion_engine
+import strategy_price_liquidity_reversion
 
 
 def _long_reversion_frame():
@@ -28,7 +28,7 @@ def _long_reversion_frame():
 
 class ValueReversionEngineTests(unittest.TestCase):
     def test_confirmed_shock_generates_next_open_long_signal(self):
-        result = value_reversion_engine.analyze_value_reversion(
+        result = strategy_price_liquidity_reversion.analyze_value_reversion(
             "TEST", df=_long_reversion_frame().iloc[:67]
         )
         self.assertEqual(result["status"], "OK")
@@ -38,23 +38,23 @@ class ValueReversionEngineTests(unittest.TestCase):
         frame = _long_reversion_frame().iloc[:67].copy()
         frame.iloc[-1, frame.columns.get_loc("Open")] = frame["Close"].iloc[-1] + 1.0
 
-        result = value_reversion_engine.analyze_value_reversion("TEST", df=frame)
+        result = strategy_price_liquidity_reversion.analyze_value_reversion("TEST", df=frame)
 
         self.assertEqual(result["status"], "NO_SIGNAL")
 
     def test_partial_exit_moves_stop_to_entry_price(self):
         self.assertEqual(
-            value_reversion_engine._post_partial_stop_price("LONG", 100.0, 95.0),
+            strategy_price_liquidity_reversion._post_partial_stop_price("LONG", 100.0, 95.0),
             100.0,
         )
         self.assertEqual(
-            value_reversion_engine._post_partial_stop_price("SHORT", 100.0, 105.0),
+            strategy_price_liquidity_reversion._post_partial_stop_price("SHORT", 100.0, 105.0),
             100.0,
         )
 
     def test_b_exit_scales_at_half_sigma_then_mean(self):
         avg_return, win_rate, count, _, details = (
-            value_reversion_engine.run_reversion_backtest(
+            strategy_price_liquidity_reversion.run_reversion_backtest(
                 "TEST", "LONG", df=_long_reversion_frame(), include_trades=True
             )
         )

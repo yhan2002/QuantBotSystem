@@ -2,7 +2,8 @@
 # Generates moving-average momentum signals and backtest reports.
 import numpy as np
 import pandas as pd
-import market_data_store
+import core_market_data_store
+import core_universe_backtest
 
 
 MOMENTUM_MA_WINDOWS = (5, 20, 60)
@@ -39,13 +40,13 @@ def _period_to_rows(period):
 
 
 def _load_ohlcv(ticker, period="14mo", allow_download=False):
-    df = market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
+    df = core_market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
     if not df.empty:
         return _normalize_ohlcv(df)
 
     if allow_download:
-        market_data_store.ensure_price_data([ticker], min_period="2y")
-        df = market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
+        core_market_data_store.ensure_price_data([ticker], min_period="2y")
+        df = core_market_data_store.get_price_data(ticker, period_days=_period_to_rows(period))
         if not df.empty:
             return _normalize_ohlcv(df)
 
@@ -179,6 +180,7 @@ def run_isolated_backtest(
     windows=MOMENTUM_MA_WINDOWS,
     holding_days=MOMENTUM_HOLDING_DAYS,
     include_trades=False,
+    evaluation_days=None,
 ):
     """Run a simple isolated MA momentum backtest."""
     try:
@@ -187,8 +189,13 @@ def run_isolated_backtest(
             result = (0.0, 0.0, 0, "N/A", [])
             return result if include_trades else result[:4]
 
-        first_signal_idx = max(max(windows), TURNOVER_LOOKBACK_DAYS)
-        start_date = df.index[first_signal_idx + 1].date().isoformat()
+        warmup_idx = max(max(windows), TURNOVER_LOOKBACK_DAYS)
+        signal_start_idx = (
+            max(warmup_idx, len(df) - evaluation_days)
+            if evaluation_days
+            else warmup_idx
+        )
+        start_date = df.index[min(signal_start_idx + 1, len(df) - 1)].date().isoformat()
         end_date = df.index[-1].date().isoformat()
         period_label = f"{start_date} to {end_date}"
 
@@ -199,7 +206,7 @@ def run_isolated_backtest(
 
         next_available_idx = 0
         for idx in range(
-            max(max(windows), TURNOVER_LOOKBACK_DAYS),
+            signal_start_idx,
             len(df) - holding_days,
         ):
             if idx + 1 < next_available_idx:
@@ -319,67 +326,23 @@ def scan_ma_cross(universe_list):
     long_rows = _format_ranked_rows(top_longs, long_side=True)
     short_rows = _format_ranked_rows(top_shorts, long_side=False)
 
-    target_tickers = [(t, "LONG NEW") for t in new_longs] + [
-        (t, "SHORT NEW") for t in new_shorts
-    ]
-    for ticker, _ in top_longs:
-        if (ticker, "LONG NEW") not in target_tickers:
-            target_tickers.append((ticker, "LONG"))
-    for ticker, _ in top_shorts:
-        if (ticker, "SHORT NEW") not in target_tickers:
-            target_tickers.append((ticker, "SHORT"))
-
-    backtest_report = ""
-    if target_tickers:
-        backtest_report += "\nBacktest Summary\n"
-        backtest_report += "-----------------------------------------\n"
-        backtest_report += (
-            "Entry: MA 5/20/60 alignment and same-direction slopes plus "
-            f"turnover > {TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
-            "at close; enter next open.\n"
-            f"Warm-up: first {TURNOVER_LOOKBACK_DAYS} trading days excluded from evaluation.\n"
-            f"Exit: close after {MOMENTUM_HOLDING_DAYS} trading days; "
-            "no overlapping entries.\n"
-        )
-        total_return_sum = 0.0
-        total_wins = 0.0
-        total_trades = 0
-        for ticker, tag in target_tickers:
-            side = "LONG" if "LONG" in tag else "SHORT"
-            avg_return, win_rate, count, period_label, trade_details = run_isolated_backtest(
-                ticker,
-                side_filter=side,
-                include_trades=True,
-            )
-            total_return_sum += avg_return * count
-            total_wins += (win_rate / 100.0) * count
-            total_trades += count
-            if count:
-                wins = round((win_rate / 100.0) * count)
-                trade_text = "; ".join(
-                    f"{row['entry_date']}->{row['exit_date']} {row['return']:+.1f}%"
-                    for row in trade_details
-                )
-                backtest_report += (
-                    f"{side} *{ticker} ({tag})*: "
-                    f"avg *{avg_return:+.1f}%* | win {win_rate:.1f}% "
-                    f"({wins}/{count})\n"
-                    f"  trades: {trade_text}\n"
-                )
-            else:
-                backtest_report += (
-                    f"{side} *{ticker} ({tag})*: "
-                    "no closed trades\n"
-                )
-        total_win_rate = total_wins / total_trades * 100.0 if total_trades else 0.0
-        portfolio_avg = total_return_sum / total_trades if total_trades else 0.0
-        total_win_count = round(total_wins)
-        backtest_report += "\nSelected Candidate History Summary\n"
-        backtest_report += (
-            f"*Avg trade return {portfolio_avg:+.1f}%* | "
-            f"win {total_win_rate:.1f}% ({total_win_count}/{total_trades})\n"
-        )
-        backtest_report += "-----------------------------------------\n"
+    universe_result = core_universe_backtest.aggregate_universe_backtest(
+        universe_list,
+        run_isolated_backtest,
+        period="2y",
+        evaluation_days=252,
+    )
+    backtest_report = core_universe_backtest.format_universe_backtest(
+        universe_result,
+        entry_text=(
+            "MA 5/20/60 alignment and same-direction slopes plus "
+            f"turnover >{TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
+            "at close; enter next open"
+        ),
+        exit_text=(
+            f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
+        ),
+    )
 
     msg = (
         "**MA Momentum + Volume Confirmation Scan Report**\n"
