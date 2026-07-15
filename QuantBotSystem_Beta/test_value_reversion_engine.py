@@ -34,6 +34,24 @@ class ValueReversionEngineTests(unittest.TestCase):
         self.assertEqual(result["status"], "OK")
         self.assertEqual(result["side"], "LONG")
 
+    def test_long_signal_requires_positive_rebound_candle(self):
+        frame = _long_reversion_frame().iloc[:67].copy()
+        frame.iloc[-1, frame.columns.get_loc("Open")] = frame["Close"].iloc[-1] + 1.0
+
+        result = value_reversion_engine.analyze_value_reversion("TEST", df=frame)
+
+        self.assertEqual(result["status"], "NO_SIGNAL")
+
+    def test_partial_exit_moves_stop_to_entry_price(self):
+        self.assertEqual(
+            value_reversion_engine._post_partial_stop_price("LONG", 100.0, 95.0),
+            100.0,
+        )
+        self.assertEqual(
+            value_reversion_engine._post_partial_stop_price("SHORT", 100.0, 105.0),
+            100.0,
+        )
+
     def test_b_exit_scales_at_half_sigma_then_mean(self):
         avg_return, win_rate, count, _, details = (
             value_reversion_engine.run_reversion_backtest(

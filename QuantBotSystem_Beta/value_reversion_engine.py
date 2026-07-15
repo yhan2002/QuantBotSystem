@@ -75,7 +75,7 @@ def _add_reversion_features(prices):
     )
     confirmation_long = (close > close.shift(1)) & (
         prices["CLOSE_LOCATION"] >= REVERSION_LONG_CLOSE_LOCATION
-    )
+    ) & (close >= prices["Open"].astype(float))
     confirmation_short = (close < close.shift(1)) & (
         prices["CLOSE_LOCATION"] <= REVERSION_SHORT_CLOSE_LOCATION
     )
@@ -143,6 +143,11 @@ def _stop_hit(side, day, stop_price):
 
 def _stop_fill(side, day_open, stop_price):
     return min(day_open, stop_price) if side == "LONG" else max(day_open, stop_price)
+
+
+def _post_partial_stop_price(side, entry_price, current_stop):
+    """Protect a confirmed partial gain without weakening conservative gap fills."""
+    return max(current_stop, entry_price) if side == "LONG" else min(current_stop, entry_price)
 
 
 def _format_price(value):
@@ -214,6 +219,9 @@ def run_reversion_backtest(ticker, side, period_days=260, include_trades=False, 
                 finish_trade(position)
                 position = None
                 continue
+            position["stop_price"] = _post_partial_stop_price(
+                position["side"], position["entry_price"], position["stop_price"]
+            )
 
         if position is None:
             signal_side = "LONG" if bool(day["LONG_SIGNAL"]) else "SHORT" if bool(day["SHORT_SIGNAL"]) else None
@@ -290,8 +298,9 @@ def _format_backtest(targets):
     report = "\nBacktest Summary\n-----------------------------------------\n"
     report += (
         "Entry: shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, "
-        "and turnover <2.0x at close; enter next open.\n"
-        "Exit: 50% at ±0.5σ, remainder at mean (0σ); ATR stop, 3d no-progress, or 10d time exit.\n"
+        "positive LONG candle, and turnover <2.0x at close; enter next open.\n"
+        "Exit: 50% at ±0.5σ, move residual stop to entry, then exit at mean (0σ); "
+        "ATR stop, 3d no-progress, or 10d time exit.\n"
     )
     total_return_sum = total_wins = 0.0
     total_trades = 0
@@ -335,7 +344,7 @@ def scan_value_reversion(universe_list):
         "**Price/Liquidity Reversion v2 Scan Report**\n"
         "=============================\n\n"
         "**LONG Candidates**\n"
-        "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, rebound close, turnover <2.0x.\n"
+        "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, positive rebound close, turnover <2.0x.\n"
         f"{_format_rows(top_longs, long_side=True)}\n"
         "**SHORT Candidates**\n"
         "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
