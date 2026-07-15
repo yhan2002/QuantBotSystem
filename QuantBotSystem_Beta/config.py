@@ -1,14 +1,9 @@
 ﻿# File name: config.py
 # Defines bot access permissions and default strategy universes.
-BOT_TOKEN = "" # @YHanTestBot
+# Private runtime settings belong in ignored config.local.py.
+BOT_TOKEN = ""
 SCALPING_WORKBOOK_PATH = "../스캘핑 ver 2.0 - 복사본.xlsx"
-ALLOWED_CHAT_IDS = [
-    "7485559455",
-    "-5489984462",
-    "6835580933",
-    "6395561265",
-    "5416647161"
-]
+ALLOWED_CHAT_IDS = []
 
 universe_groups = {
     "CSQ_CP": [
@@ -80,6 +75,22 @@ universe_groups = {
         'LI', 'MNSO', 'PONY', 'QFIN', 'TAL', 'TCOM', 'TME', 'VIPS', 'WRD', 'XPEV', 'YMM', 'YUMC'
     ]
 }
+
+# Closest available public ranking snapshot (2026-07-15) used as a proxy for
+# the requested 2026-06-30 U.S. top-100 market-cap universe. Replace this list
+# when an auditable 2026-06-30 historical ranking becomes available.
+universe_groups["US_LARGE_CAP_100_20260630_PROXY"] = [
+    "NVDA", "AAPL", "GOOG", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA", "MU",
+    "BRK-B", "LLY", "JPM", "WMT", "AMD", "V", "JNJ", "XOM", "INTC", "MA",
+    "AMAT", "CSCO", "LRCX", "ABBV", "CAT", "BAC", "COST", "UNH", "GE", "ORCL",
+    "CVX", "MS", "KO", "PG", "HD", "GS", "PLTR", "NFLX", "KLAC", "MRK",
+    "DELL", "PANW", "GEV", "TXN", "PM", "RTX", "SNDK", "WFC", "AXP", "ANET",
+    "C", "CRWD", "IBM", "TMUS", "MRVL", "TMO", "APH", "WDC", "AMGN", "ADI",
+    "MCD", "QCOM", "NEE", "PEP", "VZ", "SCHW", "UNP", "BA", "BLK", "WELL",
+    "DIS", "TJX", "IBKR", "GLW", "GILD", "DE", "ABT", "BX", "SCCO", "APP",
+    "T", "UBER", "DHR", "PFE", "CRM", "COP", "PLD", "BKNG", "CVS", "ISRG",
+    "PGR", "SPGI", "COF", "FTNT", "PH", "SBUX", "VRTX", "SYK", "LMT", "MO",
+]
 
 
 def normalize_ticker(ticker):

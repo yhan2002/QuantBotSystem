@@ -7,13 +7,14 @@ from datetime import datetime
 import requests
 import schedule
 
-import box_range_engine
+import strategy_box_range
 import config
 import local_settings
-import ma_cross_engine
-import market_data_store
-import value_reversion_engine
-from bot_session import USER_SESSIONS, compile_selected_universe
+import strategy_ma_cross
+import core_market_data_store
+import strategy_price_liquidity_reversion
+import core_universe_backtest
+from app_bot_session import USER_SESSIONS, compile_selected_universe
 
 _scheduler_started = False
 MORNING_DATA_REFRESH_TIME = "08:00"
@@ -26,7 +27,8 @@ def _should_hide_backtest_detail(chat_id):
 
 
 def send_split_telegram_message(chat_id, text):
-    url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/sendMessage"
+    bot_token = local_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     max_length = 4000
 
     chunks = [text[i : i + max_length] for i in range(0, len(text), max_length)]
@@ -43,7 +45,7 @@ def daily_market_scanner():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_str}] Scheduled market scanner started.")
 
-    for chat_id in config.ALLOWED_CHAT_IDS:
+    for chat_id in local_settings.get_setting("ALLOWED_CHAT_IDS", config.ALLOWED_CHAT_IDS):
         session = USER_SESSIONS.get(
             chat_id,
             {
@@ -65,13 +67,13 @@ def daily_market_scanner():
 
         try:
             if selected_strategy == "MA_CROSS":
-                report_content = ma_cross_engine.scan_ma_cross(compiled_universe)
+                report_content = strategy_ma_cross.scan_ma_cross(compiled_universe)
                 header = f"*Scheduled Alert* MA Momentum Scan ({now_str})\n"
             elif selected_strategy == "BOX_RANGE":
-                report_content = box_range_engine.scan_box_range(compiled_universe)
+                report_content = strategy_box_range.scan_box_range(compiled_universe)
                 header = f"*Scheduled Alert* Box Range Scan ({now_str})\n"
             elif selected_strategy == "VALUE_REVERSION":
-                report_content = value_reversion_engine.scan_value_reversion(
+                report_content = strategy_price_liquidity_reversion.scan_value_reversion(
                     compiled_universe
                 )
                 header = f"*Scheduled Alert* Price/Liquidity Reversion v2 Scan ({now_str})\n"
@@ -79,6 +81,7 @@ def daily_market_scanner():
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"
 
+            report_content, _ = core_universe_backtest.split_summary_detail(report_content)
             if _should_hide_backtest_detail(chat_id):
                 for marker in ["Backtest Summary"]:
                     if marker in report_content:
@@ -105,7 +108,7 @@ def daily_market_data_refresh(label="daily"):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_str}] Market data refresh started. label={label}")
     try:
-        summary = market_data_store.preload_all_universe(config)
+        summary = core_market_data_store.preload_all_universe(config)
         print(
             f"[{now_str}] Market data refresh complete. label={label}, "
             f"tickers={summary['requested']}, rows_updated={summary['updated']}, "
