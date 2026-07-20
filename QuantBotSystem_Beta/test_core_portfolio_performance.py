@@ -1,0 +1,136 @@
+import unittest
+
+import pandas as pd
+
+import core_portfolio_performance
+
+
+def _loader(frames):
+    def load(ticker):
+        return frames.get(ticker, pd.DataFrame())
+    return load
+
+
+def _frame(closes, dates=None):
+    index = pd.to_datetime(dates or ["2025-01-01", "2025-01-02", "2025-01-03"])
+    return pd.DataFrame({"Close": closes}, index=index)
+
+
+class PortfolioPerformanceTests(unittest.TestCase):
+    def test_next_open_entry_and_close_exit_compound_in_daily_nav(self):
+        trades = [{
+            "ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
+            "entry_price": 100.0, "exit_date": "2025-01-03", "exit_price": 121.0,
+        }]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades, ["AAA"], "2025-01-02", "2025-01-03",
+            price_loader=_loader({"AAA": _frame([100.0, 110.0, 121.0])}),
+        )
+        self.assertAlmostEqual(result["daily"]["strategy_return"].iloc[0], 0.10)
+        self.assertAlmostEqual(result["daily"]["strategy_return"].iloc[1], 0.10)
+        self.assertAlmostEqual(result["strategy"]["roi_pct"], 21.0)
+
+    def test_short_direction_is_reflected(self):
+        trades = [{
+            "ticker": "AAA", "side": "SHORT", "entry_date": "2025-01-02",
+            "entry_price": 100.0, "exit_date": "2025-01-02", "exit_price": 90.0,
+        }]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades, ["AAA"], "2025-01-02", "2025-01-02",
+            price_loader=_loader({"AAA": _frame([100.0, 90.0, 90.0])}),
+        )
+        self.assertAlmostEqual(result["strategy"]["roi_pct"], 10.0)
+
+    def test_partial_exit_cash_stays_in_trade_sleeve(self):
+        trades = [{
+            "ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
+            "entry_price": 100.0,
+            "exit_events": [
+                {"date": "2025-01-02", "weight": 0.5, "price": 110.0},
+                {"date": "2025-01-03", "weight": 0.5, "price": 120.0},
+            ],
+        }]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades, ["AAA"], "2025-01-02", "2025-01-03",
+            price_loader=_loader({"AAA": _frame([100.0, 110.0, 120.0])}),
+        )
+        self.assertAlmostEqual(result["daily"]["strategy_nav"].iloc[0], 1.10)
+        self.assertAlmostEqual(result["daily"]["strategy_nav"].iloc[1], 1.15)
+
+    def test_active_trade_sleeves_are_equal_weighted_each_day(self):
+        trades = [
+            {"ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
+             "entry_price": 100.0, "exit_date": "2025-01-02", "exit_price": 110.0},
+            {"ticker": "BBB", "side": "LONG", "entry_date": "2025-01-02",
+             "entry_price": 100.0, "exit_date": "2025-01-02", "exit_price": 90.0},
+        ]
+        frames = {"AAA": _frame([100.0, 110.0, 110.0]),
+                  "BBB": _frame([100.0, 90.0, 90.0])}
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades, ["AAA", "BBB"], "2025-01-02", "2025-01-02",
+            price_loader=_loader(frames),
+        )
+        self.assertAlmostEqual(result["strategy"]["roi_pct"], 0.0)
+        self.assertEqual(result["daily"]["active_positions"].iloc[0], 2)
+
+    def test_first_day_loss_is_included_in_mdd(self):
+        trades = [{
+            "ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
+            "entry_price": 100.0, "exit_date": "2025-01-02", "exit_price": 90.0,
+        }]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades, ["AAA"], "2025-01-02", "2025-01-02",
+            price_loader=_loader({"AAA": _frame([100.0, 90.0, 90.0])}),
+        )
+        self.assertAlmostEqual(result["strategy"]["mdd_pct"], -10.0)
+
+    def test_benchmark_equal_weights_and_forward_fills_market_holiday(self):
+        frames = {
+            "AAA": _frame([100.0, 110.0, 121.0]),
+            "BBB": _frame(
+                [200.0, 220.0], dates=["2025-01-01", "2025-01-03"]
+            ),
+        }
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            [], ["AAA", "BBB"], "2025-01-02", "2025-01-03",
+            price_loader=_loader(frames),
+        )
+        returns = result["daily"]["benchmark_return"]
+        self.assertAlmostEqual(returns.iloc[0], 0.05)
+        self.assertAlmostEqual(returns.iloc[1], 0.10)
+        self.assertEqual(result["benchmark_tickers"], 2)
+
+    def test_stale_benchmark_price_is_not_forward_filled_indefinitely(self):
+        dates = ["2025-01-01", "2025-01-02", "2025-01-10"]
+        frames = {
+            "AAA": _frame([100.0, 110.0, 121.0], dates=dates),
+            "BBB": _frame([200.0], dates=["2025-01-01"]),
+        }
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            [], ["AAA", "BBB"], "2025-01-02", "2025-01-10",
+            price_loader=_loader(frames), max_stale_calendar_days=7,
+        )
+        self.assertEqual(result["daily"]["benchmark_constituents"].iloc[-1], 1)
+        self.assertEqual(result["benchmark_min_daily_tickers"], 1)
+
+    def test_universe_result_adds_trade_stats_and_target_decision(self):
+        universe_result = {
+            "period": "2025-01-02 to 2025-01-03",
+            "trades": [{
+                "ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
+                "entry_price": 100.0, "exit_date": "2025-01-03", "exit_price": 121.0,
+            }],
+            "all": {"count": 1, "win_rate": 100.0},
+        }
+        result = core_portfolio_performance.calculate_universe_performance(
+            universe_result, ["AAA"],
+            price_loader=_loader({"AAA": _frame([100.0, 110.0, 121.0])}),
+        )
+        self.assertEqual(result["trade_count"], 1)
+        self.assertEqual(result["win_rate_pct"], 100.0)
+        self.assertTrue(result["target"]["passes_win_rate"])
+        self.assertIn("passes_all", result["target"])
+
+
+if __name__ == "__main__":
+    unittest.main()

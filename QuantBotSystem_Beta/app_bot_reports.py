@@ -4,14 +4,9 @@ import strategy_ma_cross
 import strategy_box_range
 import core_market_data_store
 import strategy_price_liquidity_reversion
-import local_settings
 import core_universe_backtest
 
 from app_bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
-
-
-def _should_hide_backtest_detail(chat_id):
-    return str(chat_id) in local_settings.hidden_backtest_chat_ids()
 
 
 def _wins_text(win_rate, count):
@@ -72,6 +67,8 @@ def run_compiled_scan(chat_id, progress_callback=None):
         raise ValueError("No tickers selected. Set a universe first.")
 
     selected_strategy = session["strategy"]
+    neutralization = session.get("neutralization", "NONE")
+    position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
     custom_tickers = set(session.get("custom_tickers", []))
 
@@ -90,18 +87,29 @@ def run_compiled_scan(chat_id, progress_callback=None):
         )
 
     if selected_strategy == "MA_CROSS":
-        report = strategy_ma_cross.scan_ma_cross(compiled_universe)
+        report = strategy_ma_cross.scan_ma_cross(
+            compiled_universe,
+            neutralization=neutralization,
+            position_mode=position_mode,
+        )
     elif selected_strategy == "BOX_RANGE":
-        report = strategy_box_range.scan_box_range(compiled_universe)
+        report = strategy_box_range.scan_box_range(
+            compiled_universe,
+            neutralization=neutralization,
+            position_mode=position_mode,
+        )
     elif selected_strategy == "VALUE_REVERSION":
-        report = strategy_price_liquidity_reversion.scan_value_reversion(compiled_universe)
+        report = strategy_price_liquidity_reversion.scan_value_reversion(
+            compiled_universe,
+            neutralization=neutralization,
+            position_mode=position_mode,
+        )
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
-    report, detail = core_universe_backtest.split_summary_detail(report)
-    if _should_hide_backtest_detail(chat_id):
-        detail = None
+    report, detail, csv_path = core_universe_backtest.split_report_payload(report)
     session["last_backtest_detail"] = detail
+    session["last_backtest_csv_path"] = csv_path
 
     cache_line = core_market_data_store.freshness_summary(compiled_universe)
     missing = core_market_data_store.get_missing_tickers(compiled_universe)
@@ -115,8 +123,6 @@ def run_compiled_scan(chat_id, progress_callback=None):
     report = f"{report}\n\n----------------------------------------\n{cache_line}"
 
     return report
-
-
 def quick_report(ticker):
     core_market_data_store.ensure_price_data([ticker], min_period="1y")
     ma_signal, ma_strength = strategy_ma_cross.analyze_trend_strict_signals(ticker)
@@ -199,7 +205,7 @@ def quick_report(ticker):
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
     report += "  Benchmark: prior 20d box width 11%~20%, 2+ same-side bounces, close reclaim, and turnover below 2x its 20d average.\n"
-    report += f"- Price/Liquidity Reversion v2: `{reversion_signal}`"
+    report += f"- Reversion: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"
     report += "\n"
@@ -215,7 +221,7 @@ def quick_report(ticker):
     report += _bt_line("Box Range", box_bt[0], box_bt[1], box_bt[2], box_side_label) + "\n"
     report += (
         _bt_line(
-            "Reversion v2",
+            "Reversion",
             reversion_bt[0],
             reversion_bt[1],
             reversion_bt[2],
@@ -223,17 +229,4 @@ def quick_report(ticker):
         )
         + "\n"
     )
-    return report
-
-
-def boxbt_report(ticker):
-    core_market_data_store.ensure_price_data([ticker], min_period="1y")
-    rows = strategy_box_range.compare_box_exit_modes(ticker)
-    report = f"**[Box TP/SL Test] {ticker}**\n"
-    report += "Period: 1Y | Entry: false-break reclaim at close; enter next open\n\n"
-    for row in rows:
-        report += (
-            f"- {row['label']}: avg {row['avg_return']:+.1f}% | "
-            f"win {row['win_rate']:.1f}% ({row['count']} trades)\n"
-        )
     return report

@@ -1,4 +1,6 @@
 import unittest
+import tempfile
+from pathlib import Path
 
 import core_universe_backtest
 
@@ -38,6 +40,97 @@ class UniverseBacktestTests(unittest.TestCase):
         self.assertNotIn("2025-08-01", summary)
         self.assertIn("LONG AAA: 2025-08-01", detail)
         self.assertIn("SHORT BBB: 2025-08-01", detail)
+
+    def test_fixed_is_oos_report_keeps_windows_separate(self):
+        def runner(ticker, include_trades=False, **kwargs):
+            start = kwargs["evaluation_start"]
+            end = kwargs["evaluation_end"]
+            details = [
+                {
+                    "side": "LONG",
+                    "entry_date": start,
+                    "exit_date": end,
+                    "return": 1.0,
+                }
+            ]
+            return 1.0, 100.0, 1, f"{start} to {end}", details
+
+        selection = core_universe_backtest.aggregate_universe_backtest(
+            ["AAA"], runner, evaluation_start="2024-01-01", evaluation_end="2025-12-31"
+        )
+        oos = core_universe_backtest.aggregate_universe_backtest(
+            ["AAA"], runner, evaluation_start="2026-01-01", evaluation_end="2026-07-31"
+        )
+        summary, detail = core_universe_backtest.split_summary_detail(
+            core_universe_backtest.format_fixed_is_oos_backtest(
+                selection, oos, "entry rule", "exit rule"
+            )
+        )
+
+        self.assertIn("Candidate selection (IS: 2024-01 to 2025-12):", summary)
+        self.assertIn("Fixed OOS (2026-01 ~ 2026-07-31):", summary)
+        self.assertIn("Closed trades: 1", detail)
+
+    def test_trade_event_csv_keeps_partial_exits_and_is_oos_windows(self):
+        selection = {
+            "period": "2024-01-01 to 2025-12-31",
+            "trades": [{
+                "ticker": "AAA", "side": "LONG", "entry_date": "2024-02-01",
+                "entry_price": 100.0, "return": 3.0,
+                "exit_events": [
+                    {"date": "2024-02-05", "reason": "partial", "weight": 0.5, "price": 102.0},
+                    {"date": "2024-02-08", "reason": "final", "weight": 0.5, "price": 104.0},
+                ],
+            }],
+        }
+        oos = {
+            "period": "2026-01-01 to 2026-07-16",
+            "trades": [{
+                "ticker": "BBB", "side": "SHORT", "entry_date": "2026-02-01",
+                "entry_price": 100.0, "exit_date": "2026-02-06", "exit_price": 95.0,
+                "return": 5.0,
+            }],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = core_universe_backtest.export_trade_events_csv(
+                selection, oos, "box_range", temp_dir
+            )
+            lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+
+        self.assertEqual(len(lines), 4)  # header + two partial IS exits + one OOS exit
+        self.assertIn("IS,2024-01-01,2025-12-31,box_range,IS-00001,AAA,LONG", lines[1])
+        self.assertIn("OOS,2026-01-01,2026-07-16,box_range,OOS-00001,BBB,SHORT", lines[3])
+
+    def test_csv_marker_preserves_trailing_strategy_report_text(self):
+        payload = (
+            "summary" + core_universe_backtest.DETAIL_MARKER + "detail"
+            + core_universe_backtest.CSV_MARKER + "C:\\tmp\\events.csv\nfooter"
+        )
+        summary, detail, csv_path = core_universe_backtest.split_report_payload(payload)
+
+        self.assertEqual(summary, "summary")
+        self.assertEqual(csv_path, "C:\\tmp\\events.csv")
+        self.assertIn("footer", detail)
+
+    def test_market_neutralization_filters_entry_date_cross_section(self):
+        def runner(ticker, include_trades=False, **_kwargs):
+            score = 3.0 if ticker == "AAA" else 1.0
+            details = [{
+                "side": "LONG",
+                "entry_date": "2026-02-02",
+                "exit_date": "2026-02-06",
+                "signal_score": score,
+                "return": score,
+            }]
+            return score, 100.0, 1, "2026-01-01 to 2026-07-16", details
+
+        result = core_universe_backtest.aggregate_universe_backtest(
+            ["AAA", "BBB"], runner, neutralization="MARKET"
+        )
+
+        self.assertEqual(result["all"]["count"], 1)
+        self.assertEqual(result["trades"][0]["ticker"], "AAA")
+        self.assertAlmostEqual(result["trades"][0]["neutralized_score"], 1.0)
 
 
 if __name__ == "__main__":

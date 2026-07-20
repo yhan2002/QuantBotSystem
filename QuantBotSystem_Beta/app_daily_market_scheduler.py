@@ -22,10 +22,6 @@ EVENING_DATA_REFRESH_TIME = "19:00"
 SCHEDULED_SCAN_TIME = "19:10"
 
 
-def _should_hide_backtest_detail(chat_id):
-    return str(chat_id) in local_settings.hidden_backtest_chat_ids()
-
-
 def send_split_telegram_message(chat_id, text):
     bot_token = local_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -51,6 +47,8 @@ def daily_market_scanner():
             {
                 "selected_groups": set(["CSQ_CP"]),
                 "strategy": "MA_CROSS",
+                "neutralization": "NONE",
+                "position_mode": "LONG_SHORT_NEUTRAL",
                 "custom_tickers": [],
                 "scheduler_active": True,
             },
@@ -61,35 +59,39 @@ def daily_market_scanner():
             continue
 
         selected_strategy = session.get("strategy", "MA_CROSS")
+        neutralization = session.get("neutralization", "NONE")
+        position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
         compiled_universe = compile_selected_universe(session)
         if not compiled_universe:
             compiled_universe = config.universe
 
         try:
             if selected_strategy == "MA_CROSS":
-                report_content = strategy_ma_cross.scan_ma_cross(compiled_universe)
-                header = f"*Scheduled Alert* MA Momentum Scan ({now_str})\n"
+                report_content = strategy_ma_cross.scan_ma_cross(
+                    compiled_universe,
+                    neutralization=neutralization,
+                    position_mode=position_mode,
+                )
+                header = f"*Scheduled Alert* Momentum Scan ({now_str})\n"
             elif selected_strategy == "BOX_RANGE":
-                report_content = strategy_box_range.scan_box_range(compiled_universe)
+                report_content = strategy_box_range.scan_box_range(
+                    compiled_universe,
+                    neutralization=neutralization,
+                    position_mode=position_mode,
+                )
                 header = f"*Scheduled Alert* Box Range Scan ({now_str})\n"
             elif selected_strategy == "VALUE_REVERSION":
                 report_content = strategy_price_liquidity_reversion.scan_value_reversion(
-                    compiled_universe
+                    compiled_universe,
+                    neutralization=neutralization,
+                    position_mode=position_mode,
                 )
-                header = f"*Scheduled Alert* Price/Liquidity Reversion v2 Scan ({now_str})\n"
+                header = f"*Scheduled Alert* Reversion Scan ({now_str})\n"
             else:
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"
 
             report_content, _ = core_universe_backtest.split_summary_detail(report_content)
-            if _should_hide_backtest_detail(chat_id):
-                for marker in ["Backtest Summary"]:
-                    if marker in report_content:
-                        report_content = report_content.split(marker)[0].strip()
-                        report_content += (
-                            "\n\n*Backtest detail is available in private/admin sessions.*"
-                        )
-                        break
 
             final_msg = f"{header}\n{report_content}"
             send_split_telegram_message(chat_id, final_msg)
