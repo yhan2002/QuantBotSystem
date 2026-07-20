@@ -9,9 +9,11 @@ import config
 import local_settings
 import app_daily_market_scheduler
 import core_market_data_store
-from app_bot_reports import boxbt_report, quick_report, run_compiled_scan
+from app_bot_reports import quick_report, run_compiled_scan
 from app_bot_session import (
     CUSTOM_GROUP_CODE,
+    NEUTRALIZATION_LABELS,
+    POSITION_MODE_LABELS,
     STRATEGY_LABELS,
     check_permission,
     clear_direct_input,
@@ -26,6 +28,8 @@ from app_bot_ui import (
     build_back_home_markup,
     build_admin_markup,
     build_home_markup,
+    build_neutralization_markup,
+    build_position_mode_markup,
     build_settings_markup,
     build_scan_result_markup,
     build_strategy_markup,
@@ -36,8 +40,10 @@ from app_bot_ui import (
 
 
 BOT_TOKEN = local_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
+SYSTEM_DIR_NAME = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+LOCAL_CONFIG_PATH = f"{SYSTEM_DIR_NAME}/config.local.py"
 if not BOT_TOKEN:
-    raise RuntimeError("Set BOT_TOKEN in ignored QuantBotSystem_Beta/config.local.py before starting the bot.")
+    raise RuntimeError(f"Set BOT_TOKEN in ignored {LOCAL_CONFIG_PATH} before starting the bot.")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -46,7 +52,7 @@ def permission_message(chat_id):
     return (
         "This chat is not allowed for this test bot.\n"
         f"chat_id: `{chat_id}`\n\n"
-        "Add this chat_id to ALLOWED_CHAT_IDS in QuantBotSystem_Beta/config.local.py, "
+        f"Add this chat_id to ALLOWED_CHAT_IDS in {LOCAL_CONFIG_PATH}, "
         "then restart the test bot."
     )
 
@@ -168,6 +174,33 @@ def handle_menu_callbacks(call):
                 reply_markup=build_strategy_markup(chat_id),
             )
 
+        elif data == "settings_neutralize":
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                "**Neutralization Settings**\n\n"
+                "Subtract the selected group mean from today's cross-sectional candidate score.\n"
+                "Country uses listing-market groups only: US / CH / JP / KR.\n"
+                "Singleton groups become zero; missing labels use a parent/Unclassified group.\n"
+                "The same entry-date selection is applied to IS/OOS; exits remain strategy-specific.",
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_neutralization_markup(chat_id),
+            )
+
+        elif data == "settings_position_mode":
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                "**Position Mode Settings**\n\n"
+                "Long Only: allow LONG candidates and trades only.\n"
+                "Long / Short Neutral: allow both directions symmetrically.\n"
+                "Short Only: allow SHORT candidates and trades only.",
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_position_mode_markup(chat_id),
+            )
+
         elif data.startswith("toggle_group:"):
             group_code = data.split(":", 1)[1]
             if group_code == CUSTOM_GROUP_CODE and not session.get("custom_tickers"):
@@ -229,6 +262,28 @@ def handle_menu_callbacks(call):
                 reply_markup=build_strategy_markup(chat_id),
             )
 
+        elif data.startswith("set_neutralize:"):
+            mode = data.split(":", 1)[1]
+            if mode in NEUTRALIZATION_LABELS:
+                session["neutralization"] = mode
+            bot.answer_callback_query(call.id, "Neutralization updated.")
+            bot.edit_message_reply_markup(
+                chat_id,
+                call.message.message_id,
+                reply_markup=build_neutralization_markup(chat_id),
+            )
+
+        elif data.startswith("set_position_mode:"):
+            mode = data.split(":", 1)[1]
+            if mode in POSITION_MODE_LABELS:
+                session["position_mode"] = mode
+            bot.answer_callback_query(call.id, "Position mode updated.")
+            bot.edit_message_reply_markup(
+                chat_id,
+                call.message.message_id,
+                reply_markup=build_position_mode_markup(chat_id),
+            )
+
         elif data == "toggle_scheduler":
             session["scheduler_active"] = not session.get("scheduler_active", True)
             bot.answer_callback_query(
@@ -245,6 +300,7 @@ def handle_menu_callbacks(call):
 
         elif data == "run_scan":
             session["last_backtest_detail"] = None
+            session["last_backtest_csv_path"] = None
             bot.answer_callback_query(call.id, "Starting scan.")
             report = run_compiled_scan(
                 chat_id,
@@ -263,6 +319,7 @@ def handle_menu_callbacks(call):
 
         elif data == "scan_detail":
             detail = session.get("last_backtest_detail")
+            csv_path = session.get("last_backtest_csv_path")
             if not detail:
                 bot.answer_callback_query(
                     call.id,
@@ -270,12 +327,19 @@ def handle_menu_callbacks(call):
                     show_alert=True,
                 )
                 return
-            bot.answer_callback_query(call.id, "Sending backtest detail.")
+            bot.answer_callback_query(call.id, "Sending backtest detail and CSV.")
             send_long_message(
                 chat_id,
                 detail,
                 markup=build_back_home_markup(),
             )
+            if csv_path and os.path.isfile(csv_path):
+                with open(csv_path, "rb") as csv_file:
+                    bot.send_document(
+                        chat_id,
+                        csv_file,
+                        caption="Full-universe backtest trade events (IS/OOS CSV)",
+                    )
 
         elif data == "admin_preload_all":
             bot.answer_callback_query(call.id, "Starting full market data preload.")
@@ -284,7 +348,7 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
             )
-            summary = core_market_data_store.preload_all_universe(config)
+            summary = core_market_data_store.preload_all_universe(config, full_history=True)
             report = core_market_data_store.format_cache_summary(
                 summary, title="Full Market Data Preload Complete"
             )
@@ -307,7 +371,10 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
             )
-            summary = core_market_data_store.ensure_price_data(selected, min_period="2y")
+            summary = core_market_data_store.backfill_price_data(
+                selected,
+                period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+            )
             report = core_market_data_store.format_cache_summary(
                 summary, title="Selected Universe Refresh Complete"
             )
@@ -336,22 +403,44 @@ def handle_menu_callbacks(call):
                 reply_markup=build_admin_markup(),
             )
 
+        elif data == "admin_refresh_market_countries":
+            bot.answer_callback_query(call.id, "Refreshing listing-market countries.")
+            bot.edit_message_text(
+                "Classifying cached tickers into US / CH / JP / KR...",
+                chat_id,
+                call.message.message_id,
+            )
+            summary = core_market_data_store.refresh_listing_country_labels_from_cache()
+            bot.edit_message_text(
+                core_market_data_store.format_market_country_summary(summary),
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_admin_markup(),
+            )
+
+        elif data == "admin_refresh_classifications":
+            all_tickers = sorted(set(config.universe))
+            bot.answer_callback_query(call.id, "Refreshing sector and industry metadata.")
+            bot.edit_message_text(
+                f"Refreshing sector/industry labels ({len(all_tickers)} tickers)...",
+                chat_id,
+                call.message.message_id,
+            )
+            summary = core_market_data_store.refresh_security_metadata(all_tickers)
+            bot.edit_message_text(
+                core_market_data_store.format_metadata_summary(summary),
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_admin_markup(),
+            )
+
         elif data == "await_quick":
             session["awaiting"] = "quick"
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
                 "Send up to 5 tickers for Quick Check.\nExample: `PANW MU TSLA`",
-                chat_id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=build_back_home_markup(),
-            )
-
-        elif data == "await_boxbt":
-            session["awaiting"] = "boxbt"
-            bot.answer_callback_query(call.id)
-            bot.edit_message_text(
-                "Send one ticker for Box TP/SL Test.\nExample: `TSLA`",
                 chat_id,
                 call.message.message_id,
                 parse_mode="Markdown",
@@ -393,18 +482,6 @@ def handle_custom_universe_legacy(message):
         f"Direct Input set ({len(tickers)}): `{', '.join(tickers)}`",
         parse_mode="Markdown",
     )
-
-
-@bot.message_handler(commands=["boxbt"])
-def handle_box_backtest_legacy(message):
-    chat_id = str(message.chat.id)
-    if not check_permission(chat_id):
-        return
-    tickers = parse_tickers(message.text.partition(" ")[2])
-    if not tickers:
-        bot.reply_to(message, "Open /menu -> Box TP/SL Test.")
-        return
-    bot.reply_to(message, boxbt_report(tickers[0]), parse_mode="Markdown")
 
 
 @bot.message_handler(commands=["list"])
@@ -521,15 +598,6 @@ def handle_pending_text(message):
                 chat_id,
                 "\n\n----------------------------------------\n\n".join(reports),
                 markup=build_back_home_markup(),
-            )
-        elif awaiting == "boxbt":
-            session["awaiting"] = None
-            bot.reply_to(message, f"Running Box TP/SL Test for {tickers[0]}...")
-            bot.send_message(
-                chat_id,
-                boxbt_report(tickers[0]),
-                parse_mode="Markdown",
-                reply_markup=build_back_home_markup(),
             )
     except Exception as e:
         session["awaiting"] = None

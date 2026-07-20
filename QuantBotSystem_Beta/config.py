@@ -32,7 +32,7 @@ universe_groups = {
         'AAL', 'AAPL', 'ABNB', 'ADBE', 'AFRM', 'AGNC', 'ALNY', 'AMAT', 'AMD', 'AMZN', 
         'ANET', 'APP', 'APPF', 'ARM', 'AS', 'ASND', 'AUR', 'AVGO', 'BAC', 'BBIO', 
         'BKNG', 'BLK', 'BPOP', 'BRKR', 'BRO', 'C', 'CAH', 'CAT', 'CAVA', 'CB', 
-        'CBSH', 'CCJ', 'CDNS', 'CEG', 'CFLT', 'CHKP', 'CHRD', 'CMG', 'CRDO', 'CRM', 
+        'CBSH', 'CCJ', 'CDNS', 'CEG', 'CHKP', 'CHRD', 'CMG', 'CRDO', 'CRM',
         'CRWD', 'CSCO', 'CSW', 'CVLT', 'CVNA', 'CYTK', 'CZR', 'DASH', 'DBX', 'EOG', 
         'ETN', 'FICO', 'FISV', 'FRPT', 'FSV', 'FTNT', 'GD', 'GE', 'GEV', 'GGAL', 
         'GH', 'GOOGL', 'GRAL', 'GRMN', 'GS', 'GTLB', 'HALO', 'HAS', 'HLNE', 'HLT', 
@@ -66,11 +66,11 @@ universe_groups = {
         '000938.SZ', '000977.SZ', '002049.SZ', '002230.SZ', '002371.SZ', '002410.SZ', '0020.HK', '0100.HK', '0241.HK', '0268.HK', 
         '0800.HK', '0981.HK', '1021.HK', '1024.HK', '1093.HK', '1099.HK', '1177.HK', '1211.HK', '1347.HK', '1357.HK', 
         '1384.HK', '1797.HK', '1801.HK', '1877.HK', '1929.HK', '2018.HK', '2196.HK', '2228.HK', '2268.HK', '2269.HK', 
-        '2359.HK', '2382.HK', '300124.SZ', '300142.SZ', '300308.SZ', '300502.SZ', '300628.SZ', '300661.SZ', 
+        '2359.HK', '2382.HK', '300124.SZ', '300142.SZ', '300308.SZ', '300502.SZ', '300628.SZ', '300661.SZ',
         '300676.SZ', '300682.SZ', '301165.SZ', '3690.HK', '3888.HK', '600276.SS', '600460.SS', '600570.SS', '600588.SS', '600845.SS', 
         '601127.SS', '603019.SS', '603501.SS', '603605.SS', '603893.SS', '6082.HK', '6160.HK', '6185.HK', '6618.HK', '6636.HK', 
         '6651.HK', '6690.HK', '6862.HK', '688008.SS', '688012.SS', '688041.SS', '688068.SS', '688072.SS', '688082.SS', '688111.SS', 
-        '688213.SS', '688256.SS', '688363.SS', '688396.SS', '688608.SS', '6969.HK', '9618.HK', '9626.HK', '9660.HK', 
+        '688213.SS', '688256.SS', '688363.SS', '688396.SS', '688608.SS', '6969.HK', '9618.HK', '9626.HK', '9660.HK',
         '9863.HK', '9888.HK', '9969.HK', '9992.HK', '9999.HK', 'ATAT', 'BZ', 'CHA', 'EDU', 'FUTU', 'HSAI', 
         'LI', 'MNSO', 'PONY', 'QFIN', 'TAL', 'TCOM', 'TME', 'VIPS', 'WRD', 'XPEV', 'YMM', 'YUMC'
     ]

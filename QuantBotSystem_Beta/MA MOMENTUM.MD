@@ -12,6 +12,7 @@ This is a price-and-volume moving-average momentum strategy. Signals use informa
 - Holding period: 20 trading days by default, with no overlapping entry for the same isolated backtest position.
 - Exit: close at the end of the holding period.
 - Backtest records: each closed trade includes side, actual entry date, actual exit date, and gross return.
+- Execution default: next trading day's open. The 2.0% adverse-gap no-entry rule is an experimental benchmark, not a production rule.
 
 ## Alpha 1 / positive-day status
 
@@ -40,6 +41,13 @@ For every candidate, report trades, mean return, trade win rate, cohort/portfoli
 - Added this MA-specific strategy log.
 - Recorded the current MA, turnover, timing, holding-period, and trade-recording rules.
 - Recorded the Alpha 1 / positive-day separation and the two main measurement gaps for the next approved implementation.
+
+### 2026-07-20
+
+- Cache audit: the 2026-07-16 refresh was incomplete (182 of 465 configured tickers updated). All 151 CSQ names and 18 CH U.S.-listed names remained at 2026-07-15, so 2026-07-16 candidates are not decision-ready.
+- Complete-cache 2026-07-15 side split: CSQ LONG 159 trades, +4.16% average, 59.12% win; SHORT 63 trades, +0.19% average, 53.97% win. The 57.66% aggregate win-rate miss is concentrated in SHORT.
+- JP side split: LONG 147 trades, +4.32%, 55.10% win; SHORT 31 trades, -0.88%, 45.16% win. Treat SHORT removal as a hypothesis, not an approved rule.
+- CH pre-declared diagnostic: a symmetric 2.0% adverse-gap no-entry filter changed 180 trades, +4.29% average, 53.33% win to 169 trades, +4.73%, 54.44%. It is not sufficient for adoption and requires fixed IS/OOS validation without further threshold search.
 
 ## Future entry format
 

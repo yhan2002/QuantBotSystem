@@ -61,6 +61,7 @@ class ValueReversionEngineTests(unittest.TestCase):
         self.assertEqual((count, win_rate), (1, 100.0))
         self.assertAlmostEqual(avg_return, 9.31, places=2)
         self.assertEqual(details[0]["entry_date"], "2025-04-04")
+        self.assertEqual(details[0]["entry_price"], 102.0)
         self.assertEqual(len(details[0]["exit_events"]), 2)
         self.assertEqual(details[0]["exit_events"][1]["reason"], "mean reversion")
 

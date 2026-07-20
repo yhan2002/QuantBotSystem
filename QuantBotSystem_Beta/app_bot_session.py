@@ -5,6 +5,7 @@ import importlib
 import re
 
 import config
+from core_position_mode import POSITION_MODE_LABELS
 import local_settings
 
 
@@ -23,9 +24,17 @@ UNIVERSE_MENUS = [
 ]
 
 STRATEGY_LABELS = {
-    "MA_CROSS": "MA Momentum",
+    "MA_CROSS": "Momentum",
     "BOX_RANGE": "Box Range",
-    "VALUE_REVERSION": "Price/Liquidity Reversion v2",
+    "VALUE_REVERSION": "Reversion",
+}
+
+NEUTRALIZATION_LABELS = {
+    "NONE": "None",
+    "MARKET": "Market",
+    "COUNTRY": "Country",
+    "SECTOR": "Sector",
+    "INDUSTRY": "Industry",
 }
 
 USER_SESSIONS = {}
@@ -111,10 +120,13 @@ def get_or_create_session(chat_id):
         USER_SESSIONS[chat_id] = {
             "selected_groups": set(DEFAULT_GROUPS),
             "strategy": "MA_CROSS",
+            "neutralization": "NONE",
+            "position_mode": "LONG_SHORT_NEUTRAL",
             "custom_tickers": [],
             "scheduler_active": True,
             "awaiting": None,
             "last_backtest_detail": None,
+            "last_backtest_csv_path": None,
         }
     return USER_SESSIONS[chat_id]
 

@@ -4,6 +4,10 @@ import numpy as np
 import pandas as pd
 import core_market_data_store
 import core_universe_backtest
+import core_backtest_periods
+import core_cross_sectional_neutralization
+import core_entry_execution
+import core_position_mode
 
 
 MOMENTUM_MA_WINDOWS = (5, 20, 60)
@@ -36,6 +40,10 @@ def _period_to_rows(period):
         return 330
     if period == "2y":
         return 540
+    if period == "3y":
+        return 800
+    if period == "4y":
+        return 1060
     return None
 
 
@@ -181,10 +189,17 @@ def run_isolated_backtest(
     holding_days=MOMENTUM_HOLDING_DAYS,
     include_trades=False,
     evaluation_days=None,
+    evaluation_start=None,
+    evaluation_end=None,
+    df=None,
+    entry_execution=core_entry_execution.NEXT_OPEN,
+    adverse_gap_limit_pct=core_entry_execution.DEFAULT_ADVERSE_GAP_LIMIT_PCT,
 ):
     """Run a simple isolated MA momentum backtest."""
     try:
-        df = _load_ohlcv(ticker, period=period)
+        df = _load_ohlcv(ticker, period=period) if df is None else _normalize_ohlcv(df)
+        if evaluation_end:
+            df = df.loc[:pd.Timestamp(evaluation_end)]
         if df.empty or len(df) < TURNOVER_LOOKBACK_DAYS + holding_days + 1:
             result = (0.0, 0.0, 0, "N/A", [])
             return result if include_trades else result[:4]
@@ -195,7 +210,8 @@ def run_isolated_backtest(
             if evaluation_days
             else warmup_idx
         )
-        start_date = df.index[min(signal_start_idx + 1, len(df) - 1)].date().isoformat()
+        requested_start = pd.Timestamp(evaluation_start) if evaluation_start else df.index[signal_start_idx + 1]
+        start_date = max(df.index[min(signal_start_idx + 1, len(df) - 1)], requested_start).date().isoformat()
         end_date = df.index[-1].date().isoformat()
         period_label = f"{start_date} to {end_date}"
 
@@ -213,31 +229,64 @@ def run_isolated_backtest(
                 continue
             entry_idx = idx + 1
             exit_idx = idx + holding_days
-            entry_price = float(df["Open"].iloc[entry_idx])
-            exit_price = float(df["Close"].iloc[exit_idx])
-            if entry_price <= 0:
+            if evaluation_start and df.index[entry_idx] < pd.Timestamp(evaluation_start):
                 continue
-            if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG"):
+            signal_side = (
+                "LONG"
+                if df["LONG_SIGNAL"].iloc[idx] and side_filter in (None, "LONG")
+                else "SHORT"
+                if df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT")
+                else None
+            )
+            if signal_side is None:
+                continue
+            execution = core_entry_execution.resolve_entry(
+                df,
+                idx,
+                signal_side,
+                mode=entry_execution,
+                adverse_gap_limit_pct=adverse_gap_limit_pct,
+            )
+            if execution is None:
+                continue
+            entry_price = execution["price"]
+            exit_price = float(df["Close"].iloc[exit_idx])
+            execution_fields = {
+                "entry_execution": execution["mode"],
+                "signal_close": execution["signal_close"],
+                "next_open": execution["next_open"],
+                "signal_to_open_return_pct": execution["signal_to_open_return_pct"],
+                "signal_to_fill_return_pct": execution["signal_to_fill_return_pct"],
+            }
+            if signal_side == "LONG":
                 trade_return = (exit_price / entry_price - 1.0) * 100.0
                 trades.append(trade_return)
                 trade_details.append(
                     {
                         "side": "LONG",
                         "entry_date": df.index[entry_idx].date().isoformat(),
+                        "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
+                        "exit_price": exit_price,
+                        "signal_score": float(df["SIGNAL_STRENGTH"].iloc[idx]),
                         "return": trade_return,
+                        **execution_fields,
                     }
                 )
                 next_available_idx = exit_idx + 1
-            elif df["SHORT_SIGNAL"].iloc[idx] and side_filter in (None, "SHORT"):
+            else:
                 trade_return = (entry_price - exit_price) / entry_price * 100.0
                 trades.append(trade_return)
                 trade_details.append(
                     {
                         "side": "SHORT",
                         "entry_date": df.index[entry_idx].date().isoformat(),
+                        "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
+                        "exit_price": exit_price,
+                        "signal_score": float(df["SIGNAL_STRENGTH"].iloc[idx]),
                         "return": trade_return,
+                        **execution_fields,
                     }
                 )
                 next_available_idx = exit_idx + 1
@@ -281,19 +330,24 @@ def _format_ranked_rows(items, long_side=True):
         return "None\n"
 
     rows = []
-    for idx, (ticker, strength) in enumerate(items, start=1):
+    for idx, (ticker, strength, neutralized_score) in enumerate(items, start=1):
         sign = "+" if long_side else ""
         rows.append(
-            f"{idx}. {ticker:<6} | strength {sign}{strength:.2f}% | "
-            "momentum rank"
+            f"{idx}. {ticker:<6} | raw {sign}{strength:.2f}% | "
+            f"neutral {neutralized_score:+.2f} | momentum rank"
         )
     return "\n".join(rows) + "\n"
 
 
-def scan_ma_cross(universe_list):
+def scan_ma_cross(
+    universe_list,
+    neutralization="NONE",
+    position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
     failed_tickers = []
+    raw_scores = {}
 
     for ticker in universe_list:
         try:
@@ -302,6 +356,8 @@ def scan_ma_cross(universe_list):
             if signal in ["INSUFFICIENT_DATA", "ERROR", "NO_SIGNAL"]:
                 failed_tickers.append(ticker)
                 continue
+
+            raw_scores[ticker] = strength
 
             if signal == "LONG_ENTRY":
                 long_list.append((ticker, strength))
@@ -316,8 +372,37 @@ def scan_ma_cross(universe_list):
         except Exception:
             failed_tickers.append(ticker)
 
-    long_list.sort(key=lambda item: item[1], reverse=True)
-    short_list.sort(key=lambda item: item[1])
+    neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
+        raw_scores, neutralization
+    )
+    neutralization = core_cross_sectional_neutralization.normalize_mode(neutralization)
+    position_mode = core_position_mode.normalize_mode(position_mode)
+    long_list = [
+        (ticker, strength, neutralized_scores.get(ticker, strength))
+        for ticker, strength in long_list
+        if neutralization == "NONE" or neutralized_scores.get(ticker, 0.0) > 0
+    ]
+    short_list = [
+        (ticker, strength, neutralized_scores.get(ticker, strength))
+        for ticker, strength in short_list
+        if neutralization == "NONE" or neutralized_scores.get(ticker, 0.0) < 0
+    ]
+    new_longs = [
+        ticker for ticker in new_longs
+        if neutralization == "NONE" or neutralized_scores.get(ticker, 0.0) > 0
+    ]
+    new_shorts = [
+        ticker for ticker in new_shorts
+        if neutralization == "NONE" or neutralized_scores.get(ticker, 0.0) < 0
+    ]
+    if not core_position_mode.allows_long(position_mode):
+        long_list = []
+        new_longs = []
+    if not core_position_mode.allows_short(position_mode):
+        short_list = []
+        new_shorts = []
+    long_list.sort(key=lambda item: (item[2], item[1]), reverse=True)
+    short_list.sort(key=lambda item: (item[2], item[1]))
     exit_list.sort(key=lambda item: item[0])
 
     top_longs = long_list[:5]
@@ -326,14 +411,25 @@ def scan_ma_cross(universe_list):
     long_rows = _format_ranked_rows(top_longs, long_side=True)
     short_rows = _format_ranked_rows(top_shorts, long_side=False)
 
-    universe_result = core_universe_backtest.aggregate_universe_backtest(
+    selection_result = core_universe_backtest.aggregate_universe_backtest(
         universe_list,
         run_isolated_backtest,
-        period="2y",
-        evaluation_days=252,
+        period=core_backtest_periods.HISTORY_PERIOD,
+        neutralization=neutralization,
+        side_filter=core_position_mode.side_filter(position_mode),
+        **core_backtest_periods.selection_window(),
     )
-    backtest_report = core_universe_backtest.format_universe_backtest(
-        universe_result,
+    oos_result = core_universe_backtest.aggregate_universe_backtest(
+        universe_list,
+        run_isolated_backtest,
+        period=core_backtest_periods.HISTORY_PERIOD,
+        neutralization=neutralization,
+        side_filter=core_position_mode.side_filter(position_mode),
+        **core_backtest_periods.oos_window(),
+    )
+    backtest_report = core_universe_backtest.format_fixed_is_oos_backtest(
+        selection_result,
+        oos_result,
         entry_text=(
             "MA 5/20/60 alignment and same-direction slopes plus "
             f"turnover >{TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
@@ -342,13 +438,17 @@ def scan_ma_cross(universe_list):
         exit_text=(
             f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
         ),
+        strategy_key="ma_momentum",
     )
 
     msg = (
-        "**MA Momentum + Volume Confirmation Scan Report**\n"
+        "**Momentum Scan Report**\n"
         "=============================\n\n"
         "Rule: MA 5/20/60 alignment + same-direction slopes + "
         f"turnover > {TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average.\n\n"
+        f"{core_cross_sectional_neutralization.report_line(neutralization, raw_scores)}\n"
+        f"{core_position_mode.report_line(position_mode)}\n"
+        "Scope: today's candidates and entry-date IS/OOS cross-sections; current metadata labels.\n\n"
         "**New Signals Today**\n"
         f"- New LONG: {', '.join(new_longs) if new_longs else 'None'}\n"
         f"- New SHORT: {', '.join(new_shorts) if new_shorts else 'None'}\n\n"
