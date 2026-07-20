@@ -7,18 +7,18 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 - `QuantBotSystem/`: 배포 버전. 안정화된 원본으로 취급합니다.
 - `QuantBotSystem_Beta/`: 업데이트·실험 버전. 새 전략과 검증은 여기서 진행합니다.
 
-## Beta 주요 전략
+## 현재 전략
 
-- MA Momentum: 5/20/60 이동평균 정렬과 동일 방향 기울기 확인
+- Momentum: 5/20/60 이동평균 정렬과 동일 방향 기울기 확인
 - 거래대금 확인: 252거래일 평균 대비 거래대금 3배 이상 급증 조건
-- Value Reversion: 가격·펀더멘털 기반 평균회귀 후보
-- Box Range: 박스권 반등·이탈 상태 진단
+- Box Range: 박스 경계 false-break reclaim 후보
+- Reversion: 가격·유동성 충격 이후 평균회귀 후보
 
 Beta의 기존 촉매 점수 직접 가산 실험은 제거했습니다. 현재 전략 결과를 변경하는 실험은 별도 A/B 테스트 후 반영합니다.
 
 ## 준비
 
-Beta 폴더에서 필요한 패키지를 설치하고, 로컬 설정 파일을 준비합니다.
+각 코드 라인은 자기 폴더의 로컬 설정과 데이터 캐시를 사용합니다. 새 기능은 Beta에서 검증하고, 승격 시 런타임 소스만 배포 버전에 동기화합니다.
 
 ```powershell
 cd ".\QuantBot\QuantBotSystem_Beta"
@@ -27,7 +27,18 @@ Copy-Item .\config.local.example.py .\config.local.py
 
 API 키, Telegram 설정 등 비밀값은 `config.local.py`, `local_settings.py`, 환경변수에만 보관하고 Git에 추가하지 않습니다.
 
-가격 데이터는 Beta의 로컬 SQLite 캐시에 저장됩니다. 캐시가 없거나 오래된 경우 Beta UI의 `Preload 2Y Market Data` 또는 데이터 갱신 기능을 사용합니다.
+가격 데이터는 Beta의 로컬 SQLite 캐시에 저장됩니다. 캐시가 없거나 오래된 경우 Beta UI의 `Preload 4Y Market Data` 또는 데이터 갱신 기능을 사용합니다.
+
+## 실행
+
+배포 버전:
+
+```powershell
+cd ".\QuantBot\QuantBotSystem"
+python .\RUN_telegram_bot_server.py
+```
+
+다음 업데이트를 개발할 때는 `QuantBotSystem_Beta/`만 수정합니다. 기존 `telegram_bot_server.py` 실행명도 배포 호환용으로 유지하지만, 새 표준 진입점은 `RUN_telegram_bot_server.py`입니다.
 
 ## 거래대금 alpha A/B 백테스트
 
