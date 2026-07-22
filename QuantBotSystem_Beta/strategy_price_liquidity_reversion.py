@@ -27,7 +27,6 @@ REVERSION_PARTIAL_LEVEL = 0.50
 REVERSION_NO_PROGRESS_DAYS = 3
 REVERSION_MAX_HOLDING_DAYS = 10
 REVERSION_STOP_ATR = 1.50
-REVERSION_MIN_PLANNED_RR = 1.75
 
 
 def _normalize_ohlcv(prices):
@@ -40,38 +39,6 @@ def _normalize_ohlcv(prices):
     if any(column not in prices.columns for column in required):
         return pd.DataFrame()
     return prices.dropna(subset=required).copy()
-
-
-def _planned_blended_rr(side, signal_close, mean_target, daily_volatility, atr):
-    """Estimate 50/50 scale-out reward versus the initial ATR risk at signal close."""
-    if side not in {"LONG", "SHORT"}:
-        raise ValueError(f"Unsupported side: {side}")
-
-    direction = 1.0 if side == "LONG" else -1.0
-    five_day_sigma = daily_volatility * math.sqrt(REVERSION_SHOCK_DAYS)
-    partial_target = mean_target * (
-        1.0 - direction * REVERSION_PARTIAL_LEVEL * five_day_sigma
-    )
-    partial_reward = direction * (partial_target - signal_close)
-    mean_reward = direction * (mean_target - signal_close)
-    risk = REVERSION_STOP_ATR * atr
-
-    if isinstance(signal_close, pd.Series):
-        blended_reward = (
-            0.5 * partial_reward.clip(lower=0.0)
-            + 0.5 * mean_reward.clip(lower=0.0)
-        )
-        return blended_reward / risk.where(risk > 0)
-
-    inputs = (signal_close, mean_target, daily_volatility, atr)
-    if any(not pd.notna(value) or not math.isfinite(float(value)) for value in inputs):
-        return float("nan")
-    if float(risk) <= 0:
-        return float("nan")
-    blended_reward = 0.5 * max(float(partial_reward), 0.0) + 0.5 * max(
-        float(mean_reward), 0.0
-    )
-    return blended_reward / float(risk)
 
 
 def _add_reversion_features(prices):
@@ -101,20 +68,6 @@ def _add_reversion_features(prices):
         axis=1,
     ).max(axis=1)
     prices["ATR"] = true_range.rolling(REVERSION_ATR_WINDOW).mean()
-    prices["PLANNED_MEAN_TARGET"] = close.shift(REVERSION_SHOCK_DAYS)
-    five_day_sigma = volatility * math.sqrt(REVERSION_SHOCK_DAYS)
-    prices["LONG_PARTIAL_TARGET"] = prices["PLANNED_MEAN_TARGET"] * (
-        1.0 - REVERSION_PARTIAL_LEVEL * five_day_sigma
-    )
-    prices["SHORT_PARTIAL_TARGET"] = prices["PLANNED_MEAN_TARGET"] * (
-        1.0 + REVERSION_PARTIAL_LEVEL * five_day_sigma
-    )
-    prices["LONG_PLANNED_RR"] = _planned_blended_rr(
-        "LONG", close, prices["PLANNED_MEAN_TARGET"], volatility, prices["ATR"]
-    )
-    prices["SHORT_PLANNED_RR"] = _planned_blended_rr(
-        "SHORT", close, prices["PLANNED_MEAN_TARGET"], volatility, prices["ATR"]
-    )
     range_size = (high - low).replace(0, pd.NA)
     prices["CLOSE_LOCATION"] = ((close - low) / range_size).fillna(0.5)
 
@@ -137,14 +90,12 @@ def _add_reversion_features(prices):
         & confirmation_long
         & liquid_enough
         & (prices["MA60_SLOPE"] >= -REVERSION_TREND_SLOPE_TOLERANCE)
-        & (prices["LONG_PLANNED_RR"] >= REVERSION_MIN_PLANNED_RR)
     ).fillna(False)
     prices["SHORT_SIGNAL"] = (
         recent_short_extreme
         & confirmation_short
         & liquid_enough
         & (prices["MA60_SLOPE"] <= REVERSION_TREND_SLOPE_TOLERANCE)
-        & (prices["SHORT_PLANNED_RR"] >= REVERSION_MIN_PLANNED_RR)
     ).fillna(False)
     return prices
 
@@ -172,7 +123,6 @@ def analyze_value_reversion(ticker, allow_fundamental_download=True, df=None):
             "side": "LONG",
             "shock": previous_shock,
             "turnover_ratio": float(latest["TURNOVER_RATIO"]),
-            "planned_rr": float(latest["LONG_PLANNED_RR"]),
             "current_price": float(latest["Close"]),
         }
     if bool(latest["SHORT_SIGNAL"]):
@@ -182,7 +132,6 @@ def analyze_value_reversion(ticker, allow_fundamental_download=True, df=None):
             "side": "SHORT",
             "shock": previous_shock,
             "turnover_ratio": float(latest["TURNOVER_RATIO"]),
-            "planned_rr": float(latest["SHORT_PLANNED_RR"]),
             "current_price": float(latest["Close"]),
         }
     return {"status": "NO_SIGNAL", "score": 0.0}
@@ -217,7 +166,7 @@ def _format_rows(items, long_side=True):
     return "\n".join(
         f"{idx}. {row['ticker']:<8} | {direction} | price {_format_price(row['current_price'])} | "
         f"raw {row['score']:+.2f} | neutral {row['neutralized_score']:+.2f} | "
-        f"planned R/R {row['planned_rr']:.2f} | turnover {row['turnover_ratio']:.1f}x"
+        f"turnover {row['turnover_ratio']:.1f}x"
         for idx, row in enumerate(items, start=1)
     ) + "\n"
 
@@ -281,7 +230,6 @@ def run_reversion_backtest(
                 "entry_date": current_position["entry_date"],
                 "entry_price": current_position["entry_price"],
                 "signal_score": current_position["signal_score"],
-                "planned_rr": current_position["planned_rr"],
                 "exit_events": current_position["exit_events"],
                 "entry_execution": current_position["entry_execution"],
                 "signal_close": current_position["signal_close"],
@@ -344,7 +292,6 @@ def run_reversion_backtest(
                     if signal_side == "LONG"
                     else -abs(float(features["SHOCK"].iloc[max(0, idx - 3):idx].max()))
                 ),
-                "planned_rr": float(day[f"{signal_side}_PLANNED_RR"]),
                 "atr": atr,
                 "stop_price": stop_price,
                 "remaining": 1.0,
@@ -464,12 +411,12 @@ def scan_value_reversion(
         f"{core_position_mode.report_line(position_mode)}\n"
         "Scope: today's candidates and entry-date IS/OOS cross-sections; current metadata labels.\n\n"
         "**LONG Candidates**\n"
-        "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, positive rebound close, turnover <2.0x, planned blended R/R >=1.75.\n"
+        "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, positive rebound close, turnover <2.0x.\n"
         f"{_format_rows(top_longs, long_side=True)}\n"
         "**SHORT Candidates**\n"
-        "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x, planned blended R/R >=1.75.\n"
+        "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
-        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, turnover <2.0x, and signal-close planned blended R/R >=1.75; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit', strategy_key='price_liquidity_reversion')}"
+        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit', strategy_key='price_liquidity_reversion')}"
     )
     if failed:
         msg += "\n----------------------------------------\nInsufficient local data: " + ", ".join(sorted(failed))
