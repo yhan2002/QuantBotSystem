@@ -59,10 +59,16 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
         self.assertEqual(result["trades"][0]["exit_date"], "2026-01-10")
         self.assertEqual(result["period"], "2026-01-01 to 2026-07-17")
 
-    def test_target_status_requires_sample_win_and_positive_benchmark_target(self):
-        passed = subject.target_status(40, 60.0, 22.0, 10.0)
+    def test_target_status_requires_sample_and_roi_while_win_is_secondary(self):
+        passed = subject.target_status(40, 50.0, 22.0, 10.0)
         self.assertEqual(passed["status"], "PASS")
         self.assertTrue(passed["passes_2x_benchmark_roi"])
+        self.assertFalse(passed["passes_58pct_win_rate"])
+
+        roi_missed = subject.target_status(40, 70.0, 19.0, 10.0)
+        self.assertEqual(roi_missed["status"], "FAIL")
+        self.assertFalse(roi_missed["passes_2x_benchmark_roi"])
+        self.assertTrue(roi_missed["passes_58pct_win_rate"])
 
         low_sample = subject.target_status(29, 70.0, 30.0, 10.0)
         self.assertEqual(low_sample["status"], "INSUFFICIENT_TRADES")

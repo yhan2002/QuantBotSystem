@@ -123,6 +123,112 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
         self.assertEqual(ticker_cls.return_value.get_info.call_count, 2)
         self.assertEqual(result["sector"], "Technology")
 
+    def test_latest_refresh_uses_cached_date_with_overlap(self):
+        cached = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-20"])
+        )
+        downloaded = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-21", "2026-07-22", "2026-07-23"])
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "AAA", cached)
+                finally:
+                    conn.close()
+                with patch.object(
+                    core_market_data_store,
+                    "_download_history_range",
+                    return_value=downloaded,
+                ) as range_download, patch.object(
+                    core_market_data_store, "_download_history"
+                ) as period_download:
+                    summary = core_market_data_store.refresh_latest_price_data(
+                        ["AAA"],
+                        sleep_seconds=0,
+                        overlap_days=10,
+                        as_of="2026-07-24",
+                    )
+
+                freshness = core_market_data_store.get_data_freshness(["AAA"])
+
+        period_download.assert_not_called()
+        range_download.assert_called_once()
+        call = range_download.call_args
+        self.assertEqual(call.args[0], "AAA")
+        self.assertEqual(pd.Timestamp(call.kwargs["start"]), pd.Timestamp("2026-07-10"))
+        self.assertEqual(pd.Timestamp(call.kwargs["end"]), pd.Timestamp("2026-07-25"))
+        self.assertEqual(summary["incremental_downloads"], 1)
+        self.assertEqual(summary["full_downloads"], 0)
+        self.assertEqual(summary["updated"], 3)
+        self.assertEqual(freshness, {"AAA": "2026-07-23"})
+
+    def test_latest_refresh_bootstraps_uncached_ticker_with_full_period(self):
+        downloaded = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-22", "2026-07-23"])
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store,
+                "_download_history",
+                return_value=downloaded,
+            ) as period_download, patch.object(
+                core_market_data_store, "_download_history_range"
+            ) as range_download:
+                summary = core_market_data_store.refresh_latest_price_data(
+                    ["NEW"],
+                    min_period="4y",
+                    sleep_seconds=0,
+                    as_of="2026-07-24",
+                )
+
+        period_download.assert_called_once_with("NEW", period="4y")
+        range_download.assert_not_called()
+        self.assertEqual(summary["full_downloads"], 1)
+        self.assertEqual(summary["incremental_downloads"], 0)
+        self.assertEqual(summary["updated"], 2)
+
+    def test_data_freshness_reads_multiple_tickers(self):
+        rows = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-22", "2026-07-23"])
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "AAA", rows)
+                    core_market_data_store._upsert_ohlcv(conn, "BBB", rows.iloc[:1])
+                finally:
+                    conn.close()
+                freshness = core_market_data_store.get_data_freshness(
+                    ["BBB", "AAA", "AAA", "MISSING"]
+                )
+
+        self.assertEqual(
+            freshness,
+            {"AAA": "2026-07-23", "BBB": "2026-07-22"},
+        )
+
+
+def _ohlcv_frame(dates):
+    index = pd.to_datetime(dates)
+    values = np.arange(len(index), dtype=float) + 100.0
+    return pd.DataFrame(
+        {
+            "Open": values,
+            "High": values + 1.0,
+            "Low": values - 1.0,
+            "Close": values + 0.5,
+            "Adj Close": values + 0.5,
+            "Volume": np.full(len(index), 1000.0),
+        },
+        index=index,
+    )
+
 
 if __name__ == "__main__":
     unittest.main()

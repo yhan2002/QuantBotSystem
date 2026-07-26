@@ -1,61 +1,109 @@
-# Box Range Reclaim
+# Box Range V2
 
-## Scope and timing
+## Scope
 
-This is the Beta bot's daily-box false-breakout/reclaim strategy. It is separate from personal trendline experiments.
+This is the Beta bot's directional price-structure strategy. The deployment
+folder retains the previous engine and is not modified.
 
-- Box and signal inputs use only information available at the signal-day close.
-- A qualified signal enters no earlier than the next trading day's open.
-- The active implementation is `strategy_box_range.py`.
+- Signals use information available through the signal-day close.
+- Entries occur no earlier than the next trading day's open.
+- The active Beta implementation is `strategy_box_range.py`.
+- LONG/SHORT availability follows the selected position mode.
 
-## Current entry rules
+## Price structure
 
-1. Use the **prior 20 completed trading days** to define the box high, low, midpoint, and width.
-2. The box width must be 11% to 20% of the lower boundary.
-3. A boundary must show at least two same-side reactions:
-   - lower: low within 1% of the lower boundary and close above it;
-   - upper: high within 1% of the upper boundary and close below it.
-4. Signal-day turnover is `Volume × Close`. If it is at least 2.0 times the prior 20-day average turnover, entry is vetoed.
-5. LONG only: intraday low breaks below the lower boundary, then close returns inside the box.
-6. An upper-boundary reclaim is not an entry signal.
-7. Enter at the next trading day's open only when that open is above the lower boundary and below the box midpoint. Otherwise cancel the signal.
+The engine fits a robust parallel channel to the prior 40 completed bars.
+The signal bar is excluded from channel fitting.
 
-## Current exit rules
+- The center line is a linear fit to normalized daily mid-prices.
+- Lower and upper lines are parallel residual quantiles of daily lows and highs.
+- `slope_ratio` is the fitted 40-day center-line move divided by channel width.
+- `FLAT`: absolute slope ratio at most 0.35.
+- `RISING`: slope ratio at least 0.75 and trend efficiency at least 0.20.
+- `FALLING`: slope ratio at most -0.75 and trend efficiency at least 0.20.
+- Values between the flat and directional thresholds are `TRANSITION`.
+- `RISING` permits trend-following LONG entries, `FALLING` permits
+  trend-following SHORT entries, and `TRANSITION` permits neither.
 
-- Take 50% at the box midpoint.
-- Take the remaining quantity at the opposite box boundary.
-- If the midpoint is not reached within 10 trading days, close the remaining position at that day's close.
-- After the midpoint is reached, allow 10 trading days for the opposite boundary. If it is not reached, close the remaining quantity at the tenth day's close.
-- At -7%, close half of the remaining quantity; at -10%, close all remaining quantity.
-- If a daily bar can satisfy a protective stop and a target, handle the stop first. Gap-through stops use the worse opening fill.
-- Backtest output retains the actual entry date and every partial-exit date/reason.
+## Channel quality
 
-## Validation record
+A tradeable channel requires:
 
-### 2026-07-15: baseline review
+- at least 85% close-price containment;
+- width between 4 and 12 trailing ATR;
+- at least two same-side boundary touches separated by five trading days;
+- signal-day turnover below 2.0 times its trailing 20-day average.
 
-- Full-universe one-year result: 1,144 trades, average -0.34%, median about -1.36%, win rate 40.4%.
-- LONG was materially stronger than SHORT; aggregate performance was still negative.
-- A temporary entry relaxation reduced the sample to 761 trades and worsened results to average -0.45%, median -1.44%, win rate 39.4%.
-- The relaxation was reverted. Do not loosen the boundary-touch or post-signal price conditions without an out-of-sample comparison.
+Touches use a 0.5 ATR tolerance. A single spike cannot satisfy the spaced-touch
+requirement.
 
-### 2026-07-15: long-only conversion
+## Long entry events
 
-- Disabled upper-boundary short reclaims in the live signal, universe scan, and backtest.
-- Hypothesis: remove the persistently weaker short leg from the equity-universe portfolio; validate against the unchanged long/short baseline with the same data window and costs.
+### Flat range reclaim
 
-### 2026-07-15: next-open gate and post-center time limit
+- Structure is `FLAT`.
+- Signal-day low breaks the projected lower line.
+- The close returns above the lower line and remains below the center line.
+- The close finishes in the upper 40% of the signal-day range.
 
-- Cancel entry when the next open is at or below the reclaimed lower boundary or at/above the midpoint.
-- Limit the residual position to 10 trading days from the midpoint-hit date.
-- Market inclusion remains controlled by the supplied universe; the strategy engine does not exclude China/Hong Kong tickers.
+### Rising-channel pullback
 
-## Reporting and evaluation
+- Structure is `RISING`.
+- Signal-day low touches or slightly breaches projected channel support.
+- The close finishes above support, above the open, and in the upper 40% of the
+  signal-day range.
+- The close remains below the first target.
 
-- Live scan reports LONG candidates, box width, and turnover ratio. Upper-boundary reclaims remain informational only.
-- Universe summary evaluates one year inside a two-year local cache window, including aggregate return, win rate, and trade dates.
-- Judge changes at portfolio level as well as per ticker: trade count, average and median return, win rate, loss distribution, and overlapping positions.
+Both setups enter only when the next open remains above projected support and
+below the setup-specific first target. Otherwise the signal is cancelled.
 
-## Change discipline
+## Short entry events
 
-Record future Box-only hypotheses, parameter changes, and focused validation outcomes here. Do not mix personal trendline/channel experiments into this document or the bot strategy.
+### Flat range reclaim
+
+- Structure is `FLAT`.
+- Signal-day high breaks the projected upper line.
+- The close returns below the upper line and remains above the center line.
+- The close finishes in the lower 40% of the signal-day range.
+
+### Falling-channel rally rejection
+
+- Structure is `FALLING`.
+- Signal-day high touches or slightly breaches projected channel resistance.
+- The close finishes below resistance, below the open, and in the lower 40% of
+  the signal-day range.
+- The close remains above the first downside target.
+
+Both setups enter only when the next open remains below projected resistance
+and above the setup-specific first target. Otherwise the signal is cancelled.
+
+## Exits
+
+- Flat reclaim: take 50% at the projected channel center and the balance at the
+  projected upper line.
+- Rising pullback: take 50% at the greater of the projected center or available
+  prior swing high, capped at the projected upper line; take the balance at the
+  projected upper line.
+- Flat short reclaim: take 50% at the projected channel center and the balance
+  at the projected lower line.
+- Falling rally rejection: take 50% at the lower of the projected center or
+  available prior swing low, floored at the projected lower line; take the
+  balance at the projected lower line.
+- The channel fit is frozen on the signal day. During the trade, levels advance
+  only by the frozen channel slope.
+- If the first target is not reached within 10 trading days, exit the remainder.
+- After the first target, allow 10 trading days for the upper target.
+- At 7% adverse movement, close half of the remaining quantity; at 10%, close
+  all remaining quantity, mirrored for LONG and SHORT.
+- When a daily bar can satisfy a stop and target, process the stop first.
+- Backtest details retain entry date, setup, structure, quality metrics, expected
+  reward/risk, and every partial-exit date and reason.
+
+## Validation discipline
+
+- Keep the deployment engine as the comparison baseline.
+- Compare every structure/setup/direction combination separately.
+- Primary evaluation is cumulative portfolio ROI against twice the positive
+  same-universe benchmark ROI. Win rate is a secondary diagnostic.
+- Review target, time-exit, -7% stop, and -10% stop contributions separately.
+- Do not tune thresholds from the fixed OOS result.

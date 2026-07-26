@@ -12,7 +12,7 @@ import yfinance as yf
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "market_data.sqlite")
-RECENT_REFRESH_ROWS = 7
+INCREMENTAL_OVERLAP_CALENDAR_DAYS = 10
 DOWNLOAD_SLEEP_SECONDS = 0.7
 METADATA_SLEEP_SECONDS = 0.3
 FIXED_IS_OOS_HISTORY_PERIOD = "4y"
@@ -356,6 +356,19 @@ def _download_history(ticker, period):
     )
 
 
+def _download_history_range(ticker, start, end):
+    """Download an explicit date range; yfinance treats end as exclusive."""
+    return _normalize_download(
+        yf.download(
+            ticker,
+            start=pd.Timestamp(start).date().isoformat(),
+            end=pd.Timestamp(end).date().isoformat(),
+            progress=False,
+            auto_adjust=False,
+        )
+    )
+
+
 def _get_cached_row_count(conn, ticker):
     row = conn.execute("SELECT COUNT(*) FROM ohlcv WHERE ticker = ?", (ticker,)).fetchone()
     return int(row[0]) if row else 0
@@ -373,11 +386,42 @@ def ensure_price_data(
     sleep_seconds=DOWNLOAD_SLEEP_SECONDS,
     progress_callback=None,
 ):
-    """Ensure selected tickers have local cached data before a scan."""
+    """Ensure data using an incremental latest-date refresh for cached tickers."""
+    overlap_days = INCREMENTAL_OVERLAP_CALENDAR_DAYS if refresh_recent else 0
+    return refresh_latest_price_data(
+        tickers,
+        min_period=min_period,
+        overlap_days=overlap_days,
+        sleep_seconds=sleep_seconds,
+        progress_callback=progress_callback,
+    )
+
+
+def refresh_latest_price_data(
+    tickers,
+    min_period=FIXED_IS_OOS_HISTORY_PERIOD,
+    overlap_days=INCREMENTAL_OVERLAP_CALENDAR_DAYS,
+    sleep_seconds=DOWNLOAD_SLEEP_SECONDS,
+    progress_callback=None,
+    as_of=None,
+):
+    """Fill the latest tail from each ticker's cached max date with overlap.
+
+    Tickers without any cache receive ``min_period`` history. Cached tickers use
+    an explicit start/end request from the latest date minus ``overlap_days`` to
+    the day after ``as_of`` because yfinance's end date is exclusive.
+    """
     tickers = sorted(set(tickers))
+    as_of_date = pd.Timestamp(
+        as_of if as_of is not None else datetime.now(timezone.utc).date()
+    ).normalize()
     summary = {
+        "mode": "incremental",
         "requested": len(tickers),
         "updated": 0,
+        "full_downloads": 0,
+        "incremental_downloads": 0,
+        "unchanged": 0,
         "failed": [],
         "latest_dates": {},
         "db_path": DB_PATH,
@@ -392,23 +436,36 @@ def ensure_price_data(
                 if progress_callback:
                     progress_callback(idx, len(tickers), ticker)
                 cached_rows = _get_cached_row_count(conn, ticker)
-                period = min_period if cached_rows == 0 else "1mo"
-                downloaded = _download_history(ticker, period=period)
+                latest_date = _get_latest_cached_date(conn, ticker)
+                if cached_rows == 0 or not latest_date:
+                    summary["full_downloads"] += 1
+                    downloaded = _download_history(ticker, period=min_period)
+                else:
+                    summary["incremental_downloads"] += 1
+                    start_date = pd.Timestamp(latest_date) - pd.Timedelta(
+                        days=max(int(overlap_days), 0)
+                    )
+                    end_date = as_of_date + pd.Timedelta(days=1)
+                    if start_date > end_date:
+                        start_date = end_date - pd.Timedelta(days=1)
+                    downloaded = _download_history_range(
+                        ticker, start=start_date, end=end_date
+                    )
 
                 if downloaded.empty and cached_rows == 0:
                     summary["failed"].append(ticker)
                     continue
 
                 if not downloaded.empty:
-                    if cached_rows > 0 and refresh_recent:
-                        downloaded = downloaded.tail(RECENT_REFRESH_ROWS)
                     summary["updated"] += _upsert_ohlcv(conn, ticker, downloaded)
+                else:
+                    summary["unchanged"] += 1
 
                 latest_date = _get_latest_cached_date(conn, ticker)
                 if latest_date:
                     summary["latest_dates"][ticker] = latest_date
             except Exception:
-                if _get_cached_row_count(conn, ticker) == 0:
+                if ticker not in summary["failed"]:
                     summary["failed"].append(ticker)
             if sleep_seconds and idx < len(tickers):
                 time.sleep(sleep_seconds)
@@ -427,8 +484,12 @@ def backfill_price_data(
     """Download a full history window even when a ticker already has recent rows."""
     tickers = sorted(set(tickers))
     summary = {
+        "mode": "full_history",
         "requested": len(tickers),
         "updated": 0,
+        "full_downloads": len(tickers),
+        "incremental_downloads": 0,
+        "unchanged": 0,
         "failed": [],
         "latest_dates": {},
         "db_path": DB_PATH,
@@ -486,10 +547,27 @@ def format_cache_summary(summary, title="Market Data Update Complete"):
     else:
         latest_text = f"{latest_dates[0]} to {latest_dates[-1]}"
 
+    mode = summary.get("mode")
+    mode_line = (
+        "Mode: Latest incremental refresh\n"
+        if mode == "incremental"
+        else "Mode: Full history backfill\n"
+        if mode == "full_history"
+        else ""
+    )
+    download_line = ""
+    if "incremental_downloads" in summary:
+        download_line = (
+            f"Incremental tickers: {summary.get('incremental_downloads', 0)}\n"
+            f"Full-history tickers: {summary.get('full_downloads', 0)}\n"
+            f"No new rows: {summary.get('unchanged', 0)}\n"
+        )
     return (
         f"**{title}**\n\n"
+        f"{mode_line}"
         f"Tickers requested: {summary['requested']}\n"
-        f"Rows updated: {summary['updated']}\n"
+        f"{download_line}"
+        f"Rows received/upserted: {summary['updated']}\n"
         f"Latest date: {latest_text}\n"
         f"Failed: {failed}\n"
         f"DB path: `{summary['db_path']}`"
@@ -531,16 +609,25 @@ def get_price_data(ticker, period_days=None):
 
 
 def get_data_freshness(tickers):
+    tickers = sorted(set(tickers))
+    if not tickers:
+        return {}
+
     conn = get_connection()
-    freshness = {}
     try:
-        for ticker in sorted(set(tickers)):
-            latest_date = _get_latest_cached_date(conn, ticker)
-            if latest_date:
-                freshness[ticker] = latest_date
+        placeholders = ", ".join("?" for _ in tickers)
+        rows = conn.execute(
+            f"""
+            SELECT ticker, MAX(date)
+            FROM ohlcv
+            WHERE ticker IN ({placeholders})
+            GROUP BY ticker
+            """,
+            tickers,
+        ).fetchall()
     finally:
         conn.close()
-    return freshness
+    return {ticker: latest_date for ticker, latest_date in rows if latest_date}
 
 
 def get_missing_tickers(tickers):

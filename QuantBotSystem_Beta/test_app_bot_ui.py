@@ -8,6 +8,10 @@ def _button_texts(markup):
     return [button.text for row in markup.keyboard for button in row]
 
 
+def _callback_data(markup):
+    return [button.callback_data for row in markup.keyboard for button in row]
+
+
 class BotUiTests(unittest.TestCase):
     def setUp(self):
         app_bot_session.USER_SESSIONS.clear()
@@ -53,6 +57,34 @@ class BotUiTests(unittest.TestCase):
             ["[x] Momentum", "[ ] Box Range", "[ ] Reversion"],
         )
         self.assertIn("Strategy: Momentum", app_bot_ui.settings_text(chat_id))
+
+    def test_admin_separates_latest_update_from_full_backfill(self):
+        markup = app_bot_ui.build_admin_markup()
+        texts = _button_texts(markup)
+        callbacks = _callback_data(markup)
+
+        self.assertIn("Update Selected (Latest)", texts)
+        self.assertIn("Update All (Latest)", texts)
+        self.assertIn("Backfill Selected (4Y)", texts)
+        self.assertIn("Backfill All (4Y)", texts)
+        self.assertIn("admin_refresh_selected", callbacks)
+        self.assertIn("admin_refresh_all", callbacks)
+        self.assertNotIn("Preload 4Y Market Data", texts)
+
+    def test_admin_full_backfill_requires_explicit_confirmation(self):
+        selected = app_bot_ui.build_admin_backfill_confirm_markup("selected")
+        all_tickers = app_bot_ui.build_admin_backfill_confirm_markup("all")
+
+        self.assertEqual(
+            _callback_data(selected),
+            ["admin_backfill_selected_run", "admin"],
+        )
+        self.assertEqual(
+            _callback_data(all_tickers),
+            ["admin_backfill_all_run", "admin"],
+        )
+        with self.assertRaises(ValueError):
+            app_bot_ui.build_admin_backfill_confirm_markup("unknown")
 
 
 if __name__ == "__main__":

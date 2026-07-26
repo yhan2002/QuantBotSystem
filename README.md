@@ -11,7 +11,7 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 
 - Momentum: 5/20/60 이동평균 정렬과 동일 방향 기울기 확인
 - 거래대금 확인: 252거래일 평균 대비 거래대금 3배 이상 급증 조건
-- Box Range: 박스 경계 false-break reclaim 후보
+- Box Range V2: 40개 완료 봉의 횡보·상승·하락 채널별 reclaim/pullback 후보
 - Reversion: 가격·유동성 충격 이후 평균회귀 후보
 
 Beta의 기존 촉매 점수 직접 가산 실험은 제거했습니다. 현재 전략 결과를 변경하는 실험은 별도 A/B 테스트 후 반영합니다.
@@ -27,7 +27,10 @@ Copy-Item .\config.local.example.py .\config.local.py
 
 API 키, Telegram 설정 등 비밀값은 `config.local.py`, `local_settings.py`, 환경변수에만 보관하고 Git에 추가하지 않습니다.
 
-가격 데이터는 Beta의 로컬 SQLite 캐시에 저장됩니다. 캐시가 없거나 오래된 경우 Beta UI의 `Preload 4Y Market Data` 또는 데이터 갱신 기능을 사용합니다.
+가격 데이터는 Beta의 로컬 SQLite 캐시에 저장됩니다. 일상 갱신은 Admin의
+`Update Selected/All (Latest)`를 사용하며, 각 종목의 마지막 캐시 날짜에서
+10일을 겹쳐 최신분만 받습니다. 신규 종목 또는 과거 중간 공백 복구가 필요할
+때만 확인 화면을 거쳐 `Backfill Selected/All (4Y)`를 사용합니다.
 
 ## 실행
 
@@ -68,6 +71,7 @@ python .\test_experiment_momentum_volume_alpha_ab.py `
 ```powershell
 cd ".\QuantBot\QuantBotSystem_Beta"
 python -m unittest test_core_market_data_store.py
+python -m unittest discover -s . -p "test_*.py"
 python -m py_compile RUN_telegram_bot_server.py strategy_ma_cross.py core_market_data_store.py
 ```
 

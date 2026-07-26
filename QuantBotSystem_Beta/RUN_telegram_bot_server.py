@@ -25,6 +25,7 @@ from app_bot_session import (
 )
 from app_bot_ui import (
     admin_text,
+    build_admin_backfill_confirm_markup,
     build_back_home_markup,
     build_admin_markup,
     build_home_markup,
@@ -341,16 +342,51 @@ def handle_menu_callbacks(call):
                         caption="Full-universe backtest trade events (IS/OOS CSV)",
                     )
 
-        elif data == "admin_preload_all":
-            bot.answer_callback_query(call.id, "Starting full market data preload.")
+        elif data in {"admin_backfill_all_confirm", "admin_preload_all"}:
+            all_tickers = sorted(set(config.universe))
+            bot.answer_callback_query(call.id)
             bot.edit_message_text(
-                "Preloading all market data. This can take several minutes...",
+                "**Confirm Full 4Y Backfill**\n\n"
+                f"Scope: all configured tickers ({len(all_tickers)})\n"
+                "This downloads four years for every ticker and may take several minutes. "
+                "Use Update All (Latest) for routine daily maintenance.",
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_admin_backfill_confirm_markup("all"),
+            )
+
+        elif data == "admin_backfill_selected_confirm":
+            selected = compile_selected_universe(session)
+            if not selected:
+                bot.answer_callback_query(call.id, "No selected tickers.", show_alert=True)
+                return
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                "**Confirm Selected 4Y Backfill**\n\n"
+                f"Scope: selected universe ({len(selected)} tickers)\n"
+                "This downloads four years for every selected ticker. "
+                "Use Update Selected (Latest) for routine daily maintenance.",
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_admin_backfill_confirm_markup("selected"),
+            )
+
+        elif data == "admin_refresh_all":
+            all_tickers = sorted(set(config.universe))
+            bot.answer_callback_query(call.id, "Updating latest data for all tickers.")
+            bot.edit_message_text(
+                f"Updating latest data ({len(all_tickers)} tickers)...",
                 chat_id,
                 call.message.message_id,
             )
-            summary = core_market_data_store.preload_all_universe(config, full_history=True)
+            summary = core_market_data_store.refresh_latest_price_data(
+                all_tickers,
+                min_period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+            )
             report = core_market_data_store.format_cache_summary(
-                summary, title="Full Market Data Preload Complete"
+                summary, title="All-Ticker Latest Update Complete"
             )
             bot.edit_message_text(
                 report,
@@ -367,16 +403,47 @@ def handle_menu_callbacks(call):
                 return
             bot.answer_callback_query(call.id, "Refreshing selected universe.")
             bot.edit_message_text(
-                f"Refreshing selected universe ({len(selected)} tickers)...",
+                f"Updating latest selected-universe data ({len(selected)} tickers)...",
+                chat_id,
+                call.message.message_id,
+            )
+            summary = core_market_data_store.refresh_latest_price_data(
+                selected,
+                min_period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+            )
+            report = core_market_data_store.format_cache_summary(
+                summary, title="Selected-Universe Latest Update Complete"
+            )
+            bot.edit_message_text(
+                report,
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_admin_markup(),
+            )
+
+        elif data in {"admin_backfill_selected_run", "admin_backfill_all_run"}:
+            if data == "admin_backfill_selected_run":
+                target = compile_selected_universe(session)
+                scope_label = "selected universe"
+            else:
+                target = sorted(set(config.universe))
+                scope_label = "all configured tickers"
+            if not target:
+                bot.answer_callback_query(call.id, "No target tickers.", show_alert=True)
+                return
+            bot.answer_callback_query(call.id, "Starting confirmed 4Y backfill.")
+            bot.edit_message_text(
+                f"Backfilling four years for {scope_label} ({len(target)} tickers)...",
                 chat_id,
                 call.message.message_id,
             )
             summary = core_market_data_store.backfill_price_data(
-                selected,
+                target,
                 period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
             )
             report = core_market_data_store.format_cache_summary(
-                summary, title="Selected Universe Refresh Complete"
+                summary, title="Confirmed 4Y Backfill Complete"
             )
             bot.edit_message_text(
                 report,

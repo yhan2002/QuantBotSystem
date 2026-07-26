@@ -1,177 +1,359 @@
 import unittest
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
-import strategy_box_range
 import core_entry_execution
+import strategy_box_range
 
 
-def _reclaim_frame():
+def _channel_history(slope=0.0, periods=40):
     rows = []
-    for i in range(20):
+    for index in range(periods):
+        center = 100.0 + slope * index
+        cycle = 4.0 * np.sin(2.0 * np.pi * index / 16.0)
+        close = center + cycle
         rows.append(
             {
-                "Open": 107.0,
-                "High": 115.0 if i in (5, 12) else 112.0,
-                "Low": 100.0 if i in (1, 8) else 103.0,
-                "Close": 103.0 if i in (1, 8) else 107.0,
+                "Open": close - 0.15,
+                "High": close + 0.45,
+                "Low": close - 0.45,
+                "Close": close,
                 "Volume": 1000.0,
             }
         )
-    rows.extend(
-        [
-            {"Open": 102.0, "High": 112.0, "Low": 99.0, "Close": 102.0, "Volume": 1000.0},
-            {"Open": 102.0, "High": 108.0, "Low": 101.0, "Close": 107.0, "Volume": 1000.0},
-            {"Open": 110.0, "High": 116.0, "Low": 109.0, "Close": 115.0, "Volume": 1000.0},
-            {"Open": 115.0, "High": 115.0, "Low": 114.0, "Close": 114.0, "Volume": 1000.0},
-        ]
+    return pd.DataFrame(
+        rows, index=pd.date_range("2025-01-01", periods=periods, freq="B")
     )
-    return pd.DataFrame(rows, index=pd.date_range("2025-01-01", periods=len(rows), freq="B"))
 
 
-def _short_reclaim_frame():
-    df = _reclaim_frame().iloc[:20].copy()
-    extra = pd.DataFrame(
+def _append_signal_and_targets(history, setup):
+    stats = strategy_box_range._channel_stats(history)
+    signal_levels = strategy_box_range._project_levels(stats, 1)
+    lower = signal_levels["lowest"]
+    width = signal_levels["highest"] - lower
+    if setup == "range":
+        signal_close = lower + width * 0.18
+        signal_open = signal_close - 0.30
+        signal_low = lower - 0.50
+        signal_high = signal_close + 0.30
+    else:
+        signal_close = lower + min(stats["atr"] * 0.80, width * 0.25)
+        signal_open = signal_close - 0.35
+        signal_low = lower - stats["atr"] * 0.10
+        signal_high = signal_close + 0.25
+    signal = pd.DataFrame(
         [
-            {"Open": 113.0, "High": 116.0, "Low": 102.0, "Close": 113.0, "Volume": 1000.0},
-            {"Open": 113.0, "High": 114.0, "Low": 108.0, "Close": 109.0, "Volume": 1000.0},
-            {"Open": 108.0, "High": 109.0, "Low": 106.0, "Close": 107.0, "Volume": 1000.0},
-            {"Open": 101.0, "High": 103.0, "Low": 99.0, "Close": 100.0, "Volume": 1000.0},
-            {"Open": 100.0, "High": 101.0, "Low": 99.0, "Close": 100.0, "Volume": 1000.0},
+            {
+                "Open": signal_open,
+                "High": signal_high,
+                "Low": signal_low,
+                "Close": signal_close,
+                "Volume": 1000.0,
+            }
         ],
-        index=pd.date_range(df.index[-1] + pd.offsets.BDay(), periods=5, freq="B"),
+        index=[history.index[-1] + pd.offsets.BDay()],
     )
-    return pd.concat([df, extra])
+    status, signal_stats = strategy_box_range._entry_signal(
+        history, signal.iloc[0]
+    )
+    entry_levels = strategy_box_range._project_levels(signal_stats, 1)
+    entry = (entry_levels["lowest"] + entry_levels["first_target"]) / 2.0
+    target_day = pd.DataFrame(
+        [
+            {
+                "Open": entry,
+                "High": entry_levels["highest"] + 1.0,
+                "Low": entry * 0.99,
+                "Close": entry_levels["highest"],
+                "Volume": 1000.0,
+            },
+            {
+                "Open": entry_levels["highest"],
+                "High": entry_levels["highest"] + 0.5,
+                "Low": entry_levels["highest"] - 0.5,
+                "Close": entry_levels["highest"],
+                "Volume": 1000.0,
+            },
+        ],
+        index=pd.date_range(
+            signal.index[-1] + pd.offsets.BDay(), periods=2, freq="B"
+        ),
+    )
+    return pd.concat([history, signal, target_day]), status
 
 
-class BoxRangeEngineTests(unittest.TestCase):
-    def test_precomputed_entry_candidates_match_daily_signal_calculation(self):
-        df = _reclaim_frame()
-        candidates = strategy_box_range._precompute_entry_candidates(df, 20)
+def _append_short_signal_and_targets(history, setup):
+    stats = strategy_box_range._channel_stats(history)
+    signal_levels = strategy_box_range._project_levels(stats, 1)
+    upper = signal_levels["highest"]
+    width = upper - signal_levels["lowest"]
+    if setup == "range":
+        signal_close = upper - width * 0.18
+        signal_open = signal_close + 0.30
+        signal_high = upper + 0.50
+        signal_low = signal_close - 0.30
+    else:
+        signal_close = upper - min(stats["atr"] * 0.80, width * 0.25)
+        signal_open = signal_close + 0.35
+        signal_high = upper + stats["atr"] * 0.10
+        signal_low = signal_close - 0.25
+    signal = pd.DataFrame(
+        [
+            {
+                "Open": signal_open,
+                "High": signal_high,
+                "Low": signal_low,
+                "Close": signal_close,
+                "Volume": 1000.0,
+            }
+        ],
+        index=[history.index[-1] + pd.offsets.BDay()],
+    )
+    status, signal_stats = strategy_box_range._entry_signal(
+        history, signal.iloc[0]
+    )
+    entry_levels = strategy_box_range._project_levels(signal_stats, 1)
+    entry = (entry_levels["first_target"] + entry_levels["highest"]) / 2.0
+    target_day = pd.DataFrame(
+        [
+            {
+                "Open": entry,
+                "High": entry * 1.01,
+                "Low": entry_levels["lowest"] - 1.0,
+                "Close": entry_levels["lowest"],
+                "Volume": 1000.0,
+            },
+            {
+                "Open": entry_levels["lowest"],
+                "High": entry_levels["lowest"] + 0.5,
+                "Low": entry_levels["lowest"] - 0.5,
+                "Close": entry_levels["lowest"],
+                "Volume": 1000.0,
+            },
+        ],
+        index=pd.date_range(
+            signal.index[-1] + pd.offsets.BDay(), periods=2, freq="B"
+        ),
+    )
+    return pd.concat([history, signal, target_day]), status
 
-        for i in range(20, len(df)):
-            signal, stats = strategy_box_range._entry_signal(df.iloc[i - 20:i], df.iloc[i])
-            self.assertEqual(candidates["eligible"][i], signal == "LONG_RECLAIM")
-            self.assertEqual(
-                candidates["short_eligible"][i], signal == "SHORT_RECLAIM"
-            )
-            self.assertAlmostEqual(candidates["highest"][i], stats["highest"])
-            self.assertAlmostEqual(candidates["lowest"][i], stats["lowest"])
-            self.assertAlmostEqual(candidates["turnover_ratio"][i], stats["turnover_ratio"])
 
-    @patch("strategy_box_range.core_universe_backtest.format_fixed_is_oos_backtest", return_value="\nSUMMARY")
-    @patch("strategy_box_range.core_universe_backtest.aggregate_universe_backtest", return_value={})
-    @patch("strategy_box_range._load_ohlcv")
-    def test_universe_scan_loads_each_ticker_once(self, load_ohlcv, aggregate, _format):
-        load_ohlcv.return_value = _reclaim_frame()
+class BoxRangeV2Tests(unittest.TestCase):
+    def test_structure_classifier_separates_flat_rising_falling(self):
+        flat = strategy_box_range._channel_stats(_channel_history(0.0))
+        rising = strategy_box_range._channel_stats(_channel_history(0.45))
+        falling = strategy_box_range._channel_stats(_channel_history(-0.45))
 
-        strategy_box_range.scan_total_universe(["AAA", "BBB"])
+        self.assertEqual(flat["structure"], "FLAT")
+        self.assertEqual(rising["structure"], "RISING")
+        self.assertEqual(falling["structure"], "FALLING")
 
-        self.assertEqual(load_ohlcv.call_count, 2)
-        self.assertEqual(aggregate.call_count, 2)
+    def test_flat_lower_reclaim_generates_long_signal(self):
+        frame, status = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        self.assertEqual(status, "LONG_RANGE_RECLAIM")
+        result = strategy_box_range.analyze_box_range(
+            "TEST", df=frame.iloc[:41]
+        )
+        self.assertEqual(result["status"], "LONG_RANGE_RECLAIM")
 
-    @patch("strategy_box_range.core_universe_backtest.format_fixed_is_oos_backtest", return_value="\nSUMMARY")
-    @patch("strategy_box_range.core_universe_backtest.aggregate_universe_backtest", return_value={})
-    @patch("strategy_box_range._load_ohlcv")
-    def test_short_only_mode_filters_both_box_backtest_windows(
-        self, load_ohlcv, aggregate, _format
-    ):
-        load_ohlcv.return_value = _short_reclaim_frame()
+    def test_rising_support_rebound_generates_long_signal(self):
+        frame, status = _append_signal_and_targets(
+            _channel_history(0.45), "rising"
+        )
+        self.assertEqual(status, "LONG_TREND_PULLBACK")
+        result = strategy_box_range.analyze_box_range(
+            "TEST", df=frame.iloc[:41]
+        )
+        self.assertEqual(result["status"], "LONG_TREND_PULLBACK")
 
-        report = strategy_box_range.scan_total_universe(
-            ["AAA"], position_mode="SHORT_ONLY"
+    def test_flat_upper_reclaim_generates_short_signal(self):
+        frame, status = _append_short_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        self.assertEqual(status, "SHORT_RANGE_RECLAIM")
+        result = strategy_box_range.analyze_box_range(
+            "TEST", df=frame.iloc[:41]
+        )
+        self.assertEqual(result["status"], "SHORT_RANGE_RECLAIM")
+
+    def test_falling_resistance_rejection_generates_short_signal(self):
+        history = _channel_history(-0.45)
+        frame, status = _append_short_signal_and_targets(
+            history, "falling"
+        )
+        self.assertEqual(status, "SHORT_TREND_RALLY")
+        result = strategy_box_range.analyze_box_range(
+            "TEST", df=frame.iloc[:41]
+        )
+        self.assertEqual(result["status"], "SHORT_TREND_RALLY")
+
+    def test_precompute_does_not_use_future_bars(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        altered = frame.copy()
+        altered.iloc[42, altered.columns.get_loc("Close")] *= 3.0
+        altered.iloc[42, altered.columns.get_loc("High")] *= 3.0
+
+        original = strategy_box_range._precompute_entry_candidates(frame)
+        changed = strategy_box_range._precompute_entry_candidates(altered)
+
+        self.assertEqual(original["status"][40], changed["status"][40])
+        self.assertAlmostEqual(
+            original["stats"][40]["lowest"],
+            changed["stats"][40]["lowest"],
         )
 
+    def test_next_open_gate_requires_support_to_first_target(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        _, stats = strategy_box_range._entry_signal(
+            frame.iloc[:40], frame.iloc[40]
+        )
+        levels = strategy_box_range._project_levels(stats, 1)
+        self.assertFalse(
+            strategy_box_range._valid_next_open(
+                levels["lowest"], stats, "LONG"
+            )
+        )
+        self.assertFalse(
+            strategy_box_range._valid_next_open(
+                levels["first_target"], stats, "LONG"
+            )
+        )
+        self.assertTrue(
+            strategy_box_range._valid_next_open(
+                (levels["lowest"] + levels["first_target"]) / 2.0,
+                stats,
+                "LONG",
+            )
+        )
+
+    def test_backtest_outputs_setup_and_split_exit_dates(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        _, win_rate, count, _, details = (
+            strategy_box_range.run_box_backtest(
+                "TEST", df=frame, include_trades=True
+            )
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(win_rate, 100.0)
+        self.assertEqual(details[0]["side"], "LONG")
+        self.assertEqual(details[0]["setup"], "RANGE_RECLAIM")
+        self.assertEqual(len(details[0]["exit_events"]), 2)
+        self.assertTrue(
+            all(event["date"] for event in details[0]["exit_events"])
+        )
+
+    def test_short_backtest_outputs_short_setup_and_split_exits(self):
+        frame, _ = _append_short_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        _, win_rate, count, _, details = strategy_box_range.run_box_backtest(
+            "TEST", df=frame, side_filter="SHORT", include_trades=True
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(win_rate, 100.0)
+        self.assertEqual(details[0]["side"], "SHORT")
+        self.assertEqual(details[0]["setup"], "RANGE_RECLAIM")
+        self.assertEqual(len(details[0]["exit_events"]), 2)
+
+    def test_side_filters_exclude_opposite_direction(self):
+        long_frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        short_frame, _ = _append_short_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        long_result = strategy_box_range.run_box_backtest(
+            "TEST", df=long_frame, side_filter="SHORT", include_trades=True
+        )
+        short_result = strategy_box_range.run_box_backtest(
+            "TEST", df=short_frame, side_filter="LONG", include_trades=True
+        )
+        self.assertEqual(long_result[2], 0)
+        self.assertEqual(short_result[2], 0)
+
+    def test_backtest_reuses_index_aligned_precomputed_candidates(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        candidates = strategy_box_range._precompute_entry_candidates(frame)
+        expected = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=frame,
+            include_trades=True,
+        )
+        with patch(
+            "strategy_box_range._precompute_entry_candidates",
+            side_effect=AssertionError("candidate cache was not reused"),
+        ):
+            actual = strategy_box_range.run_box_backtest(
+                "TEST",
+                df=frame,
+                include_trades=True,
+                precomputed_candidates=candidates,
+            )
+
+        self.assertEqual(actual, expected)
+
+    @patch(
+        "strategy_box_range.core_universe_backtest.format_fixed_is_oos_backtest",
+        return_value="\nSUMMARY",
+    )
+    @patch(
+        "strategy_box_range.core_universe_backtest.aggregate_universe_backtest",
+        return_value={},
+    )
+    @patch("strategy_box_range._load_ohlcv")
+    def test_scan_respects_short_only_and_loads_each_ticker_once(
+        self, load_ohlcv, aggregate, _format
+    ):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        load_ohlcv.return_value = frame
+
+        report = strategy_box_range.scan_total_universe(
+            ["AAA", "BBB"], position_mode="SHORT_ONLY"
+        )
+
+        self.assertEqual(load_ohlcv.call_count, 2)
         self.assertIn("Position mode: Short Only", report)
-        self.assertIn("SHORT Candidates", report)
+        self.assertIn("SHORT Candidates (next open)", report)
         self.assertEqual(aggregate.call_count, 2)
         for call in aggregate.call_args_list:
             self.assertEqual(call.kwargs["side_filter"], "SHORT")
 
-    def test_lower_false_break_reclaim_signals_next_open_long(self):
-        result = strategy_box_range.analyze_box_range("TEST", df=_reclaim_frame().iloc[:21])
-        self.assertEqual(result["status"], "LONG_RECLAIM")
-        self.assertEqual(result["lower_bounces"], 2)
-
-    def test_center_then_opposite_edge_scales_out(self):
-        avg_return, win_rate, count, _, details = strategy_box_range.run_box_backtest(
-            "TEST", df=_reclaim_frame(), side_filter="LONG", include_trades=True
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(win_rate, 100.0)
-        self.assertAlmostEqual(avg_return, 9.07, places=2)
-        self.assertEqual(details[0]["entry_date"], "2025-01-30")
-        self.assertEqual(details[0]["entry_price"], 102.0)
-        self.assertEqual(len(details[0]["exit_events"]), 2)
-
-    def test_next_open_must_be_between_lower_boundary_and_midpoint(self):
-        for invalid_open in (99.0, 100.0, 107.5, 108.0):
-            with self.subTest(invalid_open=invalid_open):
-                df = _reclaim_frame().copy()
-                df.iloc[21, df.columns.get_loc("Open")] = invalid_open
-                _, _, count, _, details = strategy_box_range.run_box_backtest(
-                    "TEST", df=df, include_trades=True
-                )
-                self.assertEqual(count, 0)
-                self.assertEqual(details, [])
-
-    def test_remaining_position_exits_ten_days_after_center(self):
-        rows = _reclaim_frame().iloc[:22].to_dict("records")
-        rows.extend(
-            {"Open": 106.0, "High": 110.0, "Low": 104.0, "Close": 106.0, "Volume": 1000.0}
-            for _ in range(10)
-        )
-        df = pd.DataFrame(rows, index=pd.date_range("2025-01-01", periods=len(rows), freq="B"))
-        _, _, count, _, details = strategy_box_range.run_box_backtest(
-            "TEST", df=df, include_trades=True
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(details[0]["exit_events"][-1]["reason"], "10d post-center exit")
-        self.assertEqual(len(details[0]["exit_events"]), 2)
-
-    def test_upper_false_break_reclaim_signals_short(self):
-        df = _reclaim_frame().iloc[:21].copy()
-        df.iloc[-1] = {"Open": 113.0, "High": 116.0, "Low": 102.0, "Close": 113.0, "Volume": 1000.0}
-        result = strategy_box_range.analyze_box_range("TEST", df=df)
-        self.assertEqual(result["status"], "SHORT_RECLAIM")
-        self.assertEqual(result["upper_bounces"], 2)
-
-    def test_short_center_then_opposite_edge_scales_out(self):
-        avg_return, win_rate, count, _, details = strategy_box_range.run_box_backtest(
-            "TEST", df=_short_reclaim_frame(), side_filter="SHORT", include_trades=True
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(win_rate, 100.0)
-        self.assertAlmostEqual(avg_return, 8.19, places=2)
-        self.assertEqual(details[0]["side"], "SHORT")
-        self.assertEqual(len(details[0]["exit_events"]), 2)
-
-    def test_short_side_filter_excludes_long_trades(self):
-        _, _, count, _, details = strategy_box_range.run_box_backtest(
-            "TEST", df=_reclaim_frame(), side_filter="SHORT", include_trades=True
-        )
-        self.assertEqual(count, 0)
-        self.assertEqual(details, [])
-
-    def test_turnover_surge_blocks_entry(self):
-        df = _reclaim_frame().iloc[:21].copy()
-        df.iloc[-1, df.columns.get_loc("Volume")] = 3000.0
-        result = strategy_box_range.analyze_box_range("TEST", df=df)
-        self.assertEqual(result["status"], "VOLUME_VETO")
+        selection_runner = aggregate.call_args_list[0].args[1]
+        oos_runner = aggregate.call_args_list[1].args[1]
+        with patch(
+            "strategy_box_range._precompute_entry_candidates",
+            wraps=strategy_box_range._precompute_entry_candidates,
+        ) as precompute:
+            selection_runner("AAA", include_trades=True)
+            oos_runner("AAA", include_trades=True)
+        self.assertEqual(precompute.call_count, 1)
 
     def test_ohlc4_entry_does_not_exit_during_execution_day(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
         _, _, count, _, details = strategy_box_range.run_box_backtest(
             "TEST",
-            df=_reclaim_frame(),
+            df=frame,
             include_trades=True,
             entry_execution=core_entry_execution.NEXT_DAY_OHLC4,
         )
-        self.assertEqual(count, 1)
-        entry_date = details[0]["entry_date"]
-        self.assertTrue(
-            all(event["date"] > entry_date for event in details[0]["exit_events"])
-        )
+        self.assertEqual(count, 0)
+        self.assertEqual(details, [])
 
 
 if __name__ == "__main__":

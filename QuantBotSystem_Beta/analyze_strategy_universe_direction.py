@@ -126,21 +126,22 @@ def aggregate_cached_results(universe, cached_results):
 
 def target_status(trade_count, win_rate_pct, strategy_roi_pct, benchmark_roi_pct, minimum_trades=30):
     sample_pass = trade_count >= minimum_trades
-    win_pass = win_rate_pct >= 58.0
-    target_applicable = benchmark_roi_pct > 0.0
-    required_roi = benchmark_roi_pct * 2.0 if target_applicable else None
-    roi_pass = strategy_roi_pct >= required_roi if target_applicable else None
+    target = core_portfolio_performance.evaluate_return_target(
+        strategy_roi_pct,
+        benchmark_roi_pct,
+        win_rate_pct,
+        benchmark_multiple=2.0,
+        win_rate_goal_pct=58.0,
+    )
     if not sample_pass:
         status = "INSUFFICIENT_TRADES"
-    elif not target_applicable:
-        status = "REVIEW"
     else:
-        status = "PASS" if roi_pass and win_pass else "FAIL"
+        status = target["status"]
     return {
-        "roi_target_applicable": target_applicable,
-        "required_roi_pct": required_roi,
-        "passes_2x_benchmark_roi": roi_pass,
-        "passes_58pct_win_rate": win_pass,
+        "roi_target_applicable": target["return_target_applicable"],
+        "required_roi_pct": target["required_return_pct"],
+        "passes_2x_benchmark_roi": target["passes_return_target"],
+        "passes_58pct_win_rate": target["meets_win_rate_goal"],
         "passes_min_30_trades": sample_pass,
         "status": status,
     }
@@ -420,7 +421,8 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
             "benchmark": "daily equal-weight raw-close universe",
             "minimum_trades": minimum_trades,
             "minimum_win_rate_pct": 58.0,
-            "return_target": "2x same-window benchmark ROI when benchmark ROI is positive",
+            "primary_target": "2x same-window benchmark ROI when benchmark ROI is positive",
+            "win_rate_target": "58% secondary diagnostic; does not determine PASS/FAIL",
             "ls_definition": "both directions allowed; not dollar neutral",
             "max_stale_calendar_days": max_stale_days,
         },
