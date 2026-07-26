@@ -12,6 +12,7 @@
 - Keep changes small. Read relevant files before editing.
 - For Python, run focused `unittest` and `py_compile`; do not run long backtests, downloads, or bot delivery without request.
 - Signals use information available at the close and may enter no earlier than the next open. Do not introduce lookahead.
+- Developer performance reports use 1Y cumulative portfolio ROI versus the positive benchmark ROI as the primary PASS/FAIL criterion. The 58% win-rate goal is a secondary diagnostic, not a hard gate.
 
 ## Data and Git
 

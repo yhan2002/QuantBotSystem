@@ -9,6 +9,49 @@ import core_market_data_store
 TRADING_DAYS_PER_YEAR = 252
 
 
+def evaluate_return_target(
+    strategy_return_pct,
+    benchmark_return_pct,
+    win_rate_pct,
+    benchmark_multiple=2.0,
+    win_rate_goal_pct=58.0,
+):
+    """Evaluate the ROI-first developer target; win rate is diagnostic only."""
+    has_returns = (
+        strategy_return_pct is not None
+        and benchmark_return_pct is not None
+        and math.isfinite(float(strategy_return_pct))
+        and math.isfinite(float(benchmark_return_pct))
+    )
+    target_applicable = has_returns and float(benchmark_return_pct) > 0.0
+    required_return = (
+        float(benchmark_return_pct) * float(benchmark_multiple)
+        if target_applicable
+        else None
+    )
+    passes_return = (
+        float(strategy_return_pct) >= required_return
+        if target_applicable
+        else None
+    )
+    meets_win_rate_goal = (
+        win_rate_pct is not None
+        and math.isfinite(float(win_rate_pct))
+        and float(win_rate_pct) >= float(win_rate_goal_pct)
+    )
+    status = "REVIEW" if not target_applicable else ("PASS" if passes_return else "FAIL")
+    return {
+        "benchmark_multiple": float(benchmark_multiple),
+        "win_rate_goal_pct": float(win_rate_goal_pct),
+        "return_target_applicable": target_applicable,
+        "required_return_pct": required_return,
+        "passes_return_target": passes_return,
+        "meets_win_rate_goal": meets_win_rate_goal,
+        "win_rate_is_hard_gate": False,
+        "status": status,
+    }
+
+
 def _pnl_decimal(side, price, entry_price):
     direction = 1.0 if side == "LONG" else -1.0
     return direction * (float(price) / float(entry_price) - 1.0)
@@ -229,17 +272,13 @@ def calculate_universe_performance(
     )
     win_rate = float(universe_result.get("all", {}).get("win_rate", 0.0))
     trade_count = int(universe_result.get("all", {}).get("count", 0))
-    strategy_cagr = result["strategy"]["cagr_pct"]
-    benchmark_cagr = result["benchmark"]["cagr_pct"]
-    cagr_target = (
-        None if benchmark_cagr is None else benchmark_cagr * benchmark_multiple
+    target = evaluate_return_target(
+        result["strategy"]["roi_pct"],
+        result["benchmark"]["roi_pct"],
+        win_rate,
+        benchmark_multiple=benchmark_multiple,
+        win_rate_goal_pct=minimum_win_rate_pct,
     )
-    passes_cagr = (
-        strategy_cagr is not None
-        and cagr_target is not None
-        and strategy_cagr >= cagr_target
-    )
-    passes_win_rate = win_rate >= minimum_win_rate_pct
     result.update(
         {
             "trade_count": trade_count,
@@ -247,10 +286,17 @@ def calculate_universe_performance(
             "target": {
                 "benchmark_multiple": benchmark_multiple,
                 "minimum_win_rate_pct": minimum_win_rate_pct,
-                "required_cagr_pct": cagr_target,
-                "passes_cagr": passes_cagr,
-                "passes_win_rate": passes_win_rate,
-                "passes_all": passes_cagr and passes_win_rate,
+                "primary_metric": "1Y cumulative ROI",
+                "required_roi_pct": target["required_return_pct"],
+                "passes_roi": target["passes_return_target"],
+                "passes_primary_return_target": target["passes_return_target"],
+                "required_cagr_pct": None,
+                "passes_cagr": None,
+                "passes_win_rate": target["meets_win_rate_goal"],
+                "win_rate_is_hard_gate": False,
+                "status": target["status"],
+                # Backward-compatible key: now means the primary ROI target only.
+                "passes_all": target["passes_return_target"] is True,
             },
         }
     )

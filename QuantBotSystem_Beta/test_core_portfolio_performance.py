@@ -120,16 +120,37 @@ class PortfolioPerformanceTests(unittest.TestCase):
                 "ticker": "AAA", "side": "LONG", "entry_date": "2025-01-02",
                 "entry_price": 100.0, "exit_date": "2025-01-03", "exit_price": 121.0,
             }],
-            "all": {"count": 1, "win_rate": 100.0},
+            "all": {"count": 1, "win_rate": 50.0},
         }
         result = core_portfolio_performance.calculate_universe_performance(
-            universe_result, ["AAA"],
-            price_loader=_loader({"AAA": _frame([100.0, 110.0, 121.0])}),
+            universe_result, ["AAA", "BBB"],
+            price_loader=_loader({
+                "AAA": _frame([100.0, 110.0, 121.0]),
+                "BBB": _frame([100.0, 100.0, 100.0]),
+            }),
         )
         self.assertEqual(result["trade_count"], 1)
-        self.assertEqual(result["win_rate_pct"], 100.0)
-        self.assertTrue(result["target"]["passes_win_rate"])
+        self.assertEqual(result["win_rate_pct"], 50.0)
+        self.assertFalse(result["target"]["passes_win_rate"])
+        self.assertTrue(result["target"]["passes_all"])
+        self.assertEqual(result["target"]["primary_metric"], "1Y cumulative ROI")
+        self.assertFalse(result["target"]["win_rate_is_hard_gate"])
         self.assertIn("passes_all", result["target"])
+
+    def test_return_target_uses_roi_and_win_rate_is_secondary(self):
+        passed = core_portfolio_performance.evaluate_return_target(22.0, 10.0, 50.0)
+        self.assertEqual(passed["status"], "PASS")
+        self.assertTrue(passed["passes_return_target"])
+        self.assertFalse(passed["meets_win_rate_goal"])
+
+        failed = core_portfolio_performance.evaluate_return_target(19.0, 10.0, 70.0)
+        self.assertEqual(failed["status"], "FAIL")
+        self.assertFalse(failed["passes_return_target"])
+        self.assertTrue(failed["meets_win_rate_goal"])
+
+        review = core_portfolio_performance.evaluate_return_target(5.0, -2.0, 70.0)
+        self.assertEqual(review["status"], "REVIEW")
+        self.assertIsNone(review["passes_return_target"])
 
 
 if __name__ == "__main__":

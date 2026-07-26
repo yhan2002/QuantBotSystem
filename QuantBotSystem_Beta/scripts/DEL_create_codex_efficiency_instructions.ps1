@@ -1,4 +1,4 @@
-# File name: create_codex_efficiency_instructions.ps1
+# File name: DEL_create_codex_efficiency_instructions.ps1
 # Generates concise universal Codex custom instructions for coding work.
 param(
     [string]$OutputPath = "outputs/codex_custom_instructions_coding.md",

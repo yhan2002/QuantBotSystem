@@ -25,11 +25,19 @@ def build_home_markup():
 
 def build_admin_markup():
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("Preload 4Y Market Data", callback_data="admin_preload_all"))
     markup.row(
         InlineKeyboardButton(
-            "Refresh Selected Universe", callback_data="admin_refresh_selected"
-        )
+            "Update Selected (Latest)", callback_data="admin_refresh_selected"
+        ),
+        InlineKeyboardButton("Update All (Latest)", callback_data="admin_refresh_all"),
+    )
+    markup.row(
+        InlineKeyboardButton(
+            "Backfill Selected (4Y)", callback_data="admin_backfill_selected_confirm"
+        ),
+        InlineKeyboardButton(
+            "Backfill All (4Y)", callback_data="admin_backfill_all_confirm"
+        ),
     )
     markup.row(
         InlineKeyboardButton(
@@ -46,11 +54,28 @@ def build_admin_markup():
     return markup
 
 
+def build_admin_backfill_confirm_markup(scope):
+    if scope not in {"selected", "all"}:
+        raise ValueError(f"Unknown backfill scope: {scope}")
+
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton(
+            "Confirm 4Y Backfill",
+            callback_data=f"admin_backfill_{scope}_run",
+        )
+    )
+    markup.row(InlineKeyboardButton("Cancel", callback_data="admin"))
+    return markup
+
+
 def admin_text():
     return (
         "**Admin**\n\n"
-        "Preload 4Y Market Data: build the history required for fixed IS/OOS tests.\n"
-        "Refresh Selected Universe: backfill four years for the fixed 2024-25 IS / 2026 OOS tests.\n"
+        "Update Latest: fetch from each ticker's last cached date with a 10-day overlap. "
+        "Uncached tickers receive four years.\n"
+        "Backfill 4Y: replace historical gaps or initialize a full fixed IS/OOS window; "
+        "confirmation is required.\n"
         "Refresh Market Countries: derive US/CH/JP/KR from cached ticker suffixes (local DB only).\n"
         "Refresh Sector / Industry: refresh sector/industry metadata; market country is also refreshed.\n"
         "Show Data Cache Status: show the current cache date range."

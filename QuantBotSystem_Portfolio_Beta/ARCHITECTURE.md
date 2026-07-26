@@ -1,0 +1,151 @@
+# QuantBot Portfolio Beta
+
+## Purpose
+
+`QuantBotSystem_Portfolio_Beta` is an isolated code clone of the current
+`QuantBotSystem_Beta`. The existing Beta remains the rollback version.
+
+This version adds:
+
+- deterministic cross-sectional signal scoring;
+- score-proportional position sizing with a 5% per-security cap;
+- cash, quantity, partial-exit, gross/net exposure, and NAV accounting;
+- separate Box FLAT and TREND attribution;
+- a fourth Residual Stat-Arb strategy;
+- a stop/start version selector for Telegram operation.
+
+## Non-negotiable invariants
+
+- A signal uses information available at the close.
+- A new position is filled no earlier than the next open.
+- Position quantity changes only on an entry or an explicit partial/full exit.
+- No daily equal-weight rebalance is assumed.
+- Transaction cost defaults to zero, but turnover and gross exposure remain
+  observable.
+- `QuantBotSystem_Beta` and `QuantBotSystem_Portfolio_Beta` must not poll the
+  same Telegram token at the same time.
+- The shared market-data database is not migrated by the portfolio engine.
+
+## Runtime isolation
+
+| Resource | Policy |
+|---|---|
+| Python code | Separate version folders |
+| Telegram credentials | Read from ignored local config |
+| Market OHLCV and metadata | Shared existing Beta SQLite path |
+| Backtest exports | Separate folder under Portfolio Beta |
+| Portfolio ledger and logs | Separate folder under Portfolio Beta |
+| Telegram in-memory sessions | Separate per running process |
+
+`RUN_quantbot_version_switch.py` selects one version, acquires a common
+single-process lock, and starts that version as a child process. Switching is
+stop-then-start, not hot reload.
+
+The Portfolio process serializes scans, quick checks, scheduled refreshes, and
+Admin data mutations through one re-entrant operation lock. Each completed
+manual scan stores an immutable report id, so an older See Detail button
+cannot be redirected to a newer scan.
+
+## Common signal contract
+
+Strategy-specific analyzers are adapted into `Signal` records:
+
+```text
+ticker, strategy, side, signal_date, raw_score,
+setup, structure, metadata, entry_execution
+```
+
+The three existing strategy engines keep their entry and exit rules. The
+adapter is the boundary between strategy research and portfolio construction.
+
+## Score pipeline
+
+For each signal-date cohort:
+
+1. reject invalid/non-finite scores;
+2. apply the selected group-neutralization rule using only securities whose
+   local price history was live on that cohort date;
+3. winsorize score magnitude within each side;
+4. percentile-rank score magnitude within each side;
+5. restore LONG/SHORT sign, producing `rank_score` in `[-1, +1]`;
+6. map absolute rank to a requested weight up to 5% of current NAV.
+
+The pipeline never changes a strategy's intended side. A signal that becomes
+inconsistent with the selected neutralization direction is rejected before
+allocation.
+
+## Portfolio allocation
+
+Default limits:
+
+- initial NAV: 100;
+- maximum total gross at new-entry sizing: 100% of NAV;
+- maximum security gross: 5% of NAV;
+- Long Only: long 100%, short 0%;
+- Short Only: long 0%, short 100%;
+- Long/Short: long 50%, short 50%.
+
+Weak or sparse signals leave cash uninvested. Existing positions are not
+trimmed merely because market moves push gross above its entry-time cap; the
+cap prevents new exposure until capacity returns.
+
+The allocator scales every leg of a multi-leg trade by the same factor. Gross
+includes both the alpha leg and every hedge leg.
+
+## Ledger
+
+The ledger processes:
+
+1. opening marks and next-open entries;
+2. explicit intraday/close exit events;
+3. closing marks;
+4. daily cash, long value, short liability, NAV, gross, net, and active lots.
+
+For a short entry, sale proceeds increase cash and the short market value is a
+liability. Partial exits reduce the original quantity by the event weight.
+Positions whose normal exit lies after an IS/OOS boundary are marked at the
+last available close, rather than omitted from end-of-window NAV.
+
+## Strategy boundaries
+
+- Momentum remains a directional trend strategy.
+- Box remains one strategy, with separate attribution:
+  - `FLAT / RANGE_RECLAIM`;
+  - `TREND / RISING_PULLBACK`;
+  - `TREND / FALLING_RALLY`;
+  - `TRANSITION` remains non-tradable.
+- Reversion remains unchanged as a raw-price mean-reversion strategy.
+- Residual Stat-Arb is a new fourth strategy and does not replace Reversion.
+
+## Residual Stat-Arb first version
+
+The first implementation is deterministic rather than ML-based:
+
+- select up to five same-listing-country and same-sector peers from trailing
+  correlations known before the evaluation window;
+- retain rolling market and sector/peer betas as diagnostics;
+- estimate the executable target-versus-peer-basket beta from completed
+  observations and calculate the matching stock-specific residual;
+- standardize a short-horizon cumulative residual using prior history;
+- enter only after an extreme residual starts reverting;
+- hold the stock alpha leg and an offsetting peer-basket hedge;
+- exit on residual normalization, residual stop, or time stop.
+
+Regression coefficients used for a close signal are estimated no later than
+the preceding close. A non-positive executable hedge beta is rejected rather
+than converted with an absolute value. Entry and any signal-driven exit
+execute at the following open.
+
+## Reporting
+
+Portfolio reports expose:
+
+- raw, neutralized, and ranked signal score;
+- requested and allocated entry weight;
+- quantity and each partial/full exit;
+- daily NAV, cash, gross, net, long, short, and active positions;
+- Box FLAT/TREND attribution;
+- portfolio ROI, CAGR, MDD, Sharpe, and benchmark comparison.
+
+Trade-level average return remains diagnostic and is not treated as portfolio
+ROI.
