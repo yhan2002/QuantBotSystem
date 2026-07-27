@@ -725,6 +725,7 @@ def calculate_score_weighted_performance(
     market_benchmark_loader=None,
     market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
     market_benchmark_label=MARKET_BENCHMARK_LABEL,
+    entry_sizing_policy=None,
 ):
     """Replay actual quantities and cash, then compare with ACWI and Universe EW.
 
@@ -756,6 +757,7 @@ def calculate_score_weighted_performance(
         price_loader=price_loader,
         policy=policy,
         calendar=calendar,
+        entry_sizing_policy=entry_sizing_policy,
     )
     _annotate_evaluated_trade_returns(ledger)
     ledger_daily = ledger["daily"].reindex(calendar)
@@ -821,6 +823,7 @@ def calculate_universe_performance(
     market_benchmark_loader=None,
     market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
     market_benchmark_label=MARKET_BENCHMARK_LABEL,
+    entry_sizing_policy=None,
 ):
     """Calculate developer-only portfolio metrics from an aggregate backtest."""
     period = universe_result.get("period", "N/A")
@@ -839,6 +842,7 @@ def calculate_universe_performance(
         market_benchmark_loader=market_benchmark_loader,
         market_benchmark_ticker=market_benchmark_ticker,
         market_benchmark_label=market_benchmark_label,
+        entry_sizing_policy=entry_sizing_policy,
     )
     executed_trades = [
         trade

@@ -1,7 +1,9 @@
 """Cash/quantity portfolio simulation for score-weighted strategy trades."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections import defaultdict
+from copy import deepcopy
 import math
 
 import pandas as pd
@@ -11,6 +13,29 @@ from core_portfolio_allocator import (
     PortfolioPolicy,
     cohort_capacity_scale,
     exposure_snapshot,
+)
+
+
+_ENTRY_POLICY_SIGNAL_FIELDS = (
+    "trade_id",
+    "strategy",
+    "ticker",
+    "side",
+    "signal_date",
+    "entry_date",
+    "signal_score",
+    "neutralized_score",
+    "selected_score",
+    "winsorized_score",
+    "percentile_rank",
+    "rank_score",
+    "requested_weight",
+    "setup",
+    "structure",
+    "policy_observation_id",
+    "policy_feature_eligible",
+    "policy_feature_skip_reason",
+    "policy_features",
 )
 
 
@@ -223,6 +248,123 @@ def _portfolio_nav(cash, lots, price_map):
     )
 
 
+def _entry_policy_signal(trade):
+    """Expose only signal-time fields to an entry sizing policy."""
+
+    return {
+        field: deepcopy(trade[field])
+        for field in _ENTRY_POLICY_SIGNAL_FIELDS
+        if field in trade
+    }
+
+
+def _entry_policy_scale(value, label):
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{label} must be a finite number from 0 to 1") from exc
+    if not math.isfinite(result) or not 0.0 <= result <= 1.0:
+        raise ValueError(f"{label} must be a finite number from 0 to 1")
+    return result
+
+
+def _entry_policy_decision(cohort, entry_sizing_policy, portfolio_state):
+    trade_ids = [trade["trade_id"] for trade in cohort]
+    if len(set(trade_ids)) != len(trade_ids):
+        raise ValueError("Entry sizing policy requires unique cohort trade IDs")
+    if entry_sizing_policy is None:
+        return 1.0, {trade_id: 1.0 for trade_id in trade_ids}
+
+    decision = entry_sizing_policy(
+        signals=[_entry_policy_signal(trade) for trade in cohort],
+        portfolio_state=deepcopy(portfolio_state),
+    )
+    if not isinstance(decision, Mapping):
+        raise ValueError("Entry sizing policy must return a mapping")
+    if "gross_scale" not in decision:
+        raise ValueError("Entry sizing policy result is missing gross_scale")
+    multipliers = decision.get("trade_multipliers")
+    if not isinstance(multipliers, Mapping):
+        raise ValueError(
+            "Entry sizing policy result must contain trade_multipliers"
+        )
+
+    expected_ids = set(trade_ids)
+    supplied_ids = set(multipliers)
+    if supplied_ids != expected_ids:
+        missing = sorted(str(value) for value in expected_ids - supplied_ids)
+        extra = sorted(str(value) for value in supplied_ids - expected_ids)
+        details = []
+        if missing:
+            details.append("missing=" + ",".join(missing))
+        if extra:
+            details.append("extra=" + ",".join(extra))
+        raise ValueError(
+            "Entry sizing policy trade_multipliers must match the exact "
+            "cohort trade IDs"
+            + (": " + "; ".join(details) if details else "")
+        )
+
+    gross_scale = _entry_policy_scale(
+        decision["gross_scale"],
+        "gross_scale",
+    )
+    validated_multipliers = {
+        trade_id: _entry_policy_scale(
+            multipliers[trade_id],
+            f"trade multiplier for {trade_id}",
+        )
+        for trade_id in trade_ids
+    }
+    return gross_scale, validated_multipliers
+
+
+def _apply_entry_sizing_policy(
+    cohort,
+    entry_sizing_policy,
+    portfolio_state,
+):
+    if not cohort:
+        return
+    gross_scale, multipliers = _entry_policy_decision(
+        cohort,
+        entry_sizing_policy,
+        portfolio_state,
+    )
+    for trade in cohort:
+        base_weight = float(trade.get("base_requested_weight", 0.0))
+        multiplier = multipliers[trade["trade_id"]]
+        trade["policy_gross_scale"] = gross_scale
+        trade["policy_trade_multiplier"] = multiplier
+        trade["requested_weight"] = base_weight * gross_scale * multiplier
+
+
+def _portfolio_state_snapshot(asof_date, nav, cash, exposure, active_positions):
+    if nav > 0:
+        long_ratio = float(exposure["long"]) / float(nav)
+        short_ratio = float(exposure["short"]) / float(nav)
+        gross_ratio = float(exposure["gross"]) / float(nav)
+        net_ratio = (
+            float(exposure["long"]) - float(exposure["short"])
+        ) / float(nav)
+    else:
+        long_ratio = short_ratio = gross_ratio = net_ratio = None
+    return {
+        "asof_date": (
+            None
+            if asof_date is None
+            else pd.Timestamp(asof_date).date().isoformat()
+        ),
+        "nav": float(nav),
+        "cash": float(cash),
+        "long_fraction": long_ratio,
+        "short_fraction": short_ratio,
+        "gross_fraction": gross_ratio,
+        "net_fraction": net_ratio,
+        "active_positions": int(active_positions),
+    }
+
+
 def simulate_portfolio(
     trades,
     start_date,
@@ -230,12 +372,18 @@ def simulate_portfolio(
     price_loader=core_market_data_store.get_price_data,
     policy=None,
     calendar=None,
+    entry_sizing_policy=None,
 ):
     """Replay completed trades through a non-rebalancing portfolio ledger.
 
     Entries are sized together at the open. Exit proceeds dated on the same
     day are processed only after new-open sizing, so an intraday exit cannot be
     anticipated and reused at that morning's open.
+
+    ``entry_sizing_policy`` is called once per entry cohort with keyword-only
+    ``signals`` (a signal-time allowlist) and ``portfolio_state`` (the previous
+    ledger close). It must return one ``gross_scale`` and an exact
+    ``trade_multipliers`` mapping, all constrained to ``[0, 1]``.
     """
     policy = policy or PortfolioPolicy()
     scored_trades = _annotate_scores(
@@ -255,6 +403,16 @@ def simulate_portfolio(
         trade.setdefault("trade_id", f"T{sequence:06d}")
         trade["entry_date"] = _timestamp(trade["entry_date"])
         trade["_events"] = _trade_events(trade)
+        trade["base_requested_weight"] = float(
+            trade.get("requested_weight", 0.0)
+        )
+        trade["policy_gross_scale"] = 1.0
+        trade["policy_trade_multiplier"] = 1.0
+    trade_ids = [trade["trade_id"] for trade in scored_trades]
+    if len(set(trade_ids)) != len(trade_ids):
+        raise ValueError(
+            "Portfolio ledger requires globally unique trade IDs"
+        )
 
     frames = _price_frames(scored_trades, price_loader)
     dates = _calendar(frames, start_date, end_date, supplied=calendar)
@@ -274,6 +432,13 @@ def simulate_portfolio(
     daily_rows = []
     allocation_by_id = {}
     realized_pnl_by_trade = defaultdict(float)
+    prior_close_state = _portfolio_state_snapshot(
+        None,
+        policy.initial_nav,
+        cash,
+        {"long": 0.0, "short": 0.0, "gross": 0.0},
+        0,
+    )
 
     for date in dates:
         existing_marks = _mark_map(open_lots, open_marks, date) if open_lots else {}
@@ -290,6 +455,11 @@ def simulate_portfolio(
         cohort = sorted(
             entries_by_date.get(date, []),
             key=lambda item: (str(item.get("strategy") or ""), item["ticker"]),
+        )
+        _apply_entry_sizing_policy(
+            cohort,
+            entry_sizing_policy,
+            prior_close_state,
         )
         prepared = []
         requested_legs = []
@@ -476,6 +646,13 @@ def simulate_portfolio(
                 "active_positions": len(active_trade_ids),
                 "active_security_lots": len(open_lots),
             }
+        )
+        prior_close_state = _portfolio_state_snapshot(
+            date,
+            nav,
+            cash,
+            exposure,
+            len(active_trade_ids),
         )
         previous_nav = nav
 

@@ -109,17 +109,37 @@ class ValueReversionEngineTests(unittest.TestCase):
         )
 
     def test_b_exit_scales_at_half_sigma_then_mean(self):
+        frame = _long_reversion_frame()
         avg_return, win_rate, count, _, details = (
             strategy_price_liquidity_reversion.run_reversion_backtest(
-                "TEST", "LONG", df=_long_reversion_frame(), include_trades=True
+                "TEST", "LONG", df=frame, include_trades=True
             )
         )
         self.assertEqual((count, win_rate), (1, 100.0))
         self.assertAlmostEqual(avg_return, 9.31, places=2)
+        self.assertLess(
+            details[0]["signal_date"], details[0]["entry_date"]
+        )
         self.assertEqual(details[0]["entry_date"], "2025-04-04")
         self.assertEqual(details[0]["entry_price"], 102.0)
         self.assertEqual(len(details[0]["exit_events"]), 2)
         self.assertEqual(details[0]["exit_events"][1]["reason"], "mean reversion")
+
+        cutoff = frame.index[-1]
+        future = frame.iloc[[-1]].copy()
+        future.index = [cutoff + pd.offsets.BDay(1)]
+        future.loc[:, ["Open", "High", "Low", "Close"]] = 999.0
+        extended = pd.concat([frame, future])
+        cutoff_result = (
+            strategy_price_liquidity_reversion.run_reversion_backtest(
+                "TEST",
+                "LONG",
+                df=extended,
+                include_trades=True,
+                evaluation_end=cutoff,
+            )
+        )
+        self.assertEqual(cutoff_result[4], details)
 
     def test_open_position_is_marked_at_evaluation_close(self):
         frame = _long_reversion_frame().iloc[:68]

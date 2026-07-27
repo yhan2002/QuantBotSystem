@@ -405,6 +405,50 @@ class PortfolioPerformanceTests(unittest.TestCase):
             )
         )
 
+    def test_score_weighted_performance_passes_entry_sizing_policy(self):
+        frames = {
+            "AAA": _frame([100.0, 110.0, 121.0]),
+            "ACWI": _frame([100.0, 100.0, 100.0]),
+        }
+        trades = [{
+            "ticker": "AAA",
+            "side": "LONG",
+            "entry_date": "2025-01-02",
+            "entry_price": 100.0,
+            "signal_score": 1.0,
+            "return": 21.0,
+            "exit_date": "2025-01-03",
+            "exit_price": 121.0,
+        }]
+        calls = []
+
+        def half_sizing(*, signals, portfolio_state):
+            calls.append((signals, portfolio_state))
+            return {
+                "gross_scale": 0.5,
+                "trade_multipliers": {
+                    signal["trade_id"]: 1.0 for signal in signals
+                },
+            }
+
+        result = (
+            core_portfolio_performance.calculate_score_weighted_performance(
+                trades,
+                ["AAA"],
+                "2025-01-02",
+                "2025-01-03",
+                price_loader=_loader(frames),
+                entry_sizing_policy=half_sizing,
+            )
+        )
+
+        self.assertEqual(len(calls), 1)
+        allocation = result["ledger"]["trades"][0]
+        self.assertAlmostEqual(allocation["base_requested_weight"], 0.05)
+        self.assertAlmostEqual(allocation["requested_weight"], 0.025)
+        self.assertAlmostEqual(allocation["entry_weight_pct"], 2.5)
+        self.assertAlmostEqual(result["strategy"]["roi_pct"], 0.525)
+
     def test_universe_result_adds_trade_stats_and_target_decision(self):
         universe_result = {
             "period": "2025-01-02 to 2025-01-03",

@@ -247,10 +247,26 @@ class BoxRangeV2Tests(unittest.TestCase):
         self.assertEqual(win_rate, 100.0)
         self.assertEqual(details[0]["side"], "LONG")
         self.assertEqual(details[0]["setup"], "RANGE_RECLAIM")
+        self.assertLess(
+            details[0]["signal_date"], details[0]["entry_date"]
+        )
         self.assertEqual(len(details[0]["exit_events"]), 2)
         self.assertTrue(
             all(event["date"] for event in details[0]["exit_events"])
         )
+
+        cutoff = frame.index[-1]
+        future = frame.iloc[[-1]].copy()
+        future.index = [cutoff + pd.offsets.BDay(1)]
+        future.loc[:, ["Open", "High", "Low", "Close"]] = 999.0
+        extended = pd.concat([frame, future])
+        cutoff_result = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=extended,
+            include_trades=True,
+            evaluation_end=cutoff,
+        )
+        self.assertEqual(cutoff_result[4], details)
 
     def test_open_position_is_marked_at_evaluation_close(self):
         frame, _ = _append_signal_and_targets(
@@ -287,6 +303,9 @@ class BoxRangeV2Tests(unittest.TestCase):
         self.assertEqual(win_rate, 100.0)
         self.assertEqual(details[0]["side"], "SHORT")
         self.assertEqual(details[0]["setup"], "RANGE_RECLAIM")
+        self.assertLess(
+            details[0]["signal_date"], details[0]["entry_date"]
+        )
         self.assertEqual(len(details[0]["exit_events"]), 2)
 
     def test_side_filters_exclude_opposite_direction(self):
