@@ -397,6 +397,7 @@ def scan_value_reversion(
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
+    report_artifacts=None,
 ):
     scored, failed = [], []
     raw_scores = {}
@@ -519,7 +520,7 @@ def scan_value_reversion(
         "**SHORT Candidates**\n"
         "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
-        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit', strategy_key='price_liquidity_reversion')}"
+        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit', strategy_key='price_liquidity_reversion', report_artifacts=report_artifacts)}"
     )
     if failed:
         msg += "\n----------------------------------------\nInsufficient local data: " + ", ".join(sorted(failed))

@@ -399,6 +399,7 @@ def scan_ma_cross(
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
+    report_artifacts=None,
 ):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
@@ -560,6 +561,7 @@ def scan_ma_cross(
             f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
         ),
         strategy_key="ma_momentum",
+        report_artifacts=report_artifacts,
     )
 
     msg = (

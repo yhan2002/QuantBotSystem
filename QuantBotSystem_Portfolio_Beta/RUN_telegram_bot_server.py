@@ -1,6 +1,8 @@
 ﻿# File name: telegram_bot_server.py
 # Routes Telegram button events and user text input to feature modules.
+import io
 import os
+import tempfile
 import time
 
 import telebot
@@ -13,6 +15,7 @@ import app_runtime_lock
 import app_scan_jobs
 import core_market_data_store
 import core_portfolio_performance
+import core_universe_backtest
 from app_bot_reports import (
     quick_report,
     run_compiled_scan,
@@ -61,6 +64,7 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 HEAVY_JOB_KEY = "HEAVY_OPERATION"
+BACKTEST_EXPORT_JOB_KEY = "BACKTEST_EXPORT"
 
 STAGE_RANGES = {
     "DATA_DOWNLOAD": (1.0, 10.0, "신규 종목 데이터 다운로드"),
@@ -191,6 +195,7 @@ def submit_background_operation(
     runner,
     on_result,
     error_markup=None,
+    job_key=HEAVY_JOB_KEY,
 ):
     def on_progress(snapshot):
         _edit_job_progress(chat_id, message_id, snapshot)
@@ -217,7 +222,7 @@ def submit_background_operation(
 
     submission = app_scan_jobs.submit_job(
         chat_id,
-        HEAVY_JOB_KEY,
+        job_key,
         runner,
         task_type=task_type,
         label=label,
@@ -377,6 +382,48 @@ def send_long_message(chat_id, text, first_message_id=None, markup=None):
     for idx, chunk in enumerate(chunks):
         chunk_markup = markup if idx == len(chunks) - 1 else None
         bot.send_message(chat_id, chunk, parse_mode="Markdown", reply_markup=chunk_markup)
+
+
+def _has_backtest_export(payload):
+    return bool(
+        payload
+        and (payload.get("export_spec") or payload.get("export_path"))
+    )
+
+
+def prepare_backtest_export(payload):
+    """Build one self-contained document payload outside Telegram callbacks."""
+    export_spec = payload.get("export_spec")
+    if export_spec:
+        with tempfile.TemporaryDirectory(prefix="quantbot_export_") as directory:
+            export_path = core_universe_backtest.materialize_backtest_export(
+                export_spec,
+                directory,
+            )
+            with open(export_path, "rb") as export_file:
+                return os.path.basename(export_path), export_file.read()
+
+    export_path = payload.get("export_path")
+    if not export_path or not os.path.isfile(export_path):
+        raise FileNotFoundError("Backtest export is no longer available")
+    with open(export_path, "rb") as export_file:
+        return os.path.basename(export_path), export_file.read()
+
+
+def send_prepared_backtest_export(chat_id, prepared_export):
+    caption = (
+        "Full-universe backtest export "
+        "(trades, portfolio ledger, daily NAV, and benchmark)"
+    )
+    filename, document_bytes = prepared_export
+    with io.BytesIO(document_bytes) as export_file:
+        export_file.name = filename
+        bot.send_document(chat_id, export_file, caption=caption)
+
+
+def send_backtest_export(chat_id, payload):
+    """Compatibility helper for direct, explicit export delivery."""
+    send_prepared_backtest_export(chat_id, prepare_backtest_export(payload))
 
 
 @bot.message_handler(commands=["menu", "start"])
@@ -599,13 +646,15 @@ def handle_menu_callbacks(call):
 
             def deliver_scan(result):
                 report, report_id = result
+                payload = get_backtest_report(session, report_id)
                 send_long_message(
                     chat_id,
                     report,
                     first_message_id=call.message.message_id,
                     markup=build_scan_result_markup(
-                        has_detail=bool(report_id),
+                        has_detail=bool(payload and payload.get("detail")),
                         report_id=report_id,
+                        has_export=_has_backtest_export(payload),
                     ),
                 )
 
@@ -629,7 +678,7 @@ def handle_menu_callbacks(call):
         elif data == "scan_detail" or data.startswith("scan_detail:"):
             report_id = data.partition(":")[2] or None
             payload = get_backtest_report(session, report_id)
-            if not payload:
+            if not payload or not payload.get("detail"):
                 bot.answer_callback_query(
                     call.id,
                     "This detail has expired. Run the scan again.",
@@ -637,23 +686,75 @@ def handle_menu_callbacks(call):
                 )
                 return
             detail = payload["detail"]
-            csv_path = payload.get("export_path")
-            bot.answer_callback_query(call.id, "Sending backtest detail and export.")
+            bot.answer_callback_query(call.id, "Sending backtest detail.")
             send_long_message(
                 chat_id,
                 detail,
-                markup=build_back_home_markup(),
+                markup=build_scan_result_markup(
+                    has_detail=False,
+                    report_id=report_id,
+                    has_export=_has_backtest_export(payload),
+                ),
             )
-            if csv_path and os.path.isfile(csv_path):
-                with open(csv_path, "rb") as csv_file:
-                    bot.send_document(
-                        chat_id,
-                        csv_file,
-                        caption=(
-                            "Full-universe backtest export "
-                            "(trades, portfolio ledger, and daily NAV)"
-                        ),
-                    )
+
+        elif data == "scan_export" or data.startswith("scan_export:"):
+            report_id = data.partition(":")[2] or None
+            payload = get_backtest_report(session, report_id)
+            if not payload or not _has_backtest_export(payload):
+                bot.answer_callback_query(
+                    call.id,
+                    "This export has expired. Run the scan again.",
+                    show_alert=True,
+                )
+                return
+            progress_message = bot.send_message(
+                chat_id,
+                "Backtest Export\n\n대기 중...",
+            )
+
+            def export_runner(progress, cancel_event):
+                if cancel_event.is_set():
+                    raise app_scan_jobs.JobCancelled()
+                progress(10, "내보내기 파일 생성")
+                prepared_export = prepare_backtest_export(payload)
+                if cancel_event.is_set():
+                    raise app_scan_jobs.JobCancelled()
+                progress(95, "Telegram 전송 준비")
+                return prepared_export
+
+            def deliver_export(prepared_export):
+                send_prepared_backtest_export(chat_id, prepared_export)
+                bot.edit_message_text(
+                    "Backtest export sent.",
+                    chat_id,
+                    progress_message.message_id,
+                    reply_markup=build_back_home_markup(),
+                )
+
+            submission = submit_background_operation(
+                chat_id,
+                progress_message.message_id,
+                label="Backtest Export",
+                task_type="BACKTEST_EXPORT",
+                runner=export_runner,
+                on_result=deliver_export,
+                error_markup=build_back_home_markup(),
+                job_key=BACKTEST_EXPORT_JOB_KEY,
+            )
+            if submission.created:
+                bot.answer_callback_query(call.id, "Preparing backtest export.")
+            else:
+                bot.answer_callback_query(
+                    call.id,
+                    "Another export is already being prepared.",
+                    show_alert=True,
+                )
+                bot.edit_message_text(
+                    "Another backtest export is already being prepared.",
+                    chat_id,
+                    progress_message.message_id,
+                    reply_markup=build_back_home_markup(),
+                )
 
         elif data in {"admin_backfill_all_confirm", "admin_preload_all"}:
             all_tickers = sorted(set(config.universe))

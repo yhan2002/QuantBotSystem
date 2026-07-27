@@ -32,7 +32,8 @@ This version adds:
 | Python code | Separate version folders |
 | Telegram credentials | Read from ignored local config |
 | Market OHLCV and metadata | Shared existing Beta SQLite path |
-| Backtest exports | Separate folder under Portfolio Beta |
+| Telegram backtest exports | Compressed immutable snapshots; on-demand background temp files removed after send |
+| Manual/research exports | Separate folder under Portfolio Beta |
 | Portfolio ledger and logs | Separate folder under Portfolio Beta |
 | Telegram in-memory sessions | Separate per running process |
 
@@ -43,7 +44,8 @@ stop-then-start, not hot reload.
 The Portfolio process serializes scans, quick checks, scheduled refreshes, and
 Admin data mutations through one re-entrant operation lock. Each completed
 manual scan stores an immutable report id, so an older See Detail button
-cannot be redirected to a newer scan.
+cannot be redirected to a newer scan. Per-chat export snapshots are retained
+for at most 24 hours, eight results, and a 32 MB soft cap.
 
 Interactive scans for Momentum, Box Range, and Reversion, plus Admin
 price/backfill/metadata downloads, run through one process-local
@@ -132,8 +134,9 @@ Portfolio reports expose:
 - daily NAV, cash, gross, net, long, short, and active positions;
 - Box FLAT/TREND attribution;
 - portfolio ROI, CAGR, MDD, and Sharpe;
-- ACWI adjusted-price boundary ROI as the primary market benchmark and
-  PASS/FAIL input;
+- iShares `ACWI` ETF adjusted-price boundary ROI as the primary market benchmark and
+  PASS/FAIL input: strategy ROI must strictly exceed a positive same-window
+  ACWI ROI, and equality is `FAIL`;
 - daily equal-weight selected-universe ROI as the secondary stock-selection
   diagnostic.
 
@@ -145,10 +148,12 @@ Universe EW ROI: ... | Stock-selection excess: ...%p
 ```
 
 ACWI ROI uses the last valid adjusted price before the evaluation window and
-the last valid adjusted price through its end. It does not substitute Universe
-EW when ACWI data is absent; the report then shows `N/A` and the target status
-is `REVIEW`. ACWI MDD, Sharpe, and a daily curve are exposed only when complete
-daily prices are available.
+the last valid adjusted price through its end. Strategy and Universe EW metrics
+are truncated to that same latest ACWI trading date. It does not substitute Universe
+EW when ACWI data is absent. Missing or nonpositive ACWI ROI produces
+`REVIEW`; ACWI MDD, Sharpe, and a daily curve are exposed only when complete
+daily prices are available. Win rate, CAGR, MDD, and Sharpe remain diagnostics
+and do not change the ROI PASS/FAIL result.
 
 `Admin -> Refresh Benchmark` downloads the full fixed-start ACWI history from a
 pre-IS seed through the latest available date so historical `Adj Close`

@@ -184,13 +184,24 @@ def build_position_mode_markup(chat_id):
     return markup
 
 
-def build_scan_result_markup(has_detail=False, report_id=None):
+def build_scan_result_markup(
+    has_detail=False,
+    report_id=None,
+    has_export=False,
+):
     markup = InlineKeyboardMarkup()
     if has_detail:
         callback = (
             f"scan_detail:{report_id}" if report_id else "scan_detail"
         )
         markup.row(InlineKeyboardButton("See Detail", callback_data=callback))
+    if has_export:
+        callback = (
+            f"scan_export:{report_id}" if report_id else "scan_export"
+        )
+        markup.row(
+            InlineKeyboardButton("Download Export", callback_data=callback)
+        )
     markup.row(InlineKeyboardButton("Back to Menu", callback_data="go_home"))
     return markup
 

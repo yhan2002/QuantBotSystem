@@ -1,5 +1,6 @@
 import threading
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +9,173 @@ import app_daily_market_scheduler
 
 
 class TelegramServerRuntimeSafetyTests(unittest.TestCase):
+    def test_see_detail_sends_text_without_downloading_export(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="scan_detail:report123",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        payload = {
+            "detail": "detail text",
+            "export_path": None,
+            "export_spec": {"version": 1},
+        }
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value={},
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_backtest_report",
+            return_value=payload,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "send_long_message",
+        ) as send_text, patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer, patch.object(
+            RUN_telegram_bot_server.bot,
+            "send_document",
+        ) as send_document:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        answer.assert_called_once_with(
+            "callback-id",
+            "Sending backtest detail.",
+        )
+        send_text.assert_called_once()
+        self.assertEqual("detail text", send_text.call_args.args[1])
+        send_document.assert_not_called()
+
+    def test_export_only_payload_does_not_send_empty_detail(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="scan_detail:report123",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        payload = {
+            "detail": None,
+            "export_path": None,
+            "export_spec": {"version": 1},
+        }
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value={},
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_backtest_report",
+            return_value=payload,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "send_long_message",
+        ) as send_text, patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        send_text.assert_not_called()
+        answer.assert_called_once_with(
+            "callback-id",
+            "This detail has expired. Run the scan again.",
+            show_alert=True,
+        )
+
+    def test_explicit_export_callback_is_submitted_to_background_worker(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="scan_export:report123",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        payload = {
+            "detail": "detail",
+            "export_path": None,
+            "export_spec": {"version": 1},
+        }
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value={},
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_backtest_report",
+            return_value=payload,
+        ), patch.object(
+            RUN_telegram_bot_server.bot,
+            "send_message",
+            return_value=SimpleNamespace(message_id=789),
+        ), patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer, patch.object(
+            RUN_telegram_bot_server,
+            "submit_background_operation",
+            return_value=SimpleNamespace(created=True),
+        ) as submit, patch.object(
+            RUN_telegram_bot_server,
+            "prepare_backtest_export",
+        ) as prepare:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        submit.assert_called_once()
+        prepare.assert_not_called()
+        answer.assert_called_once_with(
+            "callback-id",
+            "Preparing backtest export.",
+        )
+
+    def test_explicit_export_uses_and_removes_temporary_directory(self):
+        captured = {}
+
+        def materialize(_spec, directory):
+            captured["directory"] = directory
+            path = Path(directory) / "test_bundle.zip"
+            path.write_bytes(b"zip")
+            return path
+
+        with patch.object(
+            RUN_telegram_bot_server.core_universe_backtest,
+            "materialize_backtest_export",
+            side_effect=materialize,
+        ) as materializer, patch.object(
+            RUN_telegram_bot_server.bot,
+            "send_document",
+        ) as send_document:
+            RUN_telegram_bot_server.send_backtest_export(
+                "123",
+                {"export_spec": {"version": 1}},
+            )
+
+        materializer.assert_called_once()
+        send_document.assert_called_once()
+        self.assertFalse(Path(captured["directory"]).exists())
+
     def test_progress_text_matches_strategy_loading_layout(self):
         snapshot = SimpleNamespace(
             label="Momentum Scan",

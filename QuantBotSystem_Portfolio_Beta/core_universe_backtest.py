@@ -1,6 +1,7 @@
 # File name: universe_backtest.py
 # Shared trade-level aggregation for full-universe strategy backtests.
 import csv
+import copy
 from datetime import datetime
 import json
 import zipfile
@@ -451,7 +452,13 @@ def _trade_line(trade):
     )
 
 
-def export_trade_events_csv(selection_result, oos_result, strategy_key, output_dir=None):
+def export_trade_events_csv(
+    selection_result,
+    oos_result,
+    strategy_key,
+    output_dir=None,
+    metadata_by_ticker=None,
+):
     """Write one normalized row per trade exit so partial exits remain analyzable."""
     safe_key = "".join(char if char.isalnum() or char in "_-" else "_" for char in strategy_key)
     directory = (
@@ -482,7 +489,10 @@ def export_trade_events_csv(selection_result, oos_result, strategy_key, output_d
         for trade in result["trades"]
         if trade.get("ticker")
     }
-    metadata_by_ticker = core_market_data_store.get_security_metadata(export_tickers)
+    if metadata_by_ticker is None:
+        metadata_by_ticker = core_market_data_store.get_security_metadata(
+            export_tickers
+        )
 
     with path.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
@@ -575,6 +585,7 @@ def export_portfolio_bundle(
     oos_result,
     strategy_key,
     output_dir=None,
+    metadata_by_ticker=None,
 ):
     """Export trades, per-leg ledger events, and daily NAV in one ZIP."""
     directory = (
@@ -593,6 +604,7 @@ def export_portfolio_bundle(
         oos_result,
         strategy_key,
         output_dir=directory,
+        metadata_by_ticker=metadata_by_ticker,
     )
     daily_path = directory / f"{safe_key}_{stamp}_portfolio_daily.csv"
     event_path = directory / f"{safe_key}_{stamp}_ledger_events.csv"
@@ -699,6 +711,93 @@ def export_portfolio_bundle(
     return bundle_path
 
 
+def _snapshot_export_result(result):
+    """Keep only the immutable fields required to build a later export."""
+    snapshot = {
+        "period": result.get("period", "N/A"),
+        "trades": copy.deepcopy(result.get("trades") or []),
+    }
+    performance = result.get("portfolio_performance")
+    if not performance:
+        return snapshot
+
+    performance_snapshot = {
+        key: copy.deepcopy(value)
+        for key, value in performance.items()
+        if key not in {"daily", "ledger"}
+    }
+    daily = performance.get("daily")
+    performance_snapshot["daily"] = (
+        daily.copy(deep=True)
+        if isinstance(daily, pd.DataFrame)
+        else pd.DataFrame()
+    )
+    ledger = performance.get("ledger") or {}
+    performance_snapshot["ledger"] = {
+        "events": copy.deepcopy(ledger.get("events") or []),
+    }
+    snapshot["portfolio_performance"] = performance_snapshot
+    return snapshot
+
+
+def build_backtest_export_spec(
+    selection_result,
+    oos_result,
+    strategy_key,
+):
+    """Capture one scan's export inputs without writing a file."""
+    selection_snapshot = _snapshot_export_result(selection_result)
+    oos_snapshot = _snapshot_export_result(oos_result)
+    export_tickers = {
+        trade.get("ticker")
+        for result in (selection_snapshot, oos_snapshot)
+        for trade in result["trades"]
+        if trade.get("ticker")
+    }
+    return {
+        "version": 1,
+        "strategy_key": str(strategy_key),
+        "selection_result": selection_snapshot,
+        "oos_result": oos_snapshot,
+        "metadata_by_ticker": copy.deepcopy(
+            core_market_data_store.get_security_metadata(export_tickers)
+        ),
+        "portfolio_bundle": any(
+            result.get("portfolio_performance")
+            for result in (selection_snapshot, oos_snapshot)
+        ),
+    }
+
+
+def materialize_backtest_export(export_spec, output_dir):
+    """Create an export only after the user explicitly requests it."""
+    if not isinstance(export_spec, dict) or export_spec.get("version") != 1:
+        raise ValueError("Unsupported backtest export specification")
+    strategy_key = export_spec.get("strategy_key")
+    selection_result = export_spec.get("selection_result")
+    oos_result = export_spec.get("oos_result")
+    if not strategy_key or not selection_result or not oos_result:
+        raise ValueError("Incomplete backtest export specification")
+
+    export_kwargs = {
+        "output_dir": output_dir,
+        "metadata_by_ticker": export_spec.get("metadata_by_ticker") or {},
+    }
+    if export_spec.get("portfolio_bundle"):
+        return export_portfolio_bundle(
+            selection_result,
+            oos_result,
+            strategy_key,
+            **export_kwargs,
+        )
+    return export_trade_events_csv(
+        selection_result,
+        oos_result,
+        strategy_key,
+        **export_kwargs,
+    )
+
+
 def format_universe_backtest(result, entry_text, exit_text):
     report = "\n\nBacktest Summary - Full Universe (1Y)\n"
     report += "-----------------------------------------\n"
@@ -749,6 +848,7 @@ def format_fixed_is_oos_backtest(
     entry_text,
     exit_text,
     strategy_key=None,
+    report_artifacts=None,
 ):
     """Format fixed 2024-25 selection evidence and 2026 OOS results together."""
     def result_line(result, include_period=True, separate_all=False):
@@ -774,7 +874,10 @@ def format_fixed_is_oos_backtest(
         for result in (selection_result, oos_result)
     ):
         report += "CAGR: annualized from daily portfolio NAV using 252 trading days.\n"
-    report += "Use See Detail for LONG/SHORT statistics and the backtest export.\n"
+    report += (
+        "Use See Detail for LONG/SHORT statistics. "
+        "Use Download Export for analysis files.\n"
+    )
     report += "-----------------------------------------\n"
 
     detail = "**Backtest Detail - Fixed IS/OOS**\n"
@@ -800,32 +903,18 @@ def format_fixed_is_oos_backtest(
             detail += line + "\n"
         detail += f"Closed trades: {result['all']['count']}\n"
     detail += (
-        "\nSee Detail also sends an analysis-ready export. Portfolio-accounted "
-        "runs include trade events, per-leg ledger events, daily NAV, and "
-        "benchmark boundary levels in a ZIP.\n"
+        "\nDownload Export creates an analysis-ready file only when requested. "
+        "Portfolio-accounted runs include trade events, per-leg ledger events, "
+        "daily NAV, and benchmark boundary levels in a ZIP.\n"
     )
     detail += "-----------------------------------------\n"
-    csv_path = None
-    if strategy_key:
-        has_portfolio = any(
-            result.get("portfolio_performance")
-            for result in (selection_result, oos_result)
+    if strategy_key and report_artifacts is not None:
+        report_artifacts["backtest_export"] = build_backtest_export_spec(
+            selection_result,
+            oos_result,
+            strategy_key,
         )
-        csv_path = (
-            export_portfolio_bundle(
-                selection_result,
-                oos_result,
-                strategy_key,
-            )
-            if has_portfolio
-            else export_trade_events_csv(
-                selection_result,
-                oos_result,
-                strategy_key,
-            )
-        )
-    payload = report + DETAIL_MARKER + detail
-    return payload + (CSV_MARKER + str(csv_path) if csv_path else "")
+    return report + DETAIL_MARKER + detail
 
 
 def split_summary_detail(report):

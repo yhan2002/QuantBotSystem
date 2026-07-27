@@ -101,8 +101,29 @@ class BotUiTests(unittest.TestCase):
         markup = app_bot_ui.build_scan_result_markup(
             has_detail=True,
             report_id="abc123",
+            has_export=True,
         )
-        self.assertIn("scan_detail:abc123", _callback_data(markup))
+        self.assertEqual(
+            _callback_data(markup),
+            ["scan_detail:abc123", "scan_export:abc123", "go_home"],
+        )
+        self.assertIn("Download Export", _button_texts(markup))
+
+    def test_export_button_does_not_require_detail_button(self):
+        markup = app_bot_ui.build_scan_result_markup(
+            has_detail=False,
+            report_id="export123",
+            has_export=True,
+        )
+
+        self.assertEqual(
+            _button_texts(markup),
+            ["Download Export", "Back to Menu"],
+        )
+        self.assertEqual(
+            _callback_data(markup),
+            ["scan_export:export123", "go_home"],
+        )
 
 
 if __name__ == "__main__":

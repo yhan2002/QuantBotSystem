@@ -12,7 +12,7 @@
 - Keep changes small. Read relevant files before editing.
 - For Python, run focused `unittest` and `py_compile`; do not run long backtests, downloads, or bot delivery without request.
 - Signals use information available at the close and may enter no earlier than the next open. Do not introduce lookahead.
-- Developer performance reports use 1Y cumulative portfolio ROI versus 2x the positive ACWI adjusted-price ROI as the primary PASS/FAIL criterion. Universe EW is a secondary stock-selection diagnostic, and the 58% win-rate goal is not a hard gate. Missing ACWI boundary levels produce `REVIEW`.
+- Developer performance reports require 1Y cumulative portfolio ROI to strictly exceed the positive same-window iShares `ACWI` ETF adjusted-price ROI as the primary PASS/FAIL criterion; equality is `FAIL`. Universe EW is a secondary stock-selection diagnostic, and the 58% win-rate goal is not a hard gate. Missing or nonpositive ACWI ROI produces `REVIEW`.
 
 ## Data and Git
 

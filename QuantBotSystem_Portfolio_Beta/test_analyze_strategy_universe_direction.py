@@ -64,15 +64,15 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
         self.assertEqual(result["period"], "2026-01-01 to 2026-07-17")
 
     def test_target_status_requires_sample_and_roi_while_win_is_secondary(self):
-        passed = subject.target_status(40, 50.0, 22.0, 10.0)
+        passed = subject.target_status(40, 50.0, 10.01, 10.0)
         self.assertEqual(passed["status"], "PASS")
-        self.assertTrue(passed["passes_2x_acwi_roi"])
-        self.assertTrue(passed["passes_2x_benchmark_roi"])
+        self.assertTrue(passed["passes_acwi_roi"])
+        self.assertTrue(passed["passes_benchmark_roi"])
         self.assertFalse(passed["passes_58pct_win_rate"])
 
-        roi_missed = subject.target_status(40, 70.0, 19.0, 10.0)
+        roi_missed = subject.target_status(40, 70.0, 10.0, 10.0)
         self.assertEqual(roi_missed["status"], "FAIL")
-        self.assertFalse(roi_missed["passes_2x_benchmark_roi"])
+        self.assertFalse(roi_missed["passes_acwi_roi"])
         self.assertTrue(roi_missed["passes_58pct_win_rate"])
 
         low_sample = subject.target_status(29, 70.0, 30.0, 10.0)
@@ -80,30 +80,33 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
 
         negative_benchmark = subject.target_status(40, 70.0, 5.0, -2.0)
         self.assertEqual(negative_benchmark["status"], "REVIEW")
-        self.assertIsNone(negative_benchmark["passes_2x_benchmark_roi"])
+        self.assertIsNone(negative_benchmark["passes_benchmark_roi"])
 
-    def test_target_status_uses_acwi_but_retains_legacy_universe_ew_flag(self):
+        nonpositive_low_sample = subject.target_status(1, 70.0, 5.0, 0.0)
+        self.assertEqual(nonpositive_low_sample["status"], "REVIEW")
+
+    def test_target_status_uses_acwi_and_keeps_universe_ew_diagnostic_only(self):
         target = subject.target_status(
             40,
             50.0,
-            22.0,
+            11.0,
             10.0,
             universe_ew_roi_pct=12.0,
         )
         self.assertEqual(target["status"], "PASS")
-        self.assertTrue(target["passes_2x_acwi_roi"])
-        self.assertFalse(target["passes_2x_benchmark_roi"])
+        self.assertTrue(target["passes_acwi_roi"])
+        self.assertTrue(target["passes_benchmark_roi"])
 
         missing_acwi = subject.target_status(
             10,
             70.0,
-            22.0,
+            11.0,
             None,
             universe_ew_roi_pct=10.0,
         )
         self.assertEqual(missing_acwi["status"], "REVIEW")
-        self.assertIsNone(missing_acwi["passes_2x_acwi_roi"])
-        self.assertTrue(missing_acwi["passes_2x_benchmark_roi"])
+        self.assertIsNone(missing_acwi["passes_acwi_roi"])
+        self.assertIsNone(missing_acwi["passes_benchmark_roi"])
 
     def test_performance_row_maps_acwi_and_universe_ew_contract(self):
         index = pd.DatetimeIndex(["2026-01-02"])
@@ -128,7 +131,7 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
         performance = {
             "daily": daily,
             "strategy": {
-                "roi_pct": 22.0,
+                "roi_pct": 11.0,
                 "cagr_pct": 20.0,
                 "mdd_pct": -5.0,
                 "sharpe": 1.2,
@@ -148,10 +151,10 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
             "market_benchmark_available": True,
             "market_benchmark_unavailable_reason": "",
             "market_benchmark_coverage_pct": 100.0,
-            "market_benchmark_multiple": 2.2,
-            "market_excess_roi_pct": 12.0,
+            "market_benchmark_multiple": 1.1,
+            "market_excess_roi_pct": 1.0,
             "market_excess_cagr_pct": 11.0,
-            "stock_selection_excess_pct": 10.0,
+            "stock_selection_excess_pct": -1.0,
             "excess_cagr_pct": 9.0,
             "universe_ew_tickers": 2,
             "universe_ew_min_daily_tickers": 2,
@@ -199,9 +202,9 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
         self.assertEqual(row["benchmark_roi_pct"], 12.0)
         self.assertEqual(row["universe_ew_roi_pct"], 12.0)
         self.assertEqual(row["msci_acwi_roi_pct"], 10.0)
-        self.assertEqual(row["msci_acwi_multiple"], 2.2)
-        self.assertTrue(row["passes_2x_acwi_roi"])
-        self.assertFalse(row["passes_2x_benchmark_roi"])
+        self.assertEqual(row["msci_acwi_multiple"], 1.1)
+        self.assertTrue(row["passes_acwi_roi"])
+        self.assertTrue(row["passes_benchmark_roi"])
         self.assertEqual(row["status"], "PASS")
         self.assertEqual(rows[0]["benchmark_return_pct"], 1.5)
         self.assertEqual(rows[0]["universe_ew_return_pct"], 1.5)
@@ -368,6 +371,10 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
             metadata["benchmark_roles"]["stock_selection_diagnostic"]["label"],
             "Universe EW",
         )
+        self.assertIn("strictly greater", metadata["assumptions"]["primary_target"])
+        self.assertIn("passes_acwi_roi", subject.SUMMARY_COLUMNS)
+        self.assertIn("passes_benchmark_roi", subject.SUMMARY_COLUMNS)
+        self.assertNotIn("passes_2x_acwi_roi", subject.SUMMARY_COLUMNS)
 
 
 if __name__ == "__main__":

@@ -943,6 +943,7 @@ def scan_total_universe(
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
+    report_artifacts=None,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
     long_candidates = []
@@ -1184,6 +1185,7 @@ def scan_total_universe(
             "daily-bar convention"
         ),
         strategy_key="box_range",
+        report_artifacts=report_artifacts,
     )
     if failed_tickers:
         report += (
@@ -1199,10 +1201,12 @@ def scan_box_range(
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
+    report_artifacts=None,
 ):
     return scan_total_universe(
         universe_list,
         neutralization=neutralization,
         position_mode=position_mode,
         progress_callback=progress_callback,
+        report_artifacts=report_artifacts,
     )

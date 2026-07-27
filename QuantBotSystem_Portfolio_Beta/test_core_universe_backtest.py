@@ -404,6 +404,77 @@ class UniverseBacktestTests(unittest.TestCase):
         self.assertEqual(csv_path, "C:\\tmp\\events.csv")
         self.assertIn("footer", detail)
 
+    def test_fixed_report_defers_export_until_materialized(self):
+        stats = {
+            "count": 1,
+            "avg": 1.0,
+            "median": 1.0,
+            "win_rate": 100.0,
+            "wins": 1,
+        }
+        empty_stats = {
+            "count": 0,
+            "avg": 0.0,
+            "median": 0.0,
+            "win_rate": 0.0,
+            "wins": 0,
+        }
+        result = {
+            "period": "2026-01-02 to 2026-01-05",
+            "universe_count": 1,
+            "eligible_tickers": 1,
+            "traded_tickers": 1,
+            "trades": [{
+                "trade_id": "T000001",
+                "ticker": "AAA",
+                "side": "LONG",
+                "entry_date": "2026-01-02",
+                "entry_price": 100.0,
+                "exit_date": "2026-01-05",
+                "exit_price": 101.0,
+                "return": 1.0,
+            }],
+            "all": stats,
+            "long": stats,
+            "short": empty_stats,
+            "box_attribution": {},
+        }
+        artifacts = {}
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with mock.patch.object(
+                core_universe_backtest.core_market_data_store,
+                "get_security_metadata",
+                return_value={"AAA": {"listing_country": "US"}},
+            ), mock.patch.object(
+                core_universe_backtest,
+                "export_trade_events_csv",
+            ) as export_csv, mock.patch.object(
+                core_universe_backtest,
+                "export_portfolio_bundle",
+            ) as export_bundle:
+                payload = core_universe_backtest.format_fixed_is_oos_backtest(
+                    result,
+                    result,
+                    "entry rule",
+                    "exit rule",
+                    strategy_key="test_strategy",
+                    report_artifacts=artifacts,
+                )
+
+                self.assertNotIn(core_universe_backtest.CSV_MARKER, payload)
+                self.assertIn("backtest_export", artifacts)
+                self.assertEqual([], list(Path(temp_dir).iterdir()))
+                export_csv.assert_not_called()
+                export_bundle.assert_not_called()
+
+            path = core_universe_backtest.materialize_backtest_export(
+                artifacts["backtest_export"],
+                temp_dir,
+            )
+            self.assertTrue(Path(path).is_file())
+            self.assertEqual(".csv", Path(path).suffix)
+
     def test_market_neutralization_filters_entry_date_cross_section(self):
         def runner(ticker, include_trades=False, **_kwargs):
             score = 3.0 if ticker == "AAA" else 1.0
