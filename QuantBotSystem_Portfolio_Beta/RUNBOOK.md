@@ -103,3 +103,8 @@ the developer analysis script when a long local run is intended:
 Set-Location .\QuantBotSystem_Portfolio_Beta
 python .\analyze_strategy_universe_direction.py
 ```
+
+The independent portfolio-aware RL sizing experiment is also never started by
+the bot or scheduler. Its point-in-time contract, risk objective, limitations,
+and pilot/full commands are documented in
+`QuantBotSystem_Portfolio_Beta/PORTFOLIO_RL_OVERLAY.md`.

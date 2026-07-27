@@ -230,6 +230,7 @@ def run_reversion_backtest(
         trade_details.append(
             {
                 "side": current_position["side"],
+                "signal_date": current_position["signal_date"],
                 "entry_date": current_position["entry_date"],
                 "entry_price": current_position["entry_price"],
                 "signal_score": current_position["signal_score"],
@@ -285,6 +286,7 @@ def run_reversion_backtest(
                 "side": signal_side,
                 "entry_price": entry_price,
                 "entry_idx": entry_idx,
+                "signal_date": features.index[idx].date().isoformat(),
                 "entry_date": features.index[entry_idx].date().isoformat(),
                 "entry_execution": execution["mode"],
                 "signal_close": execution["signal_close"],

@@ -73,6 +73,10 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
             index=dates,
         )
         frame.iloc[-1, frame.columns.get_loc("Close")] = 105.0
+        future = frame.iloc[[-1]].copy()
+        future.index = [dates[-1] + pd.offsets.BDay(1)]
+        future.loc[:, ["Open", "High", "Low", "Close"]] = 999.0
+        extended = pd.concat([frame, future])
 
         def add_signals(prices, **_kwargs):
             result = prices.copy()
@@ -111,9 +115,21 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
                     include_trades=True,
                 )
             )
+            cutoff_result = strategy_ma_cross.run_isolated_backtest(
+                "TEST",
+                df=extended,
+                include_trades=True,
+                evaluation_end=dates[-1],
+            )
 
         self.assertEqual((count, win_rate), (1, 100.0))
         self.assertAlmostEqual(average, 5.0)
+        self.assertEqual(
+            details[0]["signal_date"], dates[-2].date().isoformat()
+        )
+        self.assertLess(
+            details[0]["signal_date"], details[0]["entry_date"]
+        )
         self.assertEqual(details[0]["entry_date"], dates[-1].date().isoformat())
         self.assertEqual(
             details[0]["exit_events"][0]["reason"],
@@ -123,6 +139,7 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
             details[0]["exit_date"],
             dates[-1].date().isoformat(),
         )
+        self.assertEqual(cutoff_result[4], details)
 
 
 if __name__ == "__main__":

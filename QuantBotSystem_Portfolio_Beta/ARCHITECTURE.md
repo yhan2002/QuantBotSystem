@@ -165,3 +165,17 @@ The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
 with 252 trading days. Trade-level averages remain explicitly labelled
 ``avg trade`` in LONG/SHORT and quick diagnostics and are not treated as
 portfolio returns.
+
+## Experimental entry-sizing policy hook
+
+The portfolio ledger has an optional developer-only hook immediately before a
+new entry cohort is allocated. It receives an allowlisted copy of signal-time
+fields plus the prior-close portfolio state and may return only a cohort gross
+scale and one `0..1` multiplier per exact trade id. Default `None` preserves
+the production calculation. Existing quantities, exits, signal direction, and
+all gross/side/name hard caps remain outside the hook.
+
+`portfolio_rl_overlay.py` uses this boundary for a continuous LONG/SHORT
+policy trained against exact daily portfolio NAV and ACWI-relative return with
+a baseline-CVaR constraint. It is research infrastructure only and has no
+Telegram, scheduled-scan, or deployment path.

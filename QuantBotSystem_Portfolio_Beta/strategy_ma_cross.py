@@ -275,6 +275,7 @@ def run_isolated_backtest(
                 trade_details.append(
                     {
                         "side": "LONG",
+                        "signal_date": df.index[idx].date().isoformat(),
                         "entry_date": df.index[entry_idx].date().isoformat(),
                         "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
@@ -293,6 +294,7 @@ def run_isolated_backtest(
                 trade_details.append(
                     {
                         "side": "SHORT",
+                        "signal_date": df.index[idx].date().isoformat(),
                         "entry_date": df.index[entry_idx].date().isoformat(),
                         "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
