@@ -9,7 +9,8 @@
 2. [README.md](README.md)와 [최근 변경 이력](CHANGELOG.md)을 확인한다.
 3. 아래 목차에서 현재 작업과 관련된 문서만 읽는다.
 4. 대상 코드 라인과 가까운 테스트를 확인한 뒤 최소 범위로 수정한다.
-5. 집중 검증을 실행하고 결과·미검증 범위·남은 위험을 보고한다.
+5. `python -m unittest test_architecture.py -v`와 집중 검증을 실행하고
+   결과·미검증 범위·남은 위험을 보고한다.
 
 ## 컨텍스트 목차
 
@@ -26,6 +27,8 @@
 - Classic 변경은 `QuantBotSystem_Beta/`, 포트폴리오·원장 변경은
   `QuantBotSystem_Portfolio_Beta/`에서 먼저 검증한다.
 - 사용자 변경을 보존하고 버전 폴더 사이를 무조건 덮어쓰지 않는다.
+- 모듈 계층이나 새 파일 접두사를 추가하면 `tools/check_architecture.py`의
+  분류 계약도 함께 갱신한다.
 - 신호는 종가까지의 정보만 사용하고 신규 진입은 다음 시가보다 빠를 수 없다.
 - 비밀 설정, SQLite, 캐시, 로그, 생성 CSV·JSON·Excel을 커밋하지 않는다.
 - 전체 백테스트·대량 다운로드·Telegram 발송·봇 실행은 현재 요청에서
