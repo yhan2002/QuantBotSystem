@@ -14,6 +14,7 @@
 
 - Portfolio Beta의 `See Detail`은 텍스트만 표시하고, 별도 `Download Export`를 눌렀을 때만 해당 스캔의 ZIP/CSV를 백그라운드에서 임시 생성·전송한 뒤 정리하도록 세 전략의 동작을 통일했습니다. 저장된 내보내기 스냅샷은 압축·불변화하고 24시간/채팅당 8건·32MB의 보관 한도를 적용했습니다.
 - Portfolio Beta 개발자 PASS/FAIL 기준을 기존 2배 목표에서 양의 동일구간 iShares `ACWI` ETF 조정가격 ROI를 엄격히 초과하는 기준으로 변경했습니다. 전략·Universe EW·ACWI 성과의 종료일은 최신 공통 ACWI 거래일로 자동 정렬하며, 동률은 `FAIL`, ACWI 누락·0·음수는 `REVIEW`입니다. 승률 58%와 CAGR·MDD·Sharpe는 보조 진단으로 유지합니다.
+- ACWI 공통 종료일보다 뒤에 있던 엔진 평가종료 청산이 포트폴리오 원장에서 미처리되어 Box 스캔이 실패하던 문제를 수정했습니다. 종목별 백테스트 전에 유효 ACWI 종료일을 적용하고, 직접 성과 계산 경로는 종료일 이후 잔여 포지션을 명시적 `evaluation-end mark`로 평가해 미래 청산 수익이 승률·구조별 통계에 섞이지 않도록 했습니다.
 - Portfolio Beta의 1차 벤치마크를 `ACWI`로 단순화했습니다. Admin의 `Refresh Benchmark`가 Yahoo에서 고정 IS 이전부터 최신일까지 전체 가격을 자동 갱신하며, 성과 비교에는 배당·분할을 반영한 `Adj Close`를 우선 사용합니다. 부분 응답은 기간·최신성·영업일 커버리지로 차단하고 기존 CSV·인증 URL 설정은 제거했습니다.
 - Portfolio Beta의 1차 시장 벤치마크를 exact MSCI ACWI(`MIWD00000PUS`) 경계 종가 ROI로 분리하고, Universe EW는 종목선택 초과성과 진단으로 유지했습니다. ACWI 데이터가 없으면 ETF 대체 없이 `N/A/REVIEW`로 처리하며, 로컬 Date/Close CSV 원자적 적재와 검산용 benchmark summary export를 추가했습니다.
 - Portfolio Beta Admin에 `Refresh Benchmark`를 추가해 승인된 로컬/HTTPS `Date,Close` CSV의 exact MSCI ACWI를 백그라운드에서 검증·적재하도록 했습니다. 공개 페이지 스크래핑이나 ETF 대체는 사용하지 않습니다.

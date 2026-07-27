@@ -89,6 +89,11 @@ ACWI trading date; equality is `FAIL`. If valid ACWI boundary prices are missing
 stale, or ACWI ROI is nonpositive, target status is `REVIEW`. Win rate, CAGR,
 MDD, and Sharpe remain diagnostics.
 
+The common ACWI end date is passed into each strategy runner before trades are
+generated. Any direct performance caller with a later planned exit replaces
+that exit with an explicit close-price `evaluation-end mark`; reports and
+exports count these marks separately from completed exits.
+
 ## Validation only
 
 The implementation does not automatically run a full-universe backtest. Use

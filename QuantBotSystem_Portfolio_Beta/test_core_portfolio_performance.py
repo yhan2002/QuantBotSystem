@@ -350,6 +350,61 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertAlmostEqual(result["strategy"]["roi_pct"], 10.0)
         self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 2.0)
 
+    def test_score_weighted_open_trade_is_marked_at_common_acwi_end(self):
+        frames = {
+            "AAA": _frame(
+                [100.0, 105.0, 110.0, 200.0],
+                dates=[
+                    "2024-12-31",
+                    "2025-01-02",
+                    "2025-01-03",
+                    "2025-01-06",
+                ],
+            ),
+            "ACWI": _frame(
+                [100.0, 101.0, 102.0],
+                dates=["2024-12-31", "2025-01-02", "2025-01-03"],
+            ),
+        }
+        trades = [{
+            "ticker": "AAA",
+            "side": "LONG",
+            "entry_date": "2025-01-02",
+            "entry_price": 100.0,
+            "signal_score": 1.0,
+            "return": 100.0,
+            "exit_events": [{
+                "date": "2025-01-06",
+                "weight": 1.0,
+                "price": 200.0,
+                "reason": "future exit",
+            }],
+        }]
+
+        result = core_portfolio_performance.calculate_score_weighted_performance(
+            trades,
+            ["AAA"],
+            "2025-01-02",
+            "2025-01-06",
+            price_loader=_loader(frames),
+        )
+
+        evaluated = result["ledger"]["trades"][0]
+        self.assertEqual(result["period"], "2025-01-02 to 2025-01-03")
+        self.assertEqual(
+            evaluated["evaluation_status"],
+            "MARKED_AT_EVALUATION_END",
+        )
+        self.assertEqual(evaluated["exit_date"], "2025-01-03")
+        self.assertAlmostEqual(evaluated["return"], 10.0)
+        self.assertAlmostEqual(evaluated["evaluation_mark_price"], 110.0)
+        self.assertTrue(
+            any(
+                event.get("reason") == "evaluation-end mark"
+                for event in result["ledger"]["events"]
+            )
+        )
+
     def test_universe_result_adds_trade_stats_and_target_decision(self):
         universe_result = {
             "period": "2025-01-02 to 2025-01-03",
