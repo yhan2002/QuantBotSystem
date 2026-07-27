@@ -1,5 +1,17 @@
 # 테스트·성과 판정 규칙
 
+## 구조 계약
+
+외부 패키지·설정·데이터를 import하지 않는 AST 검사다.
+
+```powershell
+python -m unittest test_architecture.py -v
+python .\tools\check_architecture.py
+```
+
+production Python 파일, 버전 구조 또는 의존성을 바꾼 작업에서는 항상
+실행한다. pull request와 push의 최소 CI도 같은 테스트를 실행한다.
+
 ## 빠른 검증
 
 변경한 파일만 먼저 문법 검사한다.
@@ -63,4 +75,3 @@ CAGR, MDD, Sharpe는 보조 진단이고 PASS/FAIL을 바꾸지 않는다.
 전체 유니버스 분석, 장시간 백테스트, 가격 backfill, 대량 metadata 갱신,
 실제 봇 실행과 Telegram 전송은 현재 요청에서 명시적으로 승인받은 경우에만
 수행한다. 실행 전 예상 유니버스·기간·시간·외부 호출·생성 파일을 알린다.
-

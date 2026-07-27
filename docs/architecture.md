@@ -46,10 +46,35 @@ core_* ─────▶  더 낮은 core_*·표준 라이브러리·외부 패
 - 배포 호환 래퍼는 유지하되 신규 표준 진입점은
   `RUN_telegram_bot_server.py`다.
 
+## 자동 강제
+
+`tools/check_architecture.py`는 애플리케이션 모듈을 import하지 않고 AST로
+세 버전을 각각 검사한다.
+
+| 계층 | 파일 |
+| --- | --- |
+| 0: 설정 | `config*`, `runtime_settings` |
+| 1: 기반 | `core_*`, `market_data_store` 호환 래퍼 |
+| 2: 전략 | `strategy_*`, 전략 호환 래퍼, `portfolio_*` 정책 |
+| 3: 앱 | `app_*`, bot·scheduler 호환 래퍼 |
+| 4: 진입·분석 | `RUN_*`, `analyze_*`, `experiment_*` |
+
+각 모듈은 같은 계층 또는 더 낮은 계층만 import할 수 있다. 검사기는 다음도
+강제한다.
+
+- 세 버전 사이 Python 모듈 직접 import 금지
+- 버전 내부 import cycle 금지
+- 상대 import로 계층 검사를 우회하는 것 금지
+- 새 production 파일의 계층 분류 필수
+- 각 버전의 공통 app/core/strategy 계약과 Portfolio 필수 모듈 존재
+- root selector가 버전 구현 모듈을 직접 import하지 않을 것
+
+기존 배포 호환 래퍼는 이름별 계층에 명시적으로 분류한다. 파일명 규칙으로
+표현할 수 없는 새 모듈은 검사 대상에서 제외하지 말고 계층 분류를 추가한다.
+
 ## 시간 계약
 
 - 신호는 해당 거래일 종가까지의 정보만 사용한다.
 - 신규 포지션은 다음 거래일 시가보다 빨리 체결하지 않는다.
 - IS/OOS 경계 밖의 가격과 미래 청산 결과를 현재 평가에 섞지 않는다.
 - 직접 성과 계산 경로도 평가 종료 시점을 명시적으로 mark한다.
-
