@@ -60,6 +60,25 @@ See Detail sends a ZIP for portfolio-accounted scans:
 - trade events;
 - actual per-leg entry/exit ledger;
 - daily NAV, cash, long/short market value, gross, and net exposure.
+- benchmark summary with the exact ACWI boundary dates, levels, ROI, market
+  multiple, Universe EW ROI, and stock-selection excess.
+
+## MSCI ACWI benchmark data
+
+The primary market benchmark is the exact `MIWD00000PUS` MSCI ACWI index
+level. It is never downloaded through Yahoo and is never added to a trading
+universe. Import a legally obtained CSV containing `Date` and `Close`:
+
+```powershell
+Set-Location .\QuantBotSystem_Portfolio_Beta
+python .\import_market_benchmark_csv.py "C:\path\to\msci_acwi.csv"
+```
+
+For ROI-only comparison, the file may contain only the valid closes needed at
+the IS/OOS boundaries. The importer validates the complete file before one
+atomic upsert into the existing shared `ohlcv` table. Stop the bot before a
+manual import. If the boundary levels are missing or stale, reports show
+`MSCI ACWI ROI: N/A` and target status `REVIEW`.
 
 ## Validation only
 

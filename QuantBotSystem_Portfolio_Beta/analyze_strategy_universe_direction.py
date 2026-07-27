@@ -9,6 +9,7 @@ an opposite-side position can suppress later entries on the same ticker.
 import argparse
 import csv
 import json
+import math
 from datetime import datetime
 from pathlib import Path
 from statistics import median
@@ -42,6 +43,9 @@ MODE_POSITION = {
 DIRECTIONAL_STRATEGIES = ("Momentum", "Box Range", "Reversion")
 STRATEGIES = DIRECTIONAL_STRATEGIES
 WINDOW_ORDER = ("IS", "OOS")
+MSCI_ACWI_TICKER = core_portfolio_performance.MARKET_BENCHMARK_TICKER
+MSCI_ACWI_LABEL = core_portfolio_performance.MARKET_BENCHMARK_LABEL
+SCHEMA_VERSION = "2.0"
 SUMMARY_COLUMNS = [
     "strategy", "universe", "mode", "window", "evaluation_start", "evaluation_end",
     "universe_count", "eligible_tickers", "failed_ticker_count", "data_coverage_pct",
@@ -50,14 +54,26 @@ SUMMARY_COLUMNS = [
     "win_rate_pct", "strategy_roi_pct", "strategy_cagr_pct", "strategy_mdd_pct",
     "strategy_sharpe", "benchmark_roi_pct", "benchmark_cagr_pct", "benchmark_mdd_pct",
     "benchmark_sharpe", "excess_roi_pct", "excess_cagr_pct", "active_days",
+    "msci_acwi_available", "msci_acwi_roi_pct", "msci_acwi_cagr_pct",
+    "msci_acwi_mdd_pct", "msci_acwi_sharpe", "msci_acwi_multiple",
+    "msci_acwi_excess_roi_pct", "msci_acwi_excess_cagr_pct",
+    "msci_acwi_coverage_pct", "msci_acwi_unavailable_reason",
+    "universe_ew_roi_pct", "universe_ew_cagr_pct", "universe_ew_mdd_pct",
+    "universe_ew_sharpe", "universe_ew_excess_roi_pct",
+    "universe_ew_excess_cagr_pct", "stock_selection_excess_pct",
+    "market_benchmark_multiple", "market_excess_roi_pct",
+    "market_excess_cagr_pct",
     "avg_active_positions", "max_active_positions", "end_active_positions",
     "benchmark_tickers", "benchmark_min_daily_tickers", "benchmark_max_daily_tickers",
     "benchmark_coverage_pct", "avg_gross_exposure_pct", "max_gross_exposure_pct",
+    "universe_ew_tickers", "universe_ew_min_daily_tickers",
+    "universe_ew_max_daily_tickers", "universe_ew_coverage_pct",
     "avg_net_exposure_pct", "end_cash", "box_flat_trade_count",
     "box_flat_win_rate_pct", "box_flat_nav_contribution_pct",
     "box_trend_trade_count", "box_trend_win_rate_pct",
     "box_trend_nav_contribution_pct", "roi_target_applicable", "required_roi_pct",
-    "passes_2x_benchmark_roi", "passes_58pct_win_rate", "passes_min_30_trades",
+    "passes_2x_benchmark_roi", "passes_2x_acwi_roi",
+    "passes_58pct_win_rate", "passes_min_30_trades",
     "status", "error",
 ]
 DAILY_COLUMNS = [
@@ -66,6 +82,10 @@ DAILY_COLUMNS = [
     "benchmark_nav", "benchmark_cumulative_roi_pct", "active_positions",
     "cash", "long_market_value", "short_market_value", "gross_exposure_pct",
     "net_exposure_pct", "benchmark_constituents",
+    "msci_acwi_return_pct", "msci_acwi_nav",
+    "msci_acwi_cumulative_roi_pct", "universe_ew_return_pct",
+    "universe_ew_nav", "universe_ew_cumulative_roi_pct",
+    "universe_ew_constituents",
 ]
 
 
@@ -136,24 +156,73 @@ def aggregate_cached_results(universe, cached_results):
     }
 
 
-def target_status(trade_count, win_rate_pct, strategy_roi_pct, benchmark_roi_pct, minimum_trades=30):
+def _finite_number(value):
+    try:
+        return value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _csv_number(value, multiplier=1.0):
+    if not _finite_number(value):
+        return ""
+    return float(value) * multiplier
+
+
+def _nav_roi_pct(value):
+    if not _finite_number(value):
+        return ""
+    return (float(value) - 1.0) * 100.0
+
+
+def _format_optional(value, format_spec, suffix=""):
+    if not _finite_number(value):
+        return "N/A"
+    return f"{format(float(value), format_spec)}{suffix}"
+
+
+def target_status(
+    trade_count,
+    win_rate_pct,
+    strategy_roi_pct,
+    benchmark_roi_pct,
+    minimum_trades=30,
+    universe_ew_roi_pct=None,
+):
+    """Evaluate ACWI for status while retaining the legacy Universe EW flag."""
     sample_pass = trade_count >= minimum_trades
-    target = core_portfolio_performance.evaluate_return_target(
+    acwi_target = core_portfolio_performance.evaluate_return_target(
         strategy_roi_pct,
         benchmark_roi_pct,
         win_rate_pct,
         benchmark_multiple=2.0,
         win_rate_goal_pct=58.0,
     )
-    if not sample_pass:
+    legacy_benchmark_roi = (
+        benchmark_roi_pct
+        if universe_ew_roi_pct is None
+        else universe_ew_roi_pct
+    )
+    universe_target = core_portfolio_performance.evaluate_return_target(
+        strategy_roi_pct,
+        legacy_benchmark_roi,
+        win_rate_pct,
+        benchmark_multiple=2.0,
+        win_rate_goal_pct=58.0,
+    )
+    if not _finite_number(benchmark_roi_pct):
+        status = "REVIEW"
+    elif not sample_pass:
         status = "INSUFFICIENT_TRADES"
     else:
-        status = target["status"]
+        status = acwi_target["status"]
     return {
-        "roi_target_applicable": target["return_target_applicable"],
-        "required_roi_pct": target["required_return_pct"],
-        "passes_2x_benchmark_roi": target["passes_return_target"],
-        "passes_58pct_win_rate": target["meets_win_rate_goal"],
+        "roi_target_applicable": acwi_target["return_target_applicable"],
+        "required_roi_pct": acwi_target["required_return_pct"],
+        # Deprecated flag retains the historical Universe EW meaning.
+        "passes_2x_benchmark_roi": universe_target["passes_return_target"],
+        "passes_2x_acwi_roi": acwi_target["passes_return_target"],
+        "passes_58pct_win_rate": acwi_target["meets_win_rate_goal"],
         "passes_min_30_trades": sample_pass,
         "status": status,
     }
@@ -161,7 +230,9 @@ def target_status(trade_count, win_rate_pct, strategy_roi_pct, benchmark_roi_pct
 
 def _universe_specs():
     specs = {
-        label: sorted(set(config.universe_groups[group]))
+        label: sorted(
+            set(config.universe_groups[group]) - {MSCI_ACWI_TICKER}
+        )
         for label, group in BASE_GROUPS.items()
     }
     specs["Primary Combined"] = sorted(
@@ -240,6 +311,7 @@ def _performance_row(
     daily_rows,
     max_stale_days,
     minimum_trades,
+    market_benchmark_loader=None,
 ):
     start, end = _period_bounds(result["period"])
     if not start or not end:
@@ -253,12 +325,22 @@ def _performance_row(
             price_loader=lambda ticker: price_data[ticker],
             position_mode=MODE_POSITION[mode],
             max_stale_calendar_days=max_stale_days,
+            market_benchmark_loader=market_benchmark_loader,
         )
     except Exception as exc:
         return _blank_summary(strategy, universe_name, mode, window_name, result, str(exc))
 
     daily = performance["daily"]
     for date, values in daily.iterrows():
+        market_return_pct = _csv_number(
+            values["market_benchmark_return"], multiplier=100.0
+        )
+        market_nav = _csv_number(values["market_benchmark_nav"])
+        universe_return_pct = _csv_number(
+            values["universe_ew_return"], multiplier=100.0
+        )
+        universe_nav = _csv_number(values["universe_ew_nav"])
+        universe_constituents = int(values["universe_ew_constituents"])
         daily_rows.append(
             {
                 "strategy": strategy,
@@ -269,16 +351,24 @@ def _performance_row(
                 "strategy_return_pct": float(values["strategy_return"]) * 100.0,
                 "strategy_nav": float(values["strategy_nav"]),
                 "strategy_cumulative_roi_pct": (float(values["strategy_nav"]) - 1.0) * 100.0,
-                "benchmark_return_pct": float(values["benchmark_return"]) * 100.0,
-                "benchmark_nav": float(values["benchmark_nav"]),
-                "benchmark_cumulative_roi_pct": (float(values["benchmark_nav"]) - 1.0) * 100.0,
+                # Deprecated generic columns retain their Universe EW meaning.
+                "benchmark_return_pct": universe_return_pct,
+                "benchmark_nav": universe_nav,
+                "benchmark_cumulative_roi_pct": _nav_roi_pct(universe_nav),
                 "active_positions": int(values["active_positions"]),
                 "cash": float(values["cash"]),
                 "long_market_value": float(values["long_market_value"]),
                 "short_market_value": float(values["short_market_value"]),
                 "gross_exposure_pct": float(values["gross_exposure_pct"]),
                 "net_exposure_pct": float(values["net_exposure_pct"]),
-                "benchmark_constituents": int(values["benchmark_constituents"]),
+                "benchmark_constituents": universe_constituents,
+                "msci_acwi_return_pct": market_return_pct,
+                "msci_acwi_nav": market_nav,
+                "msci_acwi_cumulative_roi_pct": _nav_roi_pct(market_nav),
+                "universe_ew_return_pct": universe_return_pct,
+                "universe_ew_nav": universe_nav,
+                "universe_ew_cumulative_roi_pct": _nav_roi_pct(universe_nav),
+                "universe_ew_constituents": universe_constituents,
             }
         )
 
@@ -309,16 +399,34 @@ def _performance_row(
     trend_stats = trade_stats(trend_trades)
     traded_tickers = len({trade["ticker"] for trade in executed_trades})
     strategy_summary = performance["strategy"]
-    benchmark_summary = performance["benchmark"]
+    market_summary = performance["market_benchmark"]
+    universe_summary = performance["universe_ew_benchmark"]
     universe_count = result["universe_count"]
     target = target_status(
         stats["count"],
         stats["win_rate"],
         strategy_summary["roi_pct"],
-        benchmark_summary["roi_pct"],
+        market_summary["roi_pct"],
         minimum_trades=minimum_trades,
+        universe_ew_roi_pct=universe_summary["roi_pct"],
     )
-    benchmark_tickers = performance["benchmark_tickers"]
+    universe_ew_tickers = performance["universe_ew_tickers"]
+    universe_ew_min_daily_tickers = performance["universe_ew_min_daily_tickers"]
+    universe_ew_max_daily_tickers = performance["universe_ew_max_daily_tickers"]
+    universe_ew_coverage_pct = (
+        universe_ew_min_daily_tickers / universe_ew_tickers * 100.0
+        if universe_ew_tickers
+        else 0.0
+    )
+    market_available = performance.get(
+        "market_benchmark_available",
+        market_summary["roi_pct"] is not None,
+    )
+    market_coverage_pct = (
+        performance.get("market_benchmark_coverage_pct", "")
+        if market_available
+        else ""
+    )
     return {
         "strategy": strategy,
         "universe": universe_name,
@@ -343,20 +451,47 @@ def _performance_row(
         "strategy_cagr_pct": strategy_summary["cagr_pct"],
         "strategy_mdd_pct": strategy_summary["mdd_pct"],
         "strategy_sharpe": strategy_summary["sharpe"],
-        "benchmark_roi_pct": benchmark_summary["roi_pct"],
-        "benchmark_cagr_pct": benchmark_summary["cagr_pct"],
-        "benchmark_mdd_pct": benchmark_summary["mdd_pct"],
-        "benchmark_sharpe": benchmark_summary["sharpe"],
-        "excess_roi_pct": strategy_summary["roi_pct"] - benchmark_summary["roi_pct"],
+        # Deprecated generic columns retain their Universe EW meaning.
+        "benchmark_roi_pct": universe_summary["roi_pct"],
+        "benchmark_cagr_pct": universe_summary["cagr_pct"],
+        "benchmark_mdd_pct": universe_summary["mdd_pct"],
+        "benchmark_sharpe": universe_summary["sharpe"],
+        "excess_roi_pct": performance["stock_selection_excess_pct"],
         "excess_cagr_pct": performance["excess_cagr_pct"],
+        "msci_acwi_available": market_available,
+        "msci_acwi_roi_pct": market_summary["roi_pct"],
+        "msci_acwi_cagr_pct": market_summary["cagr_pct"],
+        "msci_acwi_mdd_pct": market_summary["mdd_pct"],
+        "msci_acwi_sharpe": market_summary["sharpe"],
+        "msci_acwi_multiple": performance["market_benchmark_multiple"],
+        "msci_acwi_excess_roi_pct": performance["market_excess_roi_pct"],
+        "msci_acwi_excess_cagr_pct": performance["market_excess_cagr_pct"],
+        "msci_acwi_coverage_pct": market_coverage_pct,
+        "msci_acwi_unavailable_reason": performance.get(
+            "market_benchmark_unavailable_reason", ""
+        ),
+        "universe_ew_roi_pct": universe_summary["roi_pct"],
+        "universe_ew_cagr_pct": universe_summary["cagr_pct"],
+        "universe_ew_mdd_pct": universe_summary["mdd_pct"],
+        "universe_ew_sharpe": universe_summary["sharpe"],
+        "universe_ew_excess_roi_pct": performance["stock_selection_excess_pct"],
+        "universe_ew_excess_cagr_pct": performance["excess_cagr_pct"],
+        "stock_selection_excess_pct": performance["stock_selection_excess_pct"],
+        "market_benchmark_multiple": performance["market_benchmark_multiple"],
+        "market_excess_roi_pct": performance["market_excess_roi_pct"],
+        "market_excess_cagr_pct": performance["market_excess_cagr_pct"],
         "active_days": int((daily["active_positions"] > 0).sum()),
         "avg_active_positions": float(daily["active_positions"].mean()),
         "max_active_positions": int(daily["active_positions"].max()),
         "end_active_positions": int(daily["active_positions"].iloc[-1]),
-        "benchmark_tickers": benchmark_tickers,
-        "benchmark_min_daily_tickers": performance["benchmark_min_daily_tickers"],
-        "benchmark_max_daily_tickers": performance["benchmark_max_daily_tickers"],
-        "benchmark_coverage_pct": performance["benchmark_min_daily_tickers"] / benchmark_tickers * 100.0 if benchmark_tickers else 0.0,
+        "benchmark_tickers": universe_ew_tickers,
+        "benchmark_min_daily_tickers": universe_ew_min_daily_tickers,
+        "benchmark_max_daily_tickers": universe_ew_max_daily_tickers,
+        "benchmark_coverage_pct": universe_ew_coverage_pct,
+        "universe_ew_tickers": universe_ew_tickers,
+        "universe_ew_min_daily_tickers": universe_ew_min_daily_tickers,
+        "universe_ew_max_daily_tickers": universe_ew_max_daily_tickers,
+        "universe_ew_coverage_pct": universe_ew_coverage_pct,
         "avg_gross_exposure_pct": float(daily["gross_exposure_pct"].mean()),
         "max_gross_exposure_pct": float(daily["gross_exposure_pct"].max()),
         "avg_net_exposure_pct": float(daily["net_exposure_pct"].mean()),
@@ -395,6 +530,20 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         ticker: core_market_data_store.get_price_data(ticker, period_days=1060)
         for ticker in master_universe
     }
+    print(
+        f"Loading primary market benchmark once: {MSCI_ACWI_LABEL} "
+        f"({MSCI_ACWI_TICKER})",
+        flush=True,
+    )
+    acwi_load_error = ""
+    try:
+        acwi_price_data = core_market_data_store.get_price_data(
+            MSCI_ACWI_TICKER,
+            period_days=1060,
+        )
+    except Exception as exc:
+        acwi_price_data = None
+        acwi_load_error = str(exc)
     latest_dates = [df.index.max() for df in price_data.values() if df is not None and not df.empty]
     if not latest_dates:
         raise RuntimeError("No local market data is available")
@@ -403,6 +552,14 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         ticker: (df.loc[:cutoff].copy() if df is not None and not df.empty else df)
         for ticker, df in price_data.items()
     }
+    if acwi_price_data is not None and not acwi_price_data.empty:
+        acwi_price_data = acwi_price_data.loc[:cutoff].copy()
+
+    def market_benchmark_loader(ticker):
+        if ticker != MSCI_ACWI_TICKER:
+            raise KeyError(f"Unsupported market benchmark ticker: {ticker}")
+        return acwi_price_data
+
     windows = {
         "IS": {
             "evaluation_start": core_backtest_periods.SELECTION_START,
@@ -445,6 +602,7 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
                         daily_rows,
                         max_stale_days,
                         minimum_trades,
+                        market_benchmark_loader=market_benchmark_loader,
                     )
                     summary_rows.append(row)
 
@@ -467,6 +625,7 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         if df is None or df.empty or (cutoff - pd.Timestamp(df.index.max()).normalize()).days > max_stale_days
     )
     metadata = {
+        "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "data_cutoff": cutoff.date().isoformat(),
         "summary_rows": len(summary_rows),
@@ -474,6 +633,25 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         "unique_tickers": len(master_universe),
         "universes": {name: len(universe_specs[name]) for name in UNIVERSE_ORDER},
         "stale_tickers": stale_tickers,
+        "market_benchmark_ticker": MSCI_ACWI_TICKER,
+        "primary_benchmark_label": MSCI_ACWI_LABEL,
+        "stock_selection_diagnostic_label": "Universe EW",
+        "benchmark_roles": {
+            "primary_pass_fail": {
+                "label": MSCI_ACWI_LABEL,
+                "ticker": MSCI_ACWI_TICKER,
+                "role": "primary market benchmark and PASS/FAIL target",
+                "local_data_loaded": bool(
+                    acwi_price_data is not None and not acwi_price_data.empty
+                ),
+                "load_error": acwi_load_error,
+            },
+            "stock_selection_diagnostic": {
+                "label": "Universe EW",
+                "ticker": None,
+                "role": "secondary stock-selection diagnostic",
+            },
+        },
         "assumptions": {
             "signal": "close-confirmed",
             "entry_execution": core_entry_execution.NEXT_OPEN,
@@ -483,10 +661,14 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
             "max_entry_gross_pct": 100.0,
             "max_security_weight_pct": 5.0,
             "portfolio": "score-weighted fixed quantities with cash and explicit exits",
-            "benchmark": "daily equal-weight raw-close universe",
+            "primary_benchmark": (
+                f"{MSCI_ACWI_LABEL} ({MSCI_ACWI_TICKER}); "
+                "missing data produces REVIEW"
+            ),
+            "stock_selection_diagnostic": "daily equal-weight raw-close universe",
             "minimum_trades": minimum_trades,
             "minimum_win_rate_pct": 58.0,
-            "primary_target": "2x same-window benchmark ROI when benchmark ROI is positive",
+            "primary_target": "2x same-window MSCI ACWI ROI when ACWI ROI is positive",
             "win_rate_target": "58% secondary diagnostic; does not determine PASS/FAIL",
             "ls_definition": "50% long / 50% short entry-side caps; cash is allowed",
             "max_stale_calendar_days": max_stale_days,
@@ -500,10 +682,17 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         key=lambda item: float(item["strategy_roi_pct"] or -1e9),
         reverse=True,
     ):
+        acwi_multiple = _format_optional(
+            row.get("msci_acwi_multiple"), ".2f", suffix="x"
+        )
+        ew_excess = _format_optional(
+            row.get("stock_selection_excess_pct"), "+.2f", suffix="%p"
+        )
         print(
             f"{row['strategy']:<10} | {row['universe']:<16} | {row['mode']:<5} | "
             f"trades {row['trade_count']:>4} | ROI {float(row['strategy_roi_pct'] or 0):+7.2f}% | "
-            f"win {float(row['win_rate_pct'] or 0):5.1f}% | {row['status']}",
+            f"win {float(row['win_rate_pct'] or 0):5.1f}% | "
+            f"ACWI {acwi_multiple:>7} | EW excess {ew_excess:>9} | {row['status']}",
             flush=True,
         )
     print(f"\nSummary CSV: {summary_path}", flush=True)

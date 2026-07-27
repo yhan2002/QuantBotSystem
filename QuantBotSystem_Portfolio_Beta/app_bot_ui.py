@@ -81,7 +81,8 @@ def admin_text():
         "confirmation is required.\n"
         "Refresh Market Countries: derive US/CH/JP/KR from cached ticker suffixes (local DB only).\n"
         "Refresh Sector / Industry: refresh sector/industry metadata; market country is also refreshed.\n"
-        "Show Data Cache Status: show the current cache date range."
+        "Show Data Cache Status: show the current universe cache range and "
+        "whether exact MSCI ACWI benchmark levels are loaded."
     )
 
 

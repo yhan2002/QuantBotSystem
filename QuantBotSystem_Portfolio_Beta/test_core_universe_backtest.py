@@ -173,6 +173,10 @@ class UniverseBacktestTests(unittest.TestCase):
                     "sharpe": None,
                 },
                 "benchmark": {"roi_pct": 3.0},
+                "market_benchmark": {"roi_pct": 3.0},
+                "universe_ew_benchmark": {"roi_pct": 4.0},
+                "market_benchmark_multiple": 2.0,
+                "stock_selection_excess_pct": 2.0,
                 "daily": pd.DataFrame(
                     {"gross_exposure_pct": [10.0, 20.0]}
                 ),
@@ -209,13 +213,53 @@ class UniverseBacktestTests(unittest.TestCase):
             detail,
         )
         self.assertIn(
-            "Portfolio: ROI +6.00% | CAGR +12.34% | MDD -2.50%",
+            "MSCI ACWI ROI: +3.0% | Strategy ROI: +6.0% | Multiple: 2.00x",
             detail,
         )
+        self.assertIn(
+            "Universe EW ROI: +4.0% | Stock-selection excess: +2.0%p",
+            detail,
+        )
+        self.assertIn("Portfolio risk: CAGR +12.34% | MDD -2.50%", detail)
         self.assertIn(
             "CAGR: annualized from daily portfolio NAV using 252 trading days.",
             summary,
         )
+
+    def test_portfolio_lines_show_review_when_msci_acwi_is_missing(self):
+        result = {
+            "portfolio_performance": {
+                "strategy": {
+                    "roi_pct": 5.0,
+                    "cagr_pct": 10.0,
+                    "mdd_pct": -3.0,
+                    "sharpe": 1.0,
+                },
+                "market_benchmark": {"roi_pct": None},
+                "universe_ew_benchmark": {"roi_pct": 4.0},
+                "stock_selection_excess_pct": 1.0,
+                "market_benchmark_unavailable_reason": "No local MIWD00000PUS data",
+                "daily": pd.DataFrame({"gross_exposure_pct": [10.0]}),
+                "ledger": {
+                    "filled_trades": 1,
+                    "skipped_trades": 0,
+                    "policy": {
+                        "max_gross": 1.0,
+                        "max_name_weight": 0.05,
+                        "long_cap": 0.5,
+                        "short_cap": 0.5,
+                    },
+                },
+            }
+        }
+
+        lines = core_universe_backtest._portfolio_lines(result)
+
+        self.assertIn(
+            "MSCI ACWI ROI: N/A | Strategy ROI: +5.0% | Multiple: N/A",
+            lines,
+        )
+        self.assertTrue(any("Benchmark status: REVIEW" in line for line in lines))
 
     def test_trade_event_csv_keeps_partial_exits_and_is_oos_windows(self):
         selection = {
@@ -252,6 +296,11 @@ class UniverseBacktestTests(unittest.TestCase):
             {
                 "strategy_return": [0.0],
                 "strategy_nav": [1.0],
+                "market_benchmark_return": [0.001],
+                "market_benchmark_nav": [1.001],
+                "universe_ew_return": [0.002],
+                "universe_ew_nav": [1.002],
+                "universe_ew_constituents": [10],
                 "cash": [100.0],
                 "gross_exposure_pct": [0.0],
             },
@@ -273,6 +322,19 @@ class UniverseBacktestTests(unittest.TestCase):
             ],
             "portfolio_performance": {
                 "daily": daily,
+                "strategy": {"roi_pct": 2.0},
+                "market_benchmark": {"roi_pct": 1.0},
+                "market_benchmark_label": "MSCI ACWI",
+                "market_benchmark_ticker": "MIWD00000PUS",
+                "market_benchmark_available": True,
+                "market_benchmark_start_level_date": "2025-12-31",
+                "market_benchmark_start_level": 100.0,
+                "market_benchmark_end_level_date": "2026-01-02",
+                "market_benchmark_end_level": 101.0,
+                "market_benchmark_multiple": 2.0,
+                "universe_ew_benchmark": {"roi_pct": 1.5},
+                "stock_selection_excess_pct": 0.5,
+                "market_benchmark_daily_curve_available": True,
                 "ledger": {
                     "events": [
                         {
@@ -300,15 +362,36 @@ class UniverseBacktestTests(unittest.TestCase):
                 ledger_name = next(
                     name for name in names if name.endswith("_ledger_events.csv")
                 )
+                daily_name = next(
+                    name for name in names if name.endswith("_portfolio_daily.csv")
+                )
+                benchmark_name = next(
+                    name for name in names if name.endswith("_benchmark_summary.csv")
+                )
                 trade_rows = pd.read_csv(archive.open(trade_name))
                 ledger_rows = pd.read_csv(archive.open(ledger_name))
+                daily_rows = pd.read_csv(archive.open(daily_name))
+                benchmark_rows = pd.read_csv(archive.open(benchmark_name))
 
-        self.assertEqual(len(names), 3)
+        self.assertEqual(len(names), 4)
         self.assertTrue(any(name.endswith("_trade_events.csv") for name in names))
         self.assertTrue(any(name.endswith("_portfolio_daily.csv") for name in names))
         self.assertTrue(any(name.endswith("_ledger_events.csv") for name in names))
+        self.assertTrue(any(name.endswith("_benchmark_summary.csv") for name in names))
         self.assertEqual({"T000777"}, set(trade_rows["trade_id"]))
         self.assertEqual({"T000777"}, set(ledger_rows["trade_id"]))
+        self.assertTrue(
+            {
+                "market_benchmark_return",
+                "market_benchmark_nav",
+                "universe_ew_return",
+                "universe_ew_nav",
+                "universe_ew_constituents",
+            }.issubset(daily_rows.columns)
+        )
+        self.assertEqual(set(benchmark_rows["market_benchmark_ticker"]), {"MIWD00000PUS"})
+        self.assertEqual(set(benchmark_rows["start_level_date"]), {"2025-12-31"})
+        self.assertEqual(set(benchmark_rows["market_multiple"]), {2.0})
 
     def test_csv_marker_preserves_trailing_strategy_report_text(self):
         payload = (

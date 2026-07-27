@@ -1,4 +1,4 @@
-"""Portfolio-ledger NAV and same-universe benchmark calculations."""
+"""Portfolio-ledger NAV and market/universe benchmark calculations."""
 import math
 
 import pandas as pd
@@ -9,6 +9,8 @@ from core_portfolio_ledger import simulate_portfolio
 
 
 TRADING_DAYS_PER_YEAR = 252
+MARKET_BENCHMARK_TICKER = "MIWD00000PUS"
+MARKET_BENCHMARK_LABEL = "MSCI ACWI"
 
 
 def evaluate_return_target(
@@ -198,6 +200,258 @@ def _summary(returns, nav, initial_value=1.0):
     }
 
 
+def _unavailable_summary():
+    return {
+        "roi_pct": None,
+        "cagr_pct": None,
+        "mdd_pct": None,
+        "sharpe": None,
+    }
+
+
+def _difference(left, right):
+    if left is None or right is None:
+        return None
+    return float(left) - float(right)
+
+
+def _universe_equal_weight_benchmark(close_frame, calendar):
+    returns_by_ticker = close_frame.pct_change(fill_method=None).reindex(calendar)
+    constituents = returns_by_ticker.notna().sum(axis=1)
+    returns = returns_by_ticker.mean(axis=1, skipna=True).fillna(0.0)
+    nav = (1.0 + returns).cumprod()
+    return returns, nav, constituents, _summary(returns, nav)
+
+
+def _market_benchmark(
+    calendar,
+    price_loader,
+    ticker,
+    max_stale_calendar_days,
+):
+    empty = pd.Series(float("nan"), index=calendar, dtype=float)
+    unavailable = {
+        "available": False,
+        "reason": f"No local {ticker} data",
+        "returns": empty.copy(),
+        "nav": empty.copy(),
+        "summary": _unavailable_summary(),
+        "coverage_pct": 0.0,
+        "first_date": None,
+        "latest_date": None,
+        "start_level_date": None,
+        "end_level_date": None,
+        "start_level": None,
+        "end_level": None,
+        "daily_curve_available": False,
+        "daily_curve_reason": "Benchmark endpoints are unavailable",
+    }
+    try:
+        prices = price_loader(ticker)
+    except Exception as exc:
+        unavailable["reason"] = f"{ticker} load failed: {exc}"
+        return unavailable
+    if prices is None or prices.empty or "Close" not in prices:
+        return unavailable
+
+    series = pd.to_numeric(prices["Close"], errors="coerce").dropna()
+    series.index = pd.to_datetime(series.index).normalize()
+    series = series[~series.index.duplicated(keep="last")].sort_index()
+    series = series[(series > 0) & series.map(math.isfinite)]
+    if series.empty:
+        unavailable["reason"] = f"No valid local {ticker} closes"
+        return unavailable
+
+    start = calendar[0]
+    end = calendar[-1]
+    prior = series.index[series.index < start]
+    end_candidates = series.index[series.index <= end]
+    observed_in_window = series.loc[(series.index >= start) & (series.index <= end)]
+    unavailable["first_date"] = series.index[0].date().isoformat()
+    unavailable["latest_date"] = series.index[-1].date().isoformat()
+    if prior.empty:
+        unavailable["reason"] = f"{ticker} has no close before {start.date()}"
+        return unavailable
+    if end_candidates.empty:
+        unavailable["reason"] = f"{ticker} has no close on or before {end.date()}"
+        return unavailable
+
+    seed_date = prior[-1]
+    end_level_date = end_candidates[-1]
+    if (start - seed_date).days > max_stale_calendar_days:
+        unavailable["reason"] = (
+            f"{ticker} start level is {(start - seed_date).days} days stale"
+        )
+        return unavailable
+    if (end - end_level_date).days > max_stale_calendar_days:
+        unavailable["reason"] = (
+            f"{ticker} end level is {(end - end_level_date).days} days stale"
+        )
+        return unavailable
+
+    start_level = float(series.loc[seed_date])
+    end_level = float(series.loc[end_level_date])
+    endpoint_roi = end_level / start_level - 1.0
+    extended_index = pd.DatetimeIndex(
+        sorted(set(calendar) | {seed_date} | set(observed_in_window.index))
+    )
+    observed = series.reindex(extended_index)
+    filled = observed.ffill()
+    last_seen = pd.Series(pd.NaT, index=extended_index, dtype="datetime64[ns]")
+    available_rows = observed.notna()
+    last_seen.loc[available_rows] = extended_index[available_rows]
+    last_seen = last_seen.ffill()
+    age_days = (
+        pd.Series(extended_index, index=extended_index) - last_seen
+    ).dt.days
+    filled.loc[age_days > max_stale_calendar_days] = float("nan")
+    # Compute returns after aligning levels to the evaluation calendar. This
+    # carries any ACWI move on a universe-wide holiday into the next evaluation
+    # date instead of dropping the off-calendar return.
+    aligned_index = pd.DatetimeIndex([seed_date, *calendar])
+    aligned_levels = filled.reindex(aligned_index)
+    returns = aligned_levels.pct_change(fill_method=None).reindex(calendar)
+    valid = returns.notna()
+    coverage_pct = float(valid.mean() * 100.0) if len(valid) else 0.0
+    daily_curve_available = bool(valid.all())
+    if daily_curve_available:
+        nav = (1.0 + returns).cumprod()
+        summary = _summary(returns, nav)
+        # Boundary levels are the authoritative market-comparison definition.
+        summary["roi_pct"] = endpoint_roi * 100.0
+        daily_curve_reason = ""
+    else:
+        missing = int((~valid).sum())
+        returns = empty.copy()
+        nav = empty.copy()
+        summary = {
+            "roi_pct": endpoint_roi * 100.0,
+            "cagr_pct": None,
+            "mdd_pct": None,
+            "sharpe": None,
+        }
+        daily_curve_reason = (
+            f"{ticker} daily curve missing {missing}/{len(calendar)} dates; "
+            "ROI uses boundary levels only"
+        )
+    return {
+        "available": True,
+        "reason": "",
+        "returns": returns,
+        "nav": nav,
+        "summary": summary,
+        "coverage_pct": coverage_pct,
+        "first_date": unavailable["first_date"],
+        "latest_date": unavailable["latest_date"],
+        "start_level_date": seed_date.date().isoformat(),
+        "end_level_date": end_level_date.date().isoformat(),
+        "start_level": start_level,
+        "end_level": end_level,
+        "daily_curve_available": daily_curve_available,
+        "daily_curve_reason": daily_curve_reason,
+    }
+
+
+def _benchmark_payload(
+    calendar,
+    close_frame,
+    market_benchmark_loader,
+    market_benchmark_ticker,
+    market_benchmark_label,
+    max_stale_calendar_days,
+):
+    (
+        universe_returns,
+        universe_nav,
+        universe_constituents,
+        universe_summary,
+    ) = _universe_equal_weight_benchmark(close_frame, calendar)
+    market = _market_benchmark(
+        calendar,
+        market_benchmark_loader,
+        market_benchmark_ticker,
+        max_stale_calendar_days,
+    )
+    return {
+        "market": market,
+        "market_label": market_benchmark_label,
+        "market_ticker": market_benchmark_ticker,
+        "universe_returns": universe_returns,
+        "universe_nav": universe_nav,
+        "universe_constituents": universe_constituents,
+        "universe_summary": universe_summary,
+    }
+
+
+def _add_benchmark_columns(daily, benchmarks):
+    market = benchmarks["market"]
+    daily["market_benchmark_return"] = market["returns"]
+    daily["market_benchmark_nav"] = market["nav"]
+    daily["universe_ew_return"] = benchmarks["universe_returns"]
+    daily["universe_ew_nav"] = benchmarks["universe_nav"]
+    daily["universe_ew_constituents"] = benchmarks["universe_constituents"]
+    # Deprecated aliases retain their historical Universe EW meaning.
+    daily["benchmark_return"] = benchmarks["universe_returns"]
+    daily["benchmark_nav"] = benchmarks["universe_nav"]
+    daily["benchmark_constituents"] = benchmarks["universe_constituents"]
+    return daily
+
+
+def _performance_payload(strategy_summary, daily, calendar, close_frame, benchmarks):
+    market = benchmarks["market"]
+    market_summary = market["summary"]
+    universe_summary = benchmarks["universe_summary"]
+    strategy_roi = strategy_summary["roi_pct"]
+    market_roi = market_summary["roi_pct"]
+    universe_roi = universe_summary["roi_pct"]
+    market_multiple = (
+        strategy_roi / market_roi
+        if strategy_roi is not None and market_roi is not None and market_roi > 0
+        else None
+    )
+    constituents = benchmarks["universe_constituents"]
+    return {
+        "daily": daily,
+        "strategy": strategy_summary,
+        # Deprecated alias retained for existing CSV consumers.
+        "benchmark": universe_summary,
+        "market_benchmark": market_summary,
+        "market_benchmark_label": benchmarks["market_label"],
+        "market_benchmark_ticker": benchmarks["market_ticker"],
+        "market_benchmark_available": market["available"],
+        "market_benchmark_unavailable_reason": market["reason"],
+        "market_benchmark_coverage_pct": market["coverage_pct"],
+        "market_benchmark_first_date": market["first_date"],
+        "market_benchmark_latest_date": market["latest_date"],
+        "market_benchmark_start_level_date": market["start_level_date"],
+        "market_benchmark_end_level_date": market["end_level_date"],
+        "market_benchmark_start_level": market["start_level"],
+        "market_benchmark_end_level": market["end_level"],
+        "market_benchmark_daily_curve_available": market["daily_curve_available"],
+        "market_benchmark_daily_curve_reason": market["daily_curve_reason"],
+        "market_benchmark_multiple": market_multiple,
+        "universe_ew_benchmark": universe_summary,
+        "market_excess_roi_pct": _difference(strategy_roi, market_roi),
+        "stock_selection_excess_pct": _difference(strategy_roi, universe_roi),
+        "market_excess_cagr_pct": _difference(
+            strategy_summary["cagr_pct"], market_summary["cagr_pct"]
+        ),
+        # Deprecated alias retains its historical Universe EW meaning.
+        "excess_cagr_pct": _difference(
+            strategy_summary["cagr_pct"], universe_summary["cagr_pct"]
+        ),
+        "period": f"{calendar[0].date()} to {calendar[-1].date()}",
+        "trading_days": len(calendar),
+        "universe_ew_tickers": len(close_frame.columns),
+        "universe_ew_min_daily_tickers": int(constituents.min()),
+        "universe_ew_max_daily_tickers": int(constituents.max()),
+        # Deprecated aliases retained for existing callers.
+        "benchmark_tickers": len(close_frame.columns),
+        "benchmark_min_daily_tickers": int(constituents.min()),
+        "benchmark_max_daily_tickers": int(constituents.max()),
+    }
+
+
 def calculate_equal_weight_performance(
     trades,
     universe_list,
@@ -205,12 +459,16 @@ def calculate_equal_weight_performance(
     end_date,
     price_loader=core_market_data_store.get_price_data,
     max_stale_calendar_days=7,
+    market_benchmark_loader=None,
+    market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
+    market_benchmark_label=MARKET_BENCHMARK_LABEL,
 ):
-    """Return daily NAV plus strategy and benchmark performance summaries.
+    """Return daily NAV plus market and universe benchmark summaries.
 
     Each active trade is a sleeve. Sleeves are rebalanced to equal portfolio
     weight daily; cash created by a partial exit remains inside that sleeve.
-    The benchmark is rebalanced daily across the same universe using raw Close.
+    MSCI ACWI is the primary target benchmark. The daily equal-weight raw-close
+    universe is retained as a stock-selection diagnostic.
     """
     calendar, close_frame = _calendar_and_closes(
         universe_list,
@@ -233,40 +491,31 @@ def calculate_equal_weight_performance(
         [len(values) for values in contributions.values()], index=calendar, dtype=int
     )
 
-    benchmark_returns = close_frame.pct_change(fill_method=None).reindex(calendar)
-    benchmark_constituents = benchmark_returns.notna().sum(axis=1)
-    benchmark_returns = benchmark_returns.mean(axis=1, skipna=True).fillna(0.0)
     strategy_nav = (1.0 + strategy_returns).cumprod()
-    benchmark_nav = (1.0 + benchmark_returns).cumprod()
     daily = pd.DataFrame(
         {
             "strategy_return": strategy_returns,
             "strategy_nav": strategy_nav,
-            "benchmark_return": benchmark_returns,
-            "benchmark_nav": benchmark_nav,
             "active_positions": active_positions,
-            "benchmark_constituents": benchmark_constituents,
         }
     )
+    benchmarks = _benchmark_payload(
+        calendar,
+        close_frame,
+        market_benchmark_loader or price_loader,
+        market_benchmark_ticker,
+        market_benchmark_label,
+        max_stale_calendar_days,
+    )
+    daily = _add_benchmark_columns(daily, benchmarks)
     strategy_summary = _summary(strategy_returns, strategy_nav)
-    benchmark_summary = _summary(benchmark_returns, benchmark_nav)
-    strategy_cagr = strategy_summary["cagr_pct"]
-    benchmark_cagr = benchmark_summary["cagr_pct"]
-    return {
-        "daily": daily,
-        "strategy": strategy_summary,
-        "benchmark": benchmark_summary,
-        "excess_cagr_pct": (
-            None
-            if strategy_cagr is None or benchmark_cagr is None
-            else strategy_cagr - benchmark_cagr
-        ),
-        "period": f"{calendar[0].date()} to {calendar[-1].date()}",
-        "trading_days": len(calendar),
-        "benchmark_tickers": len(close_frame.columns),
-        "benchmark_min_daily_tickers": int(benchmark_constituents.min()),
-        "benchmark_max_daily_tickers": int(benchmark_constituents.max()),
-    }
+    return _performance_payload(
+        strategy_summary,
+        daily,
+        calendar,
+        close_frame,
+        benchmarks,
+    )
 
 
 def calculate_score_weighted_performance(
@@ -278,8 +527,11 @@ def calculate_score_weighted_performance(
     position_mode="LONG_SHORT_NEUTRAL",
     policy=None,
     max_stale_calendar_days=7,
+    market_benchmark_loader=None,
+    market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
+    market_benchmark_label=MARKET_BENCHMARK_LABEL,
 ):
-    """Replay actual quantities and cash, then compare with the same universe.
+    """Replay actual quantities and cash, then compare with ACWI and Universe EW.
 
     Entry weights are requested from the score pipeline and constrained at the
     open. Quantities remain fixed until the strategy emits a partial/full exit.
@@ -305,11 +557,6 @@ def calculate_score_weighted_performance(
     strategy_returns = ledger_daily["portfolio_return"].fillna(0.0)
     strategy_nav = ledger_daily["portfolio_nav"] / float(policy.initial_nav)
 
-    benchmark_returns = close_frame.pct_change(fill_method=None).reindex(calendar)
-    benchmark_constituents = benchmark_returns.notna().sum(axis=1)
-    benchmark_returns = benchmark_returns.mean(axis=1, skipna=True).fillna(0.0)
-    benchmark_nav = (1.0 + benchmark_returns).cumprod()
-
     daily = ledger_daily.rename(
         columns={
             "portfolio_return": "strategy_return",
@@ -317,43 +564,39 @@ def calculate_score_weighted_performance(
         }
     ).copy()
     daily["strategy_nav"] = strategy_nav
-    daily["benchmark_return"] = benchmark_returns
-    daily["benchmark_nav"] = benchmark_nav
-    daily["benchmark_constituents"] = benchmark_constituents
+    benchmarks = _benchmark_payload(
+        calendar,
+        close_frame,
+        market_benchmark_loader or price_loader,
+        market_benchmark_ticker,
+        market_benchmark_label,
+        max_stale_calendar_days,
+    )
+    daily = _add_benchmark_columns(daily, benchmarks)
 
     strategy_summary = _summary(strategy_returns, strategy_nav)
-    benchmark_summary = _summary(benchmark_returns, benchmark_nav)
-    strategy_cagr = strategy_summary["cagr_pct"]
-    benchmark_cagr = benchmark_summary["cagr_pct"]
-    return {
-        "daily": daily,
-        "strategy": strategy_summary,
-        "benchmark": benchmark_summary,
-        "excess_cagr_pct": (
-            None
-            if strategy_cagr is None or benchmark_cagr is None
-            else strategy_cagr - benchmark_cagr
-        ),
-        "period": f"{calendar[0].date()} to {calendar[-1].date()}",
-        "trading_days": len(calendar),
-        "benchmark_tickers": len(close_frame.columns),
-        "benchmark_min_daily_tickers": int(benchmark_constituents.min()),
-        "benchmark_max_daily_tickers": int(benchmark_constituents.max()),
-        "ledger": {
-            "trades": ledger["trades"],
-            "events": ledger["events"],
-            "filled_trades": ledger["filled_trades"],
-            "skipped_trades": ledger["skipped_trades"],
-            "policy": {
-                "initial_nav": policy.initial_nav,
-                "max_gross": policy.max_gross,
-                "max_name_weight": policy.max_name_weight,
-                "long_cap": policy.side_caps[0],
-                "short_cap": policy.side_caps[1],
-                "position_mode": policy.position_mode,
-            },
+    result = _performance_payload(
+        strategy_summary,
+        daily,
+        calendar,
+        close_frame,
+        benchmarks,
+    )
+    result["ledger"] = {
+        "trades": ledger["trades"],
+        "events": ledger["events"],
+        "filled_trades": ledger["filled_trades"],
+        "skipped_trades": ledger["skipped_trades"],
+        "policy": {
+            "initial_nav": policy.initial_nav,
+            "max_gross": policy.max_gross,
+            "max_name_weight": policy.max_name_weight,
+            "long_cap": policy.side_caps[0],
+            "short_cap": policy.side_caps[1],
+            "position_mode": policy.position_mode,
         },
     }
+    return result
 
 
 def calculate_universe_performance(
@@ -365,6 +608,9 @@ def calculate_universe_performance(
     max_stale_calendar_days=7,
     position_mode="LONG_SHORT_NEUTRAL",
     policy=None,
+    market_benchmark_loader=None,
+    market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
+    market_benchmark_label=MARKET_BENCHMARK_LABEL,
 ):
     """Calculate developer-only portfolio metrics from an aggregate backtest."""
     period = universe_result.get("period", "N/A")
@@ -380,6 +626,9 @@ def calculate_universe_performance(
         position_mode=position_mode,
         policy=policy,
         max_stale_calendar_days=max_stale_calendar_days,
+        market_benchmark_loader=market_benchmark_loader,
+        market_benchmark_ticker=market_benchmark_ticker,
+        market_benchmark_label=market_benchmark_label,
     )
     executed_trades = [
         trade
@@ -405,7 +654,7 @@ def calculate_universe_performance(
         )
     target = evaluate_return_target(
         result["strategy"]["roi_pct"],
-        result["benchmark"]["roi_pct"],
+        result["market_benchmark"]["roi_pct"],
         win_rate,
         benchmark_multiple=benchmark_multiple,
         win_rate_goal_pct=minimum_win_rate_pct,
@@ -418,6 +667,8 @@ def calculate_universe_performance(
                 "benchmark_multiple": benchmark_multiple,
                 "minimum_win_rate_pct": minimum_win_rate_pct,
                 "primary_metric": "1Y cumulative ROI",
+                "benchmark_label": result["market_benchmark_label"],
+                "benchmark_ticker": result["market_benchmark_ticker"],
                 "required_roi_pct": target["required_return_pct"],
                 "passes_roi": target["passes_return_target"],
                 "passes_primary_return_target": target["passes_return_target"],

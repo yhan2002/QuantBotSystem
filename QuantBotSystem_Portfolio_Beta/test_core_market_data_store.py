@@ -8,6 +8,7 @@ import pandas as pd
 
 import test_experiment_momentum_volume_alpha_ab as subject
 import core_market_data_store
+import import_market_benchmark_csv
 
 
 class MomentumVolumeAlphaTest(unittest.TestCase):
@@ -84,6 +85,20 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
         self.assertEqual(summary["groups"], {"CH": 1, "JP": 1, "KR": 1, "US": 1})
         self.assertEqual(metadata["0700.HK"]["listing_country"], "CH")
         self.assertEqual(metadata["7203.T"]["listing_country"], "JP")
+
+    def test_listing_country_refresh_excludes_reserved_benchmark_ticker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                core_market_data_store.upsert_close_series(
+                    "MIWD00000PUS",
+                    pd.DataFrame({"Date": ["2026-07-24"], "Close": [912.5]}),
+                )
+                summary = core_market_data_store.refresh_listing_country_labels_from_cache()
+                metadata = core_market_data_store.get_security_metadata()
+
+        self.assertEqual(summary["requested"], 0)
+        self.assertNotIn("MIWD00000PUS", metadata)
 
     @patch("core_market_data_store._download_security_metadata")
     def test_refresh_security_metadata_persists_classification(self, download):
@@ -212,6 +227,129 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
             freshness,
             {"AAA": "2026-07-23", "BBB": "2026-07-22"},
         )
+
+    def test_close_series_insert_is_available_through_get_price_data(self):
+        frame = pd.DataFrame(
+            {
+                "Date": ["2026-07-22", "2026-07-23"],
+                "Close": [900.25, 904.75],
+            }
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store.yf, "download"
+            ) as yahoo_download:
+                summary = core_market_data_store.upsert_close_series(
+                    "MIWD00000PUS", frame
+                )
+                cached = core_market_data_store.get_price_data("MIWD00000PUS")
+
+        yahoo_download.assert_not_called()
+        self.assertEqual(summary["updated"], 2)
+        self.assertEqual(summary["first_date"], "2026-07-22")
+        self.assertEqual(summary["latest_date"], "2026-07-23")
+        self.assertEqual(cached["Close"].tolist(), [900.25, 904.75])
+        self.assertTrue(cached["Open"].isna().all())
+
+    def test_close_series_reimport_updates_close_only(self):
+        initial = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-23"])
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(
+                        conn, "MIWD00000PUS", initial
+                    )
+                finally:
+                    conn.close()
+
+                core_market_data_store.upsert_close_series(
+                    "MIWD00000PUS",
+                    pd.DataFrame({"Date": ["2026-07-23"], "Close": [777.0]}),
+                )
+                cached = core_market_data_store.get_price_data("MIWD00000PUS")
+
+        row = cached.iloc[0]
+        self.assertEqual(row["Close"], 777.0)
+        self.assertEqual(row["Open"], initial.iloc[0]["Open"])
+        self.assertEqual(row["High"], initial.iloc[0]["High"])
+        self.assertEqual(row["Low"], initial.iloc[0]["Low"])
+        self.assertEqual(row["Adj Close"], initial.iloc[0]["Adj Close"])
+        self.assertEqual(row["Volume"], initial.iloc[0]["Volume"])
+
+    def test_invalid_close_series_has_no_partial_write(self):
+        invalid_frames = {
+            "bad_date": pd.DataFrame(
+                {
+                    "Date": ["2026-07-24", "not-a-date"],
+                    "Close": [901.0, 902.0],
+                }
+            ),
+            "duplicate_date": pd.DataFrame(
+                {
+                    "Date": ["2026-07-24", "2026-07-24 15:00:00"],
+                    "Close": [901.0, 902.0],
+                }
+            ),
+            "non_finite_close": pd.DataFrame(
+                {
+                    "Date": ["2026-07-24", "2026-07-25"],
+                    "Close": [901.0, float("inf")],
+                }
+            ),
+            "non_positive_close": pd.DataFrame(
+                {
+                    "Date": ["2026-07-24", "2026-07-25"],
+                    "Close": [901.0, 0.0],
+                }
+            ),
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                core_market_data_store.upsert_close_series(
+                    "MIWD00000PUS",
+                    pd.DataFrame({"Date": ["2026-07-23"], "Close": [900.0]}),
+                )
+                for label, invalid_frame in invalid_frames.items():
+                    with self.subTest(label=label):
+                        with self.assertRaises(ValueError):
+                            core_market_data_store.upsert_close_series(
+                                "MIWD00000PUS", invalid_frame
+                            )
+                        cached = core_market_data_store.get_price_data(
+                            "MIWD00000PUS"
+                        )
+                        self.assertEqual(len(cached), 1)
+                        self.assertEqual(cached["Close"].iloc[0], 900.0)
+
+    def test_local_csv_import_never_calls_yahoo(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            csv_path = os.path.join(temp_dir, "acwi.csv")
+            pd.DataFrame(
+                {
+                    "Date": ["2026-07-22", "2026-07-23"],
+                    "Close": [900.25, 904.75],
+                }
+            ).to_csv(csv_path, index=False)
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store.yf, "download"
+            ) as yahoo_download, patch.object(
+                core_market_data_store.yf, "Ticker"
+            ) as yahoo_ticker:
+                summary = import_market_benchmark_csv.import_market_benchmark_csv(
+                    csv_path
+                )
+
+        yahoo_download.assert_not_called()
+        yahoo_ticker.assert_not_called()
+        self.assertEqual(summary["ticker"], "MIWD00000PUS")
+        self.assertEqual(summary["updated"], 2)
 
 
 def _ohlcv_frame(dates):
