@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Iterator
+from contextlib import contextmanager
 import hashlib
 from html import escape
 import json
@@ -13,7 +15,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any
+import zlib
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +33,8 @@ SENSITIVE_PATTERNS = (
     re.compile(r"\b\d{8,}:[A-Za-z0-9_-]{20,}\b"),
     re.compile(r"(?i)\b(?:api[_ -]?key|bot[_ -]?token)\s*[:=]\s*\S+"),
 )
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+PNG_IEND_CHUNK = b"\x00\x00\x00\x00IEND\xaeB`\x82"
 
 
 def _nonempty(value: Any) -> bool:
@@ -429,6 +435,92 @@ def find_browser(explicit: Path | None = None) -> Path:
     return candidates[0]
 
 
+@contextmanager
+def _browser_workspace() -> Iterator[Path]:
+    workspace_path = Path(tempfile.mkdtemp(prefix="agent-view-browser-"))
+    try:
+        yield workspace_path
+    finally:
+        deadline = time.monotonic() + 10
+        while workspace_path.exists():
+            try:
+                shutil.rmtree(workspace_path)
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
+
+
+def _is_complete_png(path: Path) -> bool:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return False
+    if not data.startswith(PNG_SIGNATURE):
+        return False
+
+    offset = len(PNG_SIGNATURE)
+    saw_ihdr = False
+    saw_idat = False
+    while offset < len(data):
+        if offset + 12 > len(data):
+            return False
+        payload_length = int.from_bytes(data[offset : offset + 4], "big")
+        chunk_type = data[offset + 4 : offset + 8]
+        payload_end = offset + 8 + payload_length
+        chunk_end = payload_end + 4
+        if chunk_end > len(data):
+            return False
+        expected_crc = int.from_bytes(data[payload_end:chunk_end], "big")
+        actual_crc = zlib.crc32(data[offset + 4 : payload_end]) & 0xFFFFFFFF
+        if expected_crc != actual_crc:
+            return False
+        if offset == len(PNG_SIGNATURE) and chunk_type != b"IHDR":
+            return False
+        if chunk_type == b"IHDR":
+            if saw_ihdr or payload_length != 13:
+                return False
+            saw_ihdr = True
+        elif chunk_type == b"IDAT":
+            saw_idat = True
+        elif chunk_type == b"IEND":
+            return (
+                payload_length == 0
+                and chunk_end == len(data)
+                and saw_ihdr
+                and saw_idat
+            )
+        offset = chunk_end
+    return False
+
+
+def _wait_for_complete_png(
+    path: Path,
+    *,
+    timeout_seconds: float = 10,
+    poll_interval: float = 0.1,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    previous_complete_size: int | None = None
+    while True:
+        try:
+            current_size = path.stat().st_size
+        except OSError:
+            current_size = None
+        if current_size is not None and _is_complete_png(path):
+            if current_size == previous_complete_size:
+                return
+            previous_complete_size = current_size
+        else:
+            previous_complete_size = None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                "browser screenshot did not reach a complete, stable PNG state"
+            )
+        time.sleep(min(poll_interval, remaining))
+
+
 def capture_screenshot(
     html_path: Path,
     screenshot_path: Path,
@@ -436,8 +528,7 @@ def capture_screenshot(
 ) -> Path:
     browser = find_browser(browser_path)
     screenshot_path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="agent-view-browser-") as workspace:
-        workspace_path = Path(workspace)
+    with _browser_workspace() as workspace_path:
         profile = workspace_path / "profile"
         staged_html = workspace_path / "agent-view.html"
         staged_screenshot = workspace_path / "agent-view.png"
@@ -445,6 +536,7 @@ def capture_screenshot(
         command = [
             str(browser),
             "--headless=new",
+            "--disable-background-mode",
             "--disable-background-networking",
             "--disable-default-apps",
             "--disable-extensions",
@@ -470,16 +562,15 @@ def capture_screenshot(
             timeout=30,
             check=False,
         )
-        if (
-            result.returncode != 0
-            or not staged_screenshot.is_file()
-            or staged_screenshot.stat().st_size == 0
-        ):
+        if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(
                 f"browser screenshot failed with exit {result.returncode}: {detail}"
             )
+        _wait_for_complete_png(staged_screenshot)
         shutil.copy2(staged_screenshot, screenshot_path)
+        if not _is_complete_png(screenshot_path):
+            raise RuntimeError("copied browser screenshot is not a complete PNG")
     return screenshot_path
 
 
