@@ -63,32 +63,6 @@ class BotReportTests(unittest.TestCase):
 
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
     @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
-    @patch("app_bot_reports.strategy_residual_stat_arb_app.scan_residual_stat_arb")
-    @patch("app_bot_reports.compile_selected_universe", return_value=["AAA", "BBB"])
-    @patch("app_bot_reports.get_or_create_session")
-    def test_residual_strategy_dispatches_through_full_universe_adapter(
-        self, get_session, _compile, scan, _missing, _freshness
-    ):
-        session = {
-            "strategy": "RESIDUAL_STAT_ARB",
-            "custom_tickers": [],
-            "neutralization": "SECTOR",
-            "position_mode": "LONG_ONLY",
-        }
-        get_session.return_value = session
-        scan.return_value = "residual report"
-
-        report = app_bot_reports.run_compiled_scan("any-chat")
-
-        self.assertIn("residual report", report)
-        scan.assert_called_once_with(
-            ["AAA", "BBB"],
-            neutralization="SECTOR",
-            position_mode="LONG_ONLY",
-        )
-
-    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
-    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
     @patch("app_bot_reports.strategy_ma_cross.scan_ma_cross")
     @patch("app_bot_reports.compile_selected_universe", return_value=["AAA"])
     @patch("app_bot_reports.get_or_create_session")

@@ -24,7 +24,6 @@ import runtime_settings
 import strategy_box_range
 import strategy_ma_cross
 import strategy_price_liquidity_reversion
-import strategy_residual_stat_arb
 
 
 BASE_GROUPS = {
@@ -41,7 +40,7 @@ MODE_POSITION = {
     "LS": "LONG_SHORT_NEUTRAL",
 }
 DIRECTIONAL_STRATEGIES = ("Momentum", "Box Range", "Reversion")
-STRATEGIES = DIRECTIONAL_STRATEGIES + ("Residual Stat-Arb",)
+STRATEGIES = DIRECTIONAL_STRATEGIES
 WINDOW_ORDER = ("IS", "OOS")
 SUMMARY_COLUMNS = [
     "strategy", "universe", "mode", "window", "evaluation_start", "evaluation_end",
@@ -246,18 +245,13 @@ def _performance_row(
     if not start or not end:
         return _blank_summary(strategy, universe_name, mode, window_name, result, "")
     try:
-        ledger_mode = (
-            "LONG_SHORT_NEUTRAL"
-            if strategy == "Residual Stat-Arb"
-            else MODE_POSITION[mode]
-        )
         performance = core_portfolio_performance.calculate_score_weighted_performance(
             result["trades"],
             universe,
             start,
             end,
             price_loader=lambda ticker: price_data[ticker],
-            position_mode=ledger_mode,
+            position_mode=MODE_POSITION[mode],
             max_stale_calendar_days=max_stale_days,
         )
     except Exception as exc:
@@ -454,55 +448,6 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
                     )
                     summary_rows.append(row)
 
-    metadata_by_ticker = core_market_data_store.get_security_metadata(
-        master_universe
-    )
-    for universe_name in UNIVERSE_ORDER:
-        universe = universe_specs[universe_name]
-        residual_prices = strategy_residual_stat_arb.normalize_price_map(
-            {ticker: price_data[ticker] for ticker in universe}
-        )
-        residual_metadata = {
-            ticker: metadata_by_ticker.get(ticker, {}) for ticker in universe
-        }
-        for window_name in WINDOW_ORDER:
-            for mode, side in MODE_SIDES.items():
-                print(
-                    f"Residual Stat-Arb | {universe_name} | "
-                    f"{window_name} | {mode}",
-                    flush=True,
-                )
-                ticker_results = {}
-                for ticker in universe:
-                    try:
-                        ticker_results[ticker] = (
-                            strategy_residual_stat_arb.run_residual_stat_arb_backtest(
-                                ticker,
-                                residual_prices,
-                                residual_metadata,
-                                include_trades=True,
-                                side=side,
-                                **windows[window_name],
-                            )
-                        )
-                    except Exception as exc:
-                        ticker_results[ticker] = exc
-                result = aggregate_cached_results(universe, ticker_results)
-                summary_rows.append(
-                    _performance_row(
-                        "Residual Stat-Arb",
-                        universe_name,
-                        mode,
-                        window_name,
-                        result,
-                        universe,
-                        price_data,
-                        daily_rows,
-                        max_stale_days,
-                        minimum_trades,
-                    )
-                )
-
     directory = (
         Path(output_dir)
         if output_dir
@@ -544,7 +489,6 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
             "primary_target": "2x same-window benchmark ROI when benchmark ROI is positive",
             "win_rate_target": "58% secondary diagnostic; does not determine PASS/FAIL",
             "ls_definition": "50% long / 50% short entry-side caps; cash is allowed",
-            "residual_mode_definition": "mode selects alpha-leg direction; peer hedge remains enabled",
             "max_stale_calendar_days": max_stale_days,
         },
     }

@@ -10,7 +10,7 @@ import app_daily_market_scheduler
 class TelegramServerRuntimeSafetyTests(unittest.TestCase):
     def test_progress_text_matches_strategy_loading_layout(self):
         snapshot = SimpleNamespace(
-            label="Residual Stat-Arb Scan",
+            label="Momentum Scan",
             progress=50,
             stage="IS 백테스트",
             current=203,
@@ -45,7 +45,7 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
         self.assertEqual("IS 백테스트", emitted[0][1])
         self.assertEqual((203, 399), emitted[0][2:])
 
-    def test_residual_data_load_advances_after_preparing(self):
+    def test_data_load_advances_after_preparing(self):
         emitted = []
         adapter = RUN_telegram_bot_server._scan_progress_adapter(
             lambda *args: emitted.append(args),

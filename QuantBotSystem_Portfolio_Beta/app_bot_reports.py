@@ -6,7 +6,6 @@ import strategy_ma_cross
 import strategy_box_range
 import core_market_data_store
 import strategy_price_liquidity_reversion
-import strategy_residual_stat_arb_app
 import core_universe_backtest
 import app_runtime_lock
 
@@ -202,11 +201,6 @@ def _run_compiled_scan(
             compiled_universe,
             **scan_kwargs,
         )
-    elif selected_strategy == "RESIDUAL_STAT_ARB":
-        report = strategy_residual_stat_arb_app.scan_residual_stat_arb(
-            compiled_universe,
-            **scan_kwargs,
-        )
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
@@ -332,10 +326,6 @@ def _quick_report(ticker):
     report += "\n"
     report += f"  Meaning: {_reversion_explanation(reversion_signal)}\n"
     report += "  Benchmark: 5d shock within 3d, near-flat/trend-aligned MA60, reversal close, and turnover below 2.0x its 20d average.\n"
-    report += (
-        "- Residual Stat-Arb: full-universe scan only; a standalone Quick "
-        "Check cannot build its same-country/sector peer hedge.\n"
-    )
     if box.get("message"):
         report += f"\nBox Detail: {box['message']}\n"
     report += f"\nView: {view}\n\n"

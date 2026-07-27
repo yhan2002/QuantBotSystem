@@ -36,7 +36,7 @@ and Admin data updates are serialized. A second operation waits for the first
 one instead of reading a half-refreshed database. See Detail buttons carry
 their own report id and remain tied to the scan message that created them.
 
-All four interactive strategy scans and the Admin latest-price, four-year
+All three interactive strategy scans and the Admin latest-price, four-year
 backfill, and classification downloads are background jobs. Telegram shows a
 single 1-100% loading message in 5% increments, including stage, completed
 ticker count, and elapsed time. One process executes these heavy jobs in FIFO
@@ -50,13 +50,8 @@ menu is restored after completion.
 - Market data: existing `QuantBotSystem_Beta/data/market_data.sqlite`
 - Portfolio exports: `QuantBotSystem_Portfolio_Beta/data/backtest_exports`
 - Runtime/state: `QuantBotSystem_Portfolio_Beta/data/runtime` and `data/state`
-- Residual compute cache:
-  `QuantBotSystem_Portfolio_Beta/data/cache/residual_stat_arb_cache.sqlite`
 
 The Portfolio version does not migrate the shared market-data schema.
-Deleting the Residual compute cache is safe; the next scan recreates it and
-will be slower on the first cold run. It also prunes older fingerprints and
-keeps approximately the newest 4,000 entries.
 
 ## Backtest exports
 
@@ -75,7 +70,3 @@ the developer analysis script when a long local run is intended:
 Set-Location .\QuantBotSystem_Portfolio_Beta
 python .\analyze_strategy_universe_direction.py
 ```
-
-The fourth Residual Stat-Arb pass is materially heavier than the three
-single-name strategies. Run this analysis intentionally and do not treat the
-Telegram request timeout as an execution benchmark.
