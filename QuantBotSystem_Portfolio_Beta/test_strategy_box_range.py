@@ -344,15 +344,41 @@ class BoxRangeV2Tests(unittest.TestCase):
             _channel_history(0.0), "range"
         )
         load_ohlcv.return_value = frame
+        events = []
+
+        def progress(stage, completed, total, ticker, succeeded):
+            events.append((stage, completed, total, ticker, succeeded))
+            raise RuntimeError("Telegram edit failed")
+
+        def aggregate_result(*_args, **kwargs):
+            callback = kwargs["progress_callback"]
+            callback(1, 2, "AAA", True)
+            callback(2, 2, "BBB", False)
+            return {}
+
+        aggregate.side_effect = aggregate_result
 
         report = strategy_box_range.scan_total_universe(
-            ["AAA", "BBB"], position_mode="SHORT_ONLY"
+            ["AAA", "BBB"],
+            position_mode="SHORT_ONLY",
+            progress_callback=progress,
         )
 
         self.assertEqual(load_ohlcv.call_count, 2)
         self.assertIn("Position mode: Short Only", report)
         self.assertIn("SHORT Candidates (next open)", report)
         self.assertEqual(aggregate.call_count, 2)
+        self.assertEqual(
+            [event[0] for event in events],
+            [
+                "CURRENT_SCAN",
+                "CURRENT_SCAN",
+                "IS_BACKTEST",
+                "IS_BACKTEST",
+                "OOS_BACKTEST",
+                "OOS_BACKTEST",
+            ],
+        )
         for call in aggregate.call_args_list:
             self.assertEqual(call.kwargs["side_filter"], "SHORT")
 
@@ -365,6 +391,18 @@ class BoxRangeV2Tests(unittest.TestCase):
             selection_runner("AAA", include_trades=True)
             oos_runner("AAA", include_trades=True)
         self.assertEqual(precompute.call_count, 1)
+
+    @patch.object(strategy_box_range, "scan_total_universe", return_value="report")
+    def test_public_scan_forwards_progress_callback(self, scan_total):
+        callback = object()
+
+        result = strategy_box_range.scan_box_range(
+            ["AAA"],
+            progress_callback=callback,
+        )
+
+        self.assertEqual(result, "report")
+        self.assertIs(scan_total.call_args.kwargs["progress_callback"], callback)
 
     def test_ohlc4_entry_does_not_exit_during_execution_day(self):
         frame, _ = _append_signal_and_targets(

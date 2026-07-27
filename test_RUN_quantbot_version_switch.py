@@ -64,7 +64,7 @@ class ChildEnvironmentTests(unittest.TestCase):
             str((portfolio_dir / "data" / "state").resolve()),
             environment["QUANTBOT_STATE_DIR"],
         )
-        self.assertEqual("2026.07.24", environment["QUANTBOT_BUILD"])
+        self.assertEqual("2026.07.27", environment["QUANTBOT_BUILD"])
 
     def test_classic_clears_inherited_portfolio_paths(self):
         inherited = {"PATH": "test-path"}

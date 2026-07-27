@@ -157,6 +157,14 @@ allocator는 target과 모든 hedge leg를 같은 비율로 축소하며, ledger
 상세 내보내기에는 residual z, 베타, 피어 목록, gross/net과 일별 NAV가
 포함된다.
 
+운영 앱은 한 스캔 안에서 현재 후보·IS·OOS가 동일한 cache context를
+공유한다. 피어 순위·상관계수와 residual regression feature는 메모리에서
+우선 재사용하고, 다음 실행을 위해 Portfolio Beta 전용 SQLite에도
+저장한다. 캐시 키에는 엔진 버전, 설정, 평가 cutoff, 유니버스·메타데이터,
+관련 종목 Close 내용이 포함되므로 데이터나 기준일이 달라지면 자동으로
+miss 처리한다. 손상·잠금 오류가 나면 캐시 없이 정상 계산하며 전략
+결과를 실패시키지 않는다.
+
 ## 제한사항
 
 - 거래비용, 공매도 가능 여부, borrow fee와 체결 미끄러짐은 아직 미반영

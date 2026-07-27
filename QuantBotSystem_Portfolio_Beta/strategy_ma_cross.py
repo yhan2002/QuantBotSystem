@@ -361,19 +361,56 @@ def _format_ranked_rows(items, long_side=True):
     return "\n".join(rows) + "\n"
 
 
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker,
+    succeeded,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, completed, total, ticker, succeeded)
+    except Exception:
+        pass
+
+
+def _stage_progress_callback(progress_callback, stage):
+    if progress_callback is None:
+        return None
+
+    def notify(completed, total, ticker, succeeded):
+        _notify_progress(
+            progress_callback,
+            stage,
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
+
+    return notify
+
+
 def scan_ma_cross(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
 ):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
     failed_tickers = []
     raw_scores = {}
 
-    for ticker in universe_list:
+    total_tickers = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
         try:
             signal, strength = analyze_trend_strict_signals(ticker)
+            succeeded = signal not in ("INSUFFICIENT_DATA", "ERROR")
 
             if signal in ["INSUFFICIENT_DATA", "ERROR", "NO_SIGNAL"]:
                 failed_tickers.append(ticker)
@@ -393,6 +430,15 @@ def scan_ma_cross(
                 exit_list.append((ticker, strength))
         except Exception:
             failed_tickers.append(ticker)
+        finally:
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total_tickers,
+                ticker,
+                succeeded,
+            )
 
     neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
         raw_scores, neutralization
@@ -483,6 +529,9 @@ def scan_ma_cross(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "IS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.selection_window(),
     )
@@ -493,6 +542,9 @@ def scan_ma_cross(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "OOS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.oos_window(),
     )

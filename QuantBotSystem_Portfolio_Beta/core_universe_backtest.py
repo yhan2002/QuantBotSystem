@@ -153,6 +153,18 @@ def _neutralize_trade_entries(
     return selected
 
 
+def _notify_progress(progress_callback, completed, total, ticker, succeeded):
+    """Report ticker completion without letting UI failures affect results."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(completed, total, ticker, succeeded)
+    except Exception:
+        # Progress reporting is best-effort. Telegram/API/UI failures must not
+        # turn a successfully evaluated security into a failed backtest row.
+        pass
+
+
 def aggregate_universe_backtest(
     universe_list,
     runner,
@@ -161,39 +173,58 @@ def aggregate_universe_backtest(
     portfolio_accounting=False,
     portfolio_policy=None,
     price_availability_loader=None,
+    progress_callback=None,
     **runner_kwargs,
 ):
+    """Aggregate ticker backtests and optionally report per-ticker completion.
+
+    ``progress_callback`` receives ``(completed, total, ticker, succeeded)``
+    exactly once after each ticker attempt. Callback exceptions are ignored so
+    presentation-layer failures cannot alter trades, eligibility, or NAV.
+    """
     all_trades = []
     eligible_tickers = 0
     failed_tickers = []
     starts, ends = [], []
     eligible_names = []
+    total_tickers = len(universe_list)
 
-    for ticker in universe_list:
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
         try:
-            _, _, _, period_label, details = runner(
+            try:
+                _, _, _, period_label, details = runner(
+                    ticker,
+                    include_trades=True,
+                    **runner_kwargs,
+                )
+            except Exception:
+                failed_tickers.append(ticker)
+                continue
+
+            start, end = _period_bounds(period_label)
+            if start and end:
+                eligible_tickers += 1
+                eligible_names.append(ticker)
+                starts.append(start)
+                ends.append(end)
+            else:
+                failed_tickers.append(ticker)
+
+            for trade in details:
+                item = dict(trade)
+                item["ticker"] = ticker
+                item["exit_date"] = _trade_exit_date(item)
+                all_trades.append(item)
+            succeeded = bool(start and end)
+        finally:
+            _notify_progress(
+                progress_callback,
+                completed,
+                total_tickers,
                 ticker,
-                include_trades=True,
-                **runner_kwargs,
+                succeeded,
             )
-        except Exception:
-            failed_tickers.append(ticker)
-            continue
-
-        start, end = _period_bounds(period_label)
-        if start and end:
-            eligible_tickers += 1
-            eligible_names.append(ticker)
-            starts.append(start)
-            ends.append(end)
-        else:
-            failed_tickers.append(ticker)
-
-        for trade in details:
-            item = dict(trade)
-            item["ticker"] = ticker
-            item["exit_date"] = _trade_exit_date(item)
-            all_trades.append(item)
 
     all_trades = _neutralize_trade_entries(
         all_trades,

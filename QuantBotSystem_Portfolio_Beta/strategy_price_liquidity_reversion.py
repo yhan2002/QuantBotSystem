@@ -359,22 +359,71 @@ def run_reversion_backtest(
     return result if include_trades else result[:4]
 
 
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker,
+    succeeded,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, completed, total, ticker, succeeded)
+    except Exception:
+        pass
+
+
+def _stage_progress_callback(progress_callback, stage):
+    if progress_callback is None:
+        return None
+
+    def notify(completed, total, ticker, succeeded):
+        _notify_progress(
+            progress_callback,
+            stage,
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
+
+    return notify
+
+
 def scan_value_reversion(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
 ):
     scored, failed = [], []
     raw_scores = {}
-    for ticker in universe_list:
-        result = analyze_value_reversion(ticker, allow_fundamental_download=False)
-        if result["status"] == "OK":
-            scored.append({"ticker": ticker, **result})
-            raw_scores[ticker] = result["score"]
-        elif result["status"] == "DATA_INSUFFICIENT":
-            failed.append(ticker)
-        else:
-            raw_scores[ticker] = 0.0
+    total_tickers = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
+        try:
+            result = analyze_value_reversion(
+                ticker, allow_fundamental_download=False
+            )
+            succeeded = result["status"] not in ("DATA_INSUFFICIENT", "ERROR")
+            if result["status"] == "OK":
+                scored.append({"ticker": ticker, **result})
+                raw_scores[ticker] = result["score"]
+            elif result["status"] == "DATA_INSUFFICIENT":
+                failed.append(ticker)
+            else:
+                raw_scores[ticker] = 0.0
+        finally:
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total_tickers,
+                ticker,
+                succeeded,
+            )
 
     neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
         raw_scores, neutralization
@@ -439,6 +488,9 @@ def scan_value_reversion(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "IS_BACKTEST"
+        ),
         side=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.selection_window(),
     )
@@ -449,6 +501,9 @@ def scan_value_reversion(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "OOS_BACKTEST"
+        ),
         side=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.oos_window(),
     )

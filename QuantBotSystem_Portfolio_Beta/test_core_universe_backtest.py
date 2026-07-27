@@ -10,6 +10,64 @@ import core_universe_backtest
 
 
 class UniverseBacktestTests(unittest.TestCase):
+    def test_progress_callback_reports_each_ticker_completion_once(self):
+        progress = []
+
+        def runner(ticker, include_trades=False, **_kwargs):
+            if ticker == "ERROR":
+                raise RuntimeError("runner failed")
+            period = (
+                "2026-01-01 to 2026-07-16"
+                if ticker == "OK"
+                else "N/A"
+            )
+            return 0.0, 0.0, 0, period, []
+
+        result = core_universe_backtest.aggregate_universe_backtest(
+            ["OK", "NO_DATA", "ERROR"],
+            runner,
+            progress_callback=lambda completed, total, ticker, succeeded: progress.append(
+                (completed, total, ticker, succeeded)
+            ),
+        )
+
+        self.assertEqual(
+            progress,
+            [
+                (1, 3, "OK", True),
+                (2, 3, "NO_DATA", False),
+                (3, 3, "ERROR", False),
+            ],
+        )
+        self.assertEqual(result["eligible_tickers"], 1)
+        self.assertEqual(result["failed_tickers"], ["NO_DATA", "ERROR"])
+
+    def test_progress_callback_errors_do_not_change_backtest_results(self):
+        callback_calls = []
+
+        def runner(ticker, include_trades=False, **_kwargs):
+            return 1.0, 100.0, 1, "2026-01-01 to 2026-07-16", [{
+                "side": "LONG",
+                "entry_date": "2026-02-02",
+                "exit_date": "2026-02-06",
+                "return": 1.0,
+            }]
+
+        def broken_callback(completed, total, ticker, succeeded):
+            callback_calls.append((completed, total, ticker, succeeded))
+            raise RuntimeError("Telegram edit failed")
+
+        result = core_universe_backtest.aggregate_universe_backtest(
+            ["AAA", "BBB"],
+            runner,
+            progress_callback=broken_callback,
+        )
+
+        self.assertEqual(len(callback_calls), 2)
+        self.assertEqual(result["eligible_tickers"], 2)
+        self.assertEqual(result["failed_tickers"], [])
+        self.assertEqual(result["all"]["count"], 2)
+
     def test_aggregates_every_ticker_and_splits_summary_detail(self):
         calls = []
 

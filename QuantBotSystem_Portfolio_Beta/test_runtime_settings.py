@@ -81,10 +81,10 @@ class RuntimeSettingsTests(unittest.TestCase):
 
     def test_version_constants_are_explicit(self):
         self.assertEqual("PORTFOLIO_BETA", runtime_settings.VERSION)
-        self.assertEqual("2026.07.24", runtime_settings.BUILD)
+        self.assertEqual("2026.07.27", runtime_settings.BUILD)
         self.assertEqual("Portfolio Beta", runtime_settings.VERSION_DISPLAY_NAME)
         self.assertEqual(
-            "Portfolio Beta (build 2026.07.24)",
+            "Portfolio Beta (build 2026.07.27)",
             runtime_settings.VERSION_LABEL,
         )
 

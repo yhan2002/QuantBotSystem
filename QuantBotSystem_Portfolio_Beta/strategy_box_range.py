@@ -905,10 +905,44 @@ def _candidate_row(
     )
 
 
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker,
+    succeeded,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, completed, total, ticker, succeeded)
+    except Exception:
+        pass
+
+
+def _stage_progress_callback(progress_callback, stage):
+    if progress_callback is None:
+        return None
+
+    def notify(completed, total, ticker, succeeded):
+        _notify_progress(
+            progress_callback,
+            stage,
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
+
+    return notify
+
+
 def scan_total_universe(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
     long_candidates = []
@@ -922,26 +956,39 @@ def scan_total_universe(
         )
         for ticker in universe_list
     }
-    for ticker in universe_list:
-        result = analyze_box_range(ticker, df=price_data[ticker])
-        if result["status"] in ("DATA_INSUFFICIENT", "ERROR"):
-            failed_tickers.append(ticker)
-            continue
-        raw_score = 0.0
-        if result["status"] in (
-            "LONG_RANGE_RECLAIM",
-            "LONG_TREND_PULLBACK",
-            "SHORT_RANGE_RECLAIM",
-            "SHORT_TREND_RALLY",
-        ):
-            raw_score = _candidate_score(result, result["side"])
-            target = (
-                long_candidates
-                if result["side"] == "LONG"
-                else short_candidates
+    total_tickers = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
+        try:
+            result = analyze_box_range(ticker, df=price_data[ticker])
+            succeeded = result["status"] not in ("DATA_INSUFFICIENT", "ERROR")
+            if not succeeded:
+                failed_tickers.append(ticker)
+                continue
+            raw_score = 0.0
+            if result["status"] in (
+                "LONG_RANGE_RECLAIM",
+                "LONG_TREND_PULLBACK",
+                "SHORT_RANGE_RECLAIM",
+                "SHORT_TREND_RALLY",
+            ):
+                raw_score = _candidate_score(result, result["side"])
+                target = (
+                    long_candidates
+                    if result["side"] == "LONG"
+                    else short_candidates
+                )
+                target.append((ticker, result, raw_score))
+            raw_scores[ticker] = raw_score
+        finally:
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total_tickers,
+                ticker,
+                succeeded,
             )
-            target.append((ticker, result, raw_score))
-        raw_scores[ticker] = raw_score
 
     neutralized_scores = (
         core_cross_sectional_neutralization.neutralize_scores(
@@ -1100,6 +1147,9 @@ def scan_total_universe(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "IS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.selection_window(),
     )
@@ -1110,6 +1160,9 @@ def scan_total_universe(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "OOS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.oos_window(),
     )
@@ -1145,9 +1198,11 @@ def scan_box_range(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
 ):
     return scan_total_universe(
         universe_list,
         neutralization=neutralization,
         position_mode=position_mode,
+        progress_callback=progress_callback,
     )

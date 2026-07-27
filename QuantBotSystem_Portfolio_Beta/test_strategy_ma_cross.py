@@ -8,6 +8,58 @@ import strategy_ma_cross
 
 
 class MomentumEvaluationMarkTests(unittest.TestCase):
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "format_fixed_is_oos_backtest",
+        return_value="\nSUMMARY",
+    )
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "aggregate_universe_backtest",
+    )
+    @patch.object(strategy_ma_cross, "analyze_trend_strict_signals")
+    def test_scan_reports_current_is_and_oos_progress_safely(
+        self,
+        analyze,
+        aggregate,
+        _format,
+    ):
+        analyze.side_effect = [
+            ("EXIT_SIGNAL", 1.0),
+            ("ERROR", 0.0),
+        ]
+        events = []
+
+        def progress(stage, completed, total, ticker, succeeded):
+            events.append((stage, completed, total, ticker, succeeded))
+            raise RuntimeError("Telegram edit failed")
+
+        def aggregate_result(*_args, **kwargs):
+            callback = kwargs["progress_callback"]
+            callback(1, 2, "AAA", True)
+            callback(2, 2, "BBB", False)
+            return {}
+
+        aggregate.side_effect = aggregate_result
+
+        report = strategy_ma_cross.scan_ma_cross(
+            ["AAA", "BBB"],
+            progress_callback=progress,
+        )
+
+        self.assertIn("Momentum Scan Report", report)
+        self.assertEqual(
+            events,
+            [
+                ("CURRENT_SCAN", 1, 2, "AAA", True),
+                ("CURRENT_SCAN", 2, 2, "BBB", False),
+                ("IS_BACKTEST", 1, 2, "AAA", True),
+                ("IS_BACKTEST", 2, 2, "BBB", False),
+                ("OOS_BACKTEST", 1, 2, "AAA", True),
+                ("OOS_BACKTEST", 2, 2, "BBB", False),
+            ],
+        )
+
     def test_incomplete_holding_period_is_marked_at_evaluation_close(self):
         dates = pd.date_range("2024-01-01", periods=275, freq="B")
         frame = pd.DataFrame(

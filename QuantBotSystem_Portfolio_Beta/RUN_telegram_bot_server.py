@@ -1,6 +1,7 @@
 ﻿# File name: telegram_bot_server.py
 # Routes Telegram button events and user text input to feature modules.
 import os
+import time
 
 import telebot
 from telebot.apihelper import ApiTelegramException
@@ -9,8 +10,13 @@ import config
 import runtime_settings
 import app_daily_market_scheduler
 import app_runtime_lock
+import app_scan_jobs
 import core_market_data_store
-from app_bot_reports import quick_report, run_compiled_scan
+from app_bot_reports import (
+    quick_report,
+    run_compiled_scan,
+    snapshot_scan_request,
+)
 from app_bot_session import (
     CUSTOM_GROUP_CODE,
     NEUTRALIZATION_LABELS,
@@ -53,6 +59,205 @@ if not BOT_TOKEN:
     )
 
 bot = telebot.TeleBot(BOT_TOKEN)
+HEAVY_JOB_KEY = "HEAVY_OPERATION"
+
+STAGE_RANGES = {
+    "DATA_DOWNLOAD": (1.0, 10.0, "신규 종목 데이터 다운로드"),
+    "PREPARING": (1.0, 5.0, "스캔 준비"),
+    "DATA_LOAD": (5.0, 10.0, "로컬 데이터 로딩"),
+    "CURRENT_SCAN": (10.0, 35.0, "현재 후보 스캔"),
+    "IS_BACKTEST": (35.0, 65.0, "IS 백테스트"),
+    "OOS_BACKTEST": (65.0, 95.0, "OOS 백테스트"),
+    "FINALIZING": (95.0, 99.0, "원장·리포트 생성"),
+}
+
+
+def _elapsed_text(snapshot):
+    started_at = snapshot.started_at or snapshot.created_at
+    elapsed = max(0, int(time.time() - started_at))
+    hours, remainder = divmod(elapsed, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}시간 {minutes:02d}분 {seconds:02d}초"
+    return f"{minutes}분 {seconds:02d}초"
+
+
+def format_job_progress(snapshot):
+    progress = max(1, min(100, int(snapshot.progress)))
+    filled = min(20, progress // 5)
+    bar = "█" * filled + "░" * (20 - filled)
+    generic_stages = {
+        "Queued": "대기 중",
+        "Running": "작업 시작",
+        "Completed": "완료",
+        "Failed": "실패",
+        "Cancelled": "취소",
+    }
+    stage = generic_stages.get(snapshot.stage, snapshot.stage)
+    lines = [
+        snapshot.label or "QuantBot 작업",
+        "",
+        f"{bar} {progress}%",
+        "",
+        f"단계: {stage}",
+    ]
+    if snapshot.current is not None and snapshot.total is not None:
+        lines.append(f"진행: {snapshot.current} / {snapshot.total}종목")
+    lines.append(f"경과시간: {_elapsed_text(snapshot)}")
+    return "\n".join(lines)
+
+
+def _edit_job_progress(chat_id, message_id, snapshot):
+    try:
+        bot.edit_message_text(
+            format_job_progress(snapshot),
+            chat_id,
+            message_id,
+            reply_markup=telebot.types.InlineKeyboardMarkup(),
+        )
+    except ApiTelegramException as exc:
+        if "message is not modified" not in str(exc.description):
+            print(f"[job progress edit failed] {type(exc).__name__}: {exc}")
+    except Exception as exc:
+        print(f"[job progress edit failed] {type(exc).__name__}: {exc}")
+
+
+def _scan_progress_adapter(progress, cancel_event):
+    def report(stage, completed, total, ticker=None, succeeded=True):
+        if cancel_event.is_set():
+            raise app_scan_jobs.JobCancelled()
+        start, end, label = STAGE_RANGES.get(
+            stage,
+            (5.0, 95.0, str(stage).replace("_", " ").title()),
+        )
+        ratio = (
+            min(max(float(completed) / float(total), 0.0), 1.0)
+            if total
+            else 0.0
+        )
+        progress(
+            start + (end - start) * ratio,
+            label,
+            completed,
+            total,
+        )
+
+    return report
+
+
+def _download_progress_adapter(progress, cancel_event, stage_label):
+    def report(completed, total, ticker):
+        if cancel_event.is_set():
+            raise app_scan_jobs.JobCancelled()
+        ratio = (
+            min(max(float(completed) / float(total), 0.0), 1.0)
+            if total
+            else 0.0
+        )
+        progress(
+            5.0 + 90.0 * ratio,
+            stage_label,
+            completed,
+            total,
+        )
+
+    return report
+
+
+def submit_background_operation(
+    chat_id,
+    message_id,
+    *,
+    label,
+    task_type,
+    runner,
+    on_result,
+    error_markup=None,
+):
+    def on_progress(snapshot):
+        _edit_job_progress(chat_id, message_id, snapshot)
+
+    def on_complete(snapshot):
+        _edit_job_progress(chat_id, message_id, snapshot)
+        try:
+            on_result(snapshot.result)
+        except Exception as exc:
+            bot.edit_message_text(
+                f"작업은 완료됐지만 결과 전송에 실패했습니다.\n{type(exc).__name__}: {exc}",
+                chat_id,
+                message_id,
+                reply_markup=error_markup or build_back_home_markup(),
+            )
+
+    def on_error(snapshot):
+        bot.edit_message_text(
+            f"{label}\n\n작업 실패: {snapshot.error or 'Unknown error'}",
+            chat_id,
+            message_id,
+            reply_markup=error_markup or build_back_home_markup(),
+        )
+
+    submission = app_scan_jobs.submit_job(
+        chat_id,
+        HEAVY_JOB_KEY,
+        runner,
+        task_type=task_type,
+        label=label,
+        metadata={"message_id": int(message_id)},
+        on_progress=on_progress,
+        on_complete=on_complete,
+        on_error=on_error,
+    )
+    return submission
+
+
+def submit_ticker_background_operation(
+    chat_id,
+    message_id,
+    *,
+    label,
+    task_type,
+    tickers,
+    operation,
+    operation_kwargs,
+    stage_label,
+    format_result,
+    result_markup,
+):
+    frozen_tickers = tuple(tickers)
+
+    def runner(progress, cancel_event):
+        progress(5, "작업 준비", 0, len(frozen_tickers))
+        kwargs = dict(operation_kwargs)
+        kwargs["progress_callback"] = _download_progress_adapter(
+            progress,
+            cancel_event,
+            stage_label,
+        )
+        return serialized_runtime_call(
+            operation,
+            frozen_tickers,
+            **kwargs,
+        )
+
+    def on_result(summary):
+        bot.edit_message_text(
+            format_result(summary),
+            chat_id,
+            message_id,
+            parse_mode="Markdown",
+            reply_markup=result_markup,
+        )
+
+    return submit_background_operation(
+        chat_id,
+        message_id,
+        label=label,
+        task_type=task_type,
+        runner=runner,
+        on_result=on_result,
+        error_markup=result_markup,
+    )
 
 
 def serialized_runtime_call(callback, *args, **kwargs):
@@ -60,12 +265,13 @@ def serialized_runtime_call(callback, *args, **kwargs):
         return callback(*args, **kwargs)
 
 
-def run_manual_scan(chat_id, progress_callback):
+def run_manual_scan(chat_id, progress_callback, request=None):
     return serialized_runtime_call(
         run_compiled_scan,
         chat_id,
         progress_callback=progress_callback,
         return_report_id=True,
+        request=request,
     )
 
 
@@ -333,22 +539,47 @@ def handle_menu_callbacks(call):
             )
 
         elif data == "run_scan":
-            bot.answer_callback_query(call.id, "Starting scan.")
-            report, report_id = run_manual_scan(
-                chat_id,
-                progress_callback=lambda msg: bot.edit_message_text(
-                    msg, chat_id, call.message.message_id
-                ),
+            request = snapshot_scan_request(chat_id)
+            strategy_label = STRATEGY_LABELS.get(
+                request.strategy,
+                request.strategy,
             )
-            send_long_message(
+
+            def scan_runner(progress, cancel_event):
+                return run_manual_scan(
+                    chat_id,
+                    _scan_progress_adapter(progress, cancel_event),
+                    request=request,
+                )
+
+            def deliver_scan(result):
+                report, report_id = result
+                send_long_message(
+                    chat_id,
+                    report,
+                    first_message_id=call.message.message_id,
+                    markup=build_scan_result_markup(
+                        has_detail=bool(report_id),
+                        report_id=report_id,
+                    ),
+                )
+
+            submission = submit_background_operation(
                 chat_id,
-                report,
-                first_message_id=call.message.message_id,
-                markup=build_scan_result_markup(
-                    has_detail=bool(report_id),
-                    report_id=report_id,
-                ),
+                call.message.message_id,
+                label=f"{strategy_label} Scan",
+                task_type="STRATEGY_SCAN",
+                runner=scan_runner,
+                on_result=deliver_scan,
             )
+            if submission.created:
+                bot.answer_callback_query(call.id, "Background scan started.")
+            else:
+                bot.answer_callback_query(
+                    call.id,
+                    f"Another task is already {submission.progress}% complete.",
+                    show_alert=True,
+                )
 
         elif data == "scan_detail" or data.startswith("scan_detail:"):
             report_id = data.partition(":")[2] or None
@@ -412,26 +643,29 @@ def handle_menu_callbacks(call):
 
         elif data == "admin_refresh_all":
             all_tickers = sorted(set(config.universe))
-            bot.answer_callback_query(call.id, "Updating latest data for all tickers.")
-            bot.edit_message_text(
-                f"Updating latest data ({len(all_tickers)} tickers)...",
+            submission = submit_ticker_background_operation(
                 chat_id,
                 call.message.message_id,
+                label="All-Ticker Latest Update",
+                task_type="MARKET_REFRESH",
+                tickers=all_tickers,
+                operation=core_market_data_store.refresh_latest_price_data,
+                operation_kwargs={
+                    "min_period": core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+                },
+                stage_label="최신 가격 캐시 다운로드",
+                format_result=lambda summary: core_market_data_store.format_cache_summary(
+                    summary,
+                    title="All-Ticker Latest Update Complete",
+                ),
+                result_markup=build_admin_markup(),
             )
-            summary = serialized_runtime_call(
-                core_market_data_store.refresh_latest_price_data,
-                all_tickers,
-                min_period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
-            )
-            report = core_market_data_store.format_cache_summary(
-                summary, title="All-Ticker Latest Update Complete"
-            )
-            bot.edit_message_text(
-                report,
-                chat_id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=build_admin_markup(),
+            bot.answer_callback_query(
+                call.id,
+                "Background update started."
+                if submission.created
+                else f"Another task is already {submission.progress}% complete.",
+                show_alert=not submission.created,
             )
 
         elif data == "admin_refresh_selected":
@@ -439,26 +673,29 @@ def handle_menu_callbacks(call):
             if not selected:
                 bot.answer_callback_query(call.id, "No selected tickers.", show_alert=True)
                 return
-            bot.answer_callback_query(call.id, "Refreshing selected universe.")
-            bot.edit_message_text(
-                f"Updating latest selected-universe data ({len(selected)} tickers)...",
+            submission = submit_ticker_background_operation(
                 chat_id,
                 call.message.message_id,
+                label="Selected-Universe Latest Update",
+                task_type="MARKET_REFRESH",
+                tickers=selected,
+                operation=core_market_data_store.refresh_latest_price_data,
+                operation_kwargs={
+                    "min_period": core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+                },
+                stage_label="최신 가격 캐시 다운로드",
+                format_result=lambda summary: core_market_data_store.format_cache_summary(
+                    summary,
+                    title="Selected-Universe Latest Update Complete",
+                ),
+                result_markup=build_admin_markup(),
             )
-            summary = serialized_runtime_call(
-                core_market_data_store.refresh_latest_price_data,
-                selected,
-                min_period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
-            )
-            report = core_market_data_store.format_cache_summary(
-                summary, title="Selected-Universe Latest Update Complete"
-            )
-            bot.edit_message_text(
-                report,
-                chat_id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=build_admin_markup(),
+            bot.answer_callback_query(
+                call.id,
+                "Background update started."
+                if submission.created
+                else f"Another task is already {submission.progress}% complete.",
+                show_alert=not submission.created,
             )
 
         elif data in {"admin_backfill_selected_run", "admin_backfill_all_run"}:
@@ -471,26 +708,29 @@ def handle_menu_callbacks(call):
             if not target:
                 bot.answer_callback_query(call.id, "No target tickers.", show_alert=True)
                 return
-            bot.answer_callback_query(call.id, "Starting confirmed 4Y backfill.")
-            bot.edit_message_text(
-                f"Backfilling four years for {scope_label} ({len(target)} tickers)...",
+            submission = submit_ticker_background_operation(
                 chat_id,
                 call.message.message_id,
+                label=f"4Y Backfill: {scope_label}",
+                task_type="MARKET_BACKFILL",
+                tickers=target,
+                operation=core_market_data_store.backfill_price_data,
+                operation_kwargs={
+                    "period": core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
+                },
+                stage_label="4년 가격 캐시 다운로드",
+                format_result=lambda summary: core_market_data_store.format_cache_summary(
+                    summary,
+                    title="Confirmed 4Y Backfill Complete",
+                ),
+                result_markup=build_admin_markup(),
             )
-            summary = serialized_runtime_call(
-                core_market_data_store.backfill_price_data,
-                target,
-                period=core_market_data_store.FIXED_IS_OOS_HISTORY_PERIOD,
-            )
-            report = core_market_data_store.format_cache_summary(
-                summary, title="Confirmed 4Y Backfill Complete"
-            )
-            bot.edit_message_text(
-                report,
-                chat_id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=build_admin_markup(),
+            bot.answer_callback_query(
+                call.id,
+                "Background 4Y backfill started."
+                if submission.created
+                else f"Another task is already {submission.progress}% complete.",
+                show_alert=not submission.created,
             )
 
         elif data == "admin_cache_status":
@@ -534,22 +774,24 @@ def handle_menu_callbacks(call):
 
         elif data == "admin_refresh_classifications":
             all_tickers = sorted(set(config.universe))
-            bot.answer_callback_query(call.id, "Refreshing sector and industry metadata.")
-            bot.edit_message_text(
-                f"Refreshing sector/industry labels ({len(all_tickers)} tickers)...",
+            submission = submit_ticker_background_operation(
                 chat_id,
                 call.message.message_id,
+                label="Security Classification Update",
+                task_type="METADATA_REFRESH",
+                tickers=all_tickers,
+                operation=core_market_data_store.refresh_security_metadata,
+                operation_kwargs={},
+                stage_label="국가·섹터·산업 데이터 다운로드",
+                format_result=core_market_data_store.format_metadata_summary,
+                result_markup=build_admin_markup(),
             )
-            summary = serialized_runtime_call(
-                core_market_data_store.refresh_security_metadata,
-                all_tickers,
-            )
-            bot.edit_message_text(
-                core_market_data_store.format_metadata_summary(summary),
-                chat_id,
-                call.message.message_id,
-                parse_mode="Markdown",
-                reply_markup=build_admin_markup(),
+            bot.answer_callback_query(
+                call.id,
+                "Background metadata update started."
+                if submission.created
+                else f"Another task is already {submission.progress}% complete.",
+                show_alert=not submission.created,
             )
 
         elif data == "await_quick":
