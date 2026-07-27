@@ -75,8 +75,9 @@ class BotUiTests(unittest.TestCase):
         self.assertIn("admin_refresh_selected", callbacks)
         self.assertIn("admin_refresh_all", callbacks)
         self.assertNotIn("Preload 4Y Market Data", texts)
-        self.assertIn("PORTFOLIO_BETA", app_bot_ui.admin_text())
-        self.assertIn("PORTFOLIO_BETA", app_bot_ui.home_text("test-chat"))
+        self.assertIn("Portfolio Beta", app_bot_ui.admin_text())
+        self.assertIn("Portfolio Beta", app_bot_ui.home_text("test-chat"))
+        self.assertNotIn("PORTFOLIO_BETA", app_bot_ui.home_text("test-chat"))
 
     def test_admin_full_backfill_requires_explicit_confirmation(self):
         selected = app_bot_ui.build_admin_backfill_confirm_markup("selected")

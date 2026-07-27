@@ -17,7 +17,8 @@ import config
 
 VERSION = "PORTFOLIO_BETA"
 BUILD = "2026.07.24"
-VERSION_LABEL = f"{VERSION} (build {BUILD})"
+VERSION_DISPLAY_NAME = "Portfolio Beta"
+VERSION_LABEL = f"{VERSION_DISPLAY_NAME} (build {BUILD})"
 
 BASE_DIR = Path(__file__).resolve().parent
 REPOSITORY_DIR = BASE_DIR.parent
