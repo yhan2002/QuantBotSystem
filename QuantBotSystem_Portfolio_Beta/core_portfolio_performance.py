@@ -420,6 +420,124 @@ def _align_calendar_to_market_end(
     return common_calendar, close_frame.reindex(common_calendar)
 
 
+def _prepare_trades_for_evaluation(trades, calendar):
+    """Replace exits after the common benchmark date with an explicit close mark."""
+    evaluation_end = pd.Timestamp(calendar[-1]).normalize()
+    prepared = []
+    for raw_trade in trades:
+        entry_date = pd.Timestamp(raw_trade["entry_date"]).normalize()
+        if entry_date > evaluation_end:
+            continue
+        events = _trade_events(raw_trade)
+        if not events:
+            raise ValueError(
+                f"Trade has no exit event: {raw_trade.get('ticker')} "
+                f"{raw_trade.get('entry_date')}"
+            )
+
+        retained_events = []
+        remaining = 1.0
+        for raw_event in events:
+            event = dict(raw_event)
+            event_date = pd.Timestamp(event["date"]).normalize()
+            if event_date > evaluation_end:
+                continue
+            weight = float(event.get("weight", 1.0))
+            if weight < -1e-12 or weight > remaining + 1e-9:
+                raise ValueError(
+                    f"Invalid exit weight for {raw_trade.get('ticker')} "
+                    f"on {event_date.date()}"
+                )
+            event["date"] = event_date.date().isoformat()
+            event["weight"] = weight
+            retained_events.append(event)
+            remaining = max(0.0, remaining - weight)
+
+        trade = dict(raw_trade)
+        trade["exit_events"] = retained_events
+        trade["evaluation_status"] = (
+            "MARKED_AT_EVALUATION_END"
+            if any(
+                _is_evaluation_mark_reason(event.get("reason"))
+                for event in retained_events
+            )
+            else "CLOSED"
+        )
+        if remaining > 1e-8:
+            mark_date = evaluation_end.date().isoformat()
+            trade["original_exit_date"] = (
+                raw_trade.get("exit_date")
+                or pd.Timestamp(events[-1]["date"]).date().isoformat()
+            )
+            trade["original_return"] = raw_trade.get("return")
+            trade["exit_date"] = mark_date
+            trade["exit_reason"] = "evaluation-end mark"
+            trade.pop("exit_price", None)
+            trade["evaluation_status"] = "MARKED_AT_EVALUATION_END"
+            trade["exit_events"].append(
+                {
+                    "date": mark_date,
+                    "weight": remaining,
+                    "reason": "evaluation-end mark",
+                    "execution": "CLOSE",
+                    "evaluation_mark": True,
+                }
+            )
+        prepared.append(trade)
+    return prepared
+
+
+def _is_evaluation_mark_reason(reason):
+    normalized = str(reason or "").lower().replace("-", " ").replace("_", " ")
+    return " ".join(normalized.split()) == "evaluation end mark"
+
+
+def _annotate_evaluated_trade_returns(ledger):
+    mark_events = {}
+    for event in ledger.get("events", []):
+        if (
+            event.get("event") == "EXIT"
+            and _is_evaluation_mark_reason(event.get("reason"))
+        ):
+            mark_events.setdefault(event["trade_id"], []).append(event)
+
+    for trade in ledger.get("trades", []):
+        if trade.get("allocation_status") != "FILLED":
+            continue
+        allocated_base = float(trade.get("allocated_base_notional") or 0.0)
+        realized_pnl = float(trade.get("realized_pnl") or 0.0)
+        evaluated_return = (
+            realized_pnl / allocated_base * 100.0
+            if allocated_base > 0
+            else None
+        )
+        trade["evaluated_return_pct"] = evaluated_return
+        if (
+            evaluated_return is not None
+            and trade.get("evaluation_status") == "MARKED_AT_EVALUATION_END"
+        ):
+            trade["return"] = evaluated_return
+
+        events = mark_events.get(trade.get("trade_id"), [])
+        if not events:
+            continue
+        trade["evaluation_mark_date"] = str(events[0]["date"].date())
+        trade["evaluation_mark_leg_prices"] = {
+            event["ticker"]: float(event["price"])
+            for event in events
+        }
+        if len(events) == 1:
+            trade["evaluation_mark_price"] = float(events[0]["price"])
+            trade["exit_price"] = float(events[0]["price"])
+        for exit_event in trade.get("exit_events") or []:
+            if exit_event.get("evaluation_mark"):
+                exit_event["leg_prices"] = dict(
+                    trade["evaluation_mark_leg_prices"]
+                )
+                if len(events) == 1:
+                    exit_event["price"] = float(events[0]["price"])
+
+
 def _benchmark_payload(
     calendar,
     close_frame,
@@ -630,14 +748,16 @@ def calculate_score_weighted_performance(
     )
     if policy is None:
         policy = PortfolioPolicy(position_mode=position_mode)
+    evaluation_trades = _prepare_trades_for_evaluation(trades, calendar)
     ledger = simulate_portfolio(
-        trades,
+        evaluation_trades,
         start_date,
         end_date,
         price_loader=price_loader,
         policy=policy,
         calendar=calendar,
     )
+    _annotate_evaluated_trade_returns(ledger)
     ledger_daily = ledger["daily"].reindex(calendar)
     strategy_returns = ledger_daily["portfolio_return"].fillna(0.0)
     strategy_nav = ledger_daily["portfolio_nav"] / float(policy.initial_nav)
@@ -672,6 +792,11 @@ def calculate_score_weighted_performance(
         "events": ledger["events"],
         "filled_trades": ledger["filled_trades"],
         "skipped_trades": ledger["skipped_trades"],
+        "evaluation_end_marks": sum(
+            trade.get("allocation_status") == "FILLED"
+            and trade.get("evaluation_status") == "MARKED_AT_EVALUATION_END"
+            for trade in ledger["trades"]
+        ),
         "policy": {
             "initial_nav": policy.initial_nav,
             "max_gross": policy.max_gross,

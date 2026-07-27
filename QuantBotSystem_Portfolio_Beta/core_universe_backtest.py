@@ -11,6 +11,7 @@ from statistics import median
 import pandas as pd
 
 import core_cross_sectional_neutralization
+import core_backtest_periods
 import core_market_data_store
 import core_portfolio_performance
 import core_signal_scoring
@@ -166,6 +167,40 @@ def _notify_progress(progress_callback, completed, total, ticker, succeeded):
         pass
 
 
+def _latest_usable_market_date(
+    requested_end,
+    price_loader,
+    max_stale_calendar_days=core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS,
+):
+    """Return the latest usable ACWI date without silently using stale data."""
+    if not requested_end:
+        return None
+    requested = pd.Timestamp(requested_end).normalize()
+    staleness_reference = min(requested, pd.Timestamp.now().normalize())
+    try:
+        prices = price_loader(core_portfolio_performance.MARKET_BENCHMARK_TICKER)
+    except Exception:
+        return None
+    if prices is None or prices.empty:
+        return None
+    for column in ("Adj Close", "Close"):
+        if column not in prices:
+            continue
+        series = pd.to_numeric(prices[column], errors="coerce")
+        series = series.replace([float("inf"), float("-inf")], pd.NA).dropna()
+        series = series[series > 0]
+        if series.empty:
+            continue
+        series.index = pd.to_datetime(series.index).normalize()
+        candidates = series.index[series.index <= staleness_reference]
+        if candidates.empty:
+            continue
+        latest = candidates[-1]
+        if (staleness_reference - latest).days <= max_stale_calendar_days:
+            return latest.date().isoformat()
+    return None
+
+
 def aggregate_universe_backtest(
     universe_list,
     runner,
@@ -174,6 +209,7 @@ def aggregate_universe_backtest(
     portfolio_accounting=False,
     portfolio_policy=None,
     price_availability_loader=None,
+    market_benchmark_loader=None,
     progress_callback=None,
     **runner_kwargs,
 ):
@@ -189,6 +225,17 @@ def aggregate_universe_backtest(
     starts, ends = [], []
     eligible_names = []
     total_tickers = len(universe_list)
+    benchmark_loader = (
+        market_benchmark_loader or core_market_data_store.get_price_data
+    )
+    effective_runner_kwargs = dict(runner_kwargs)
+    if portfolio_accounting:
+        common_end = _latest_usable_market_date(
+            effective_runner_kwargs.get("evaluation_end"),
+            benchmark_loader,
+        )
+        if common_end:
+            effective_runner_kwargs["evaluation_end"] = common_end
 
     for completed, ticker in enumerate(universe_list, start=1):
         succeeded = False
@@ -197,7 +244,7 @@ def aggregate_universe_backtest(
                 _, _, _, period_label, details = runner(
                     ticker,
                     include_trades=True,
-                    **runner_kwargs,
+                    **effective_runner_kwargs,
                 )
             except Exception:
                 failed_tickers.append(ticker)
@@ -260,6 +307,7 @@ def aggregate_universe_backtest(
         end_date,
         position_mode=position_mode,
         policy=portfolio_policy,
+        market_benchmark_loader=benchmark_loader,
     )
     qualified_trades = list(all_trades)
     allocated_rows = performance["ledger"]["trades"]
@@ -402,7 +450,8 @@ def _portfolio_lines(result):
         "Portfolio risk: " + " | ".join(performance_parts),
         (
             "Execution: "
-            f"filled {ledger['filled_trades']} | skipped {ledger['skipped_trades']}"
+            f"filled {ledger['filled_trades']} | skipped {ledger['skipped_trades']} | "
+            f"evaluation-end marks {ledger.get('evaluation_end_marks', 0)}"
         ),
         (
             f"Exposure: avg gross {average_gross:.1f}% | max gross {max_gross:.1f}% | "
@@ -475,7 +524,9 @@ def export_trade_events_csv(
         "listing_country", "company_country", "sector", "industry",
         "setup", "structure", "signal_score", "neutralized_score", "selected_score",
         "winsorized_score", "percentile_rank", "rank_score", "requested_weight_pct",
-        "allocation_status", "entry_weight_pct", "allocated_base_notional",
+        "allocation_status", "evaluation_status", "original_exit_date",
+        "evaluation_mark_date", "evaluation_mark_price",
+        "evaluated_return_pct", "entry_weight_pct", "allocated_base_notional",
         "allocated_gross_notional", "quantity", "realized_pnl",
         "nav_contribution_pct", "legs_json",
         "entry_execution", "signal_close", "next_open",
@@ -542,6 +593,17 @@ def export_trade_events_csv(
                             float(trade.get("requested_weight", 0.0)) * 100.0
                         ),
                         "allocation_status": trade.get("allocation_status", ""),
+                        "evaluation_status": trade.get("evaluation_status", ""),
+                        "original_exit_date": trade.get("original_exit_date", ""),
+                        "evaluation_mark_date": trade.get(
+                            "evaluation_mark_date", ""
+                        ),
+                        "evaluation_mark_price": trade.get(
+                            "evaluation_mark_price", ""
+                        ),
+                        "evaluated_return_pct": trade.get(
+                            "evaluated_return_pct", ""
+                        ),
                         "entry_weight_pct": trade.get("entry_weight_pct", ""),
                         "allocated_base_notional": trade.get(
                             "allocated_base_notional", ""
@@ -901,7 +963,16 @@ def format_fixed_is_oos_backtest(
             detail += line + "\n"
         for line in _box_attribution_lines(result):
             detail += line + "\n"
-        detail += f"Closed trades: {result['all']['count']}\n"
+        mark_count = int(
+            (result.get("portfolio_performance") or {})
+            .get("ledger", {})
+            .get("evaluation_end_marks", 0)
+        )
+        closed_count = max(0, int(result["all"]["count"]) - mark_count)
+        detail += (
+            f"Closed trades: {closed_count} | "
+            f"evaluation-end marks: {mark_count}\n"
+        )
     detail += (
         "\nDownload Export creates an analysis-ready file only when requested. "
         "Portfolio-accounted runs include trade events, per-leg ledger events, "

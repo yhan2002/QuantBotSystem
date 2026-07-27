@@ -10,6 +10,54 @@ import core_universe_backtest
 
 
 class UniverseBacktestTests(unittest.TestCase):
+    def test_portfolio_runner_is_capped_to_latest_usable_acwi_date(self):
+        seen_ends = []
+
+        def runner(ticker, include_trades=False, **kwargs):
+            seen_ends.append(kwargs["evaluation_end"])
+            end = kwargs["evaluation_end"]
+            return 0.0, 0.0, 0, f"2025-01-02 to {end}", []
+
+        acwi = pd.DataFrame(
+            {"Adj Close": [100.0, 101.0, 102.0]},
+            index=pd.to_datetime(
+                ["2024-12-31", "2025-01-02", "2025-01-03"]
+            ),
+        )
+        with mock.patch.object(
+            core_universe_backtest.core_portfolio_performance,
+            "calculate_score_weighted_performance",
+            return_value={"ledger": {"trades": []}},
+        ) as performance:
+            result = core_universe_backtest.aggregate_universe_backtest(
+                ["AAA"],
+                runner,
+                portfolio_accounting=True,
+                market_benchmark_loader=lambda _ticker: acwi,
+                evaluation_start="2025-01-02",
+                evaluation_end="2025-01-06",
+            )
+
+        self.assertEqual(seen_ends, ["2025-01-03"])
+        self.assertEqual(result["period"], "2025-01-02 to 2025-01-03")
+        self.assertEqual(performance.call_args.args[3], "2025-01-03")
+
+    def test_missing_or_stale_acwi_does_not_cap_runner_window(self):
+        empty = core_universe_backtest._latest_usable_market_date(
+            "2025-01-06",
+            lambda _ticker: pd.DataFrame(),
+        )
+        stale = core_universe_backtest._latest_usable_market_date(
+            "2025-01-06",
+            lambda _ticker: pd.DataFrame(
+                {"Close": [100.0]},
+                index=pd.to_datetime(["2024-12-01"]),
+            ),
+        )
+
+        self.assertIsNone(empty)
+        self.assertIsNone(stale)
+
     def test_progress_callback_reports_each_ticker_completion_once(self):
         progress = []
 
