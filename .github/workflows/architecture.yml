@@ -3,13 +3,13 @@ name: Architecture
 on:
   pull_request:
     paths:
-      - "**.py"
+      - "**/*.py"
       - "AGENTS.md"
       - "docs/**"
       - ".github/workflows/architecture.yml"
   push:
     paths:
-      - "**.py"
+      - "**/*.py"
       - "AGENTS.md"
       - "docs/**"
       - ".github/workflows/architecture.yml"
