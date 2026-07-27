@@ -142,11 +142,11 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertEqual(result["daily"]["benchmark_constituents"].iloc[-1], 1)
         self.assertEqual(result["benchmark_min_daily_tickers"], 1)
 
-    def test_msci_acwi_is_primary_and_universe_ew_remains_separate(self):
+    def test_acwi_is_primary_and_universe_ew_remains_separate(self):
         frames = {
             "AAA": _frame([100.0, 110.0, 121.0]),
             "BBB": _frame([100.0, 100.0, 100.0]),
-            "MIWD00000PUS": _frame([100.0, 110.0, 121.0]),
+            "ACWI": _frame([100.0, 110.0, 121.0]),
         }
         result = core_portfolio_performance.calculate_equal_weight_performance(
             [],
@@ -164,10 +164,75 @@ class PortfolioPerformanceTests(unittest.TestCase):
             0.10,
         )
         self.assertAlmostEqual(result["daily"]["universe_ew_return"].iloc[0], 0.05)
-        self.assertEqual(result["market_benchmark_ticker"], "MIWD00000PUS")
+        self.assertEqual(result["market_benchmark_ticker"], "ACWI")
         self.assertTrue(result["market_benchmark_available"])
 
-    def test_missing_msci_acwi_is_not_silently_replaced_by_universe_ew(self):
+    def test_acwi_prefers_adjusted_close_for_benchmark_roi(self):
+        acwi = _frame([100.0, 200.0, 400.0])
+        acwi["Adj Close"] = [100.0, 110.0, 121.0]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            [],
+            ["AAA"],
+            "2025-01-02",
+            "2025-01-03",
+            price_loader=_loader(
+                {
+                    "AAA": _frame([100.0, 100.0, 100.0]),
+                    "ACWI": acwi,
+                }
+            ),
+        )
+
+        self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 21.0)
+        self.assertEqual(result["market_benchmark_price_column"], "Adj Close")
+
+    def test_acwi_falls_back_to_valid_close_when_adjusted_close_is_invalid(self):
+        acwi = _frame([100.0, 110.0, 121.0])
+        acwi["Adj Close"] = [float("nan"), float("inf"), 0.0]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            [],
+            ["AAA"],
+            "2025-01-02",
+            "2025-01-03",
+            price_loader=_loader(
+                {
+                    "AAA": _frame([100.0, 100.0, 100.0]),
+                    "ACWI": acwi,
+                }
+            ),
+        )
+
+        self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 21.0)
+        self.assertEqual(result["market_benchmark_price_column"], "Close")
+
+    def test_acwi_falls_back_when_adjusted_close_lacks_end_boundary(self):
+        acwi = _frame(
+            [50.0, 100.0, 110.0, 121.0],
+            dates=["2024-12-01", "2024-12-31", "2025-01-02", "2025-01-03"],
+        )
+        acwi["Adj Close"] = [
+            50.0,
+            float("nan"),
+            float("nan"),
+            float("nan"),
+        ]
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            [],
+            ["AAA"],
+            "2025-01-02",
+            "2025-01-03",
+            price_loader=_loader(
+                {
+                    "AAA": _frame([100.0, 100.0, 100.0]),
+                    "ACWI": acwi,
+                }
+            ),
+        )
+
+        self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 21.0)
+        self.assertEqual(result["market_benchmark_price_column"], "Close")
+
+    def test_missing_acwi_is_not_silently_replaced_by_universe_ew(self):
         result = core_portfolio_performance.calculate_equal_weight_performance(
             [],
             ["AAA"],
@@ -180,13 +245,13 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertIsNone(result["market_benchmark"]["roi_pct"])
         self.assertTrue(result["daily"]["market_benchmark_return"].isna().all())
         self.assertAlmostEqual(result["universe_ew_benchmark"]["roi_pct"], 21.0)
-        self.assertIn("MIWD00000PUS", result["market_benchmark_unavailable_reason"])
+        self.assertIn("ACWI", result["market_benchmark_unavailable_reason"])
 
-    def test_msci_acwi_roi_uses_boundary_levels_without_full_daily_history(self):
+    def test_acwi_roi_uses_boundary_levels_without_full_daily_history(self):
         dates = ["2025-01-02", "2025-01-15", "2025-01-31"]
         frames = {
             "AAA": _frame([100.0, 101.0, 102.0], dates=dates),
-            "MIWD00000PUS": _frame(
+            "ACWI": _frame(
                 [100.0, 110.0, 999.0],
                 dates=["2024-12-31", "2025-01-31", "2025-02-01"],
             ),
@@ -216,7 +281,7 @@ class PortfolioPerformanceTests(unittest.TestCase):
                 [100.0, 101.0],
                 dates=["2025-01-02", "2025-01-04"],
             ),
-            "MIWD00000PUS": _frame(
+            "ACWI": _frame(
                 [100.0, 110.0, 121.0],
                 dates=["2024-12-31", "2025-01-03", "2025-01-04"],
             ),
@@ -254,7 +319,7 @@ class PortfolioPerformanceTests(unittest.TestCase):
             price_loader=_loader({
                 "AAA": _frame([100.0, 110.0, 121.0]),
                 "BBB": _frame([100.0, 100.0, 100.0]),
-                "MIWD00000PUS": _frame([100.0, 100.2, 100.4]),
+                "ACWI": _frame([100.0, 100.2, 100.4]),
             }),
         )
         self.assertEqual(result["trade_count"], 1)
@@ -266,7 +331,7 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertTrue(result["target"]["passes_all"])
         self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 0.4, places=2)
         self.assertGreater(result["universe_ew_benchmark"]["roi_pct"], 10.0)
-        self.assertEqual(result["target"]["benchmark_ticker"], "MIWD00000PUS")
+        self.assertEqual(result["target"]["benchmark_ticker"], "ACWI")
         self.assertEqual(result["target"]["primary_metric"], "1Y cumulative ROI")
         self.assertFalse(result["target"]["win_rate_is_hard_gate"])
         self.assertIn("passes_all", result["target"])

@@ -87,10 +87,10 @@ def admin_text():
         "confirmation is required.\n"
         "Refresh Market Countries: derive US/CH/JP/KR from cached ticker suffixes (local DB only).\n"
         "Refresh Sector / Industry: refresh sector/industry metadata; market country is also refreshed.\n"
-        "Refresh Benchmark: load exact MSCI ACWI levels from the configured local or "
-        "authorized HTTPS Date/Close CSV; no ETF fallback.\n"
+        "Refresh Benchmark: download ACWI market data and refresh its "
+        "dividend-adjusted benchmark prices.\n"
         "Show Data Cache Status: show the current universe cache range and "
-        "whether exact MSCI ACWI benchmark levels are loaded."
+        "whether ACWI benchmark prices are loaded."
     )
 
 

@@ -248,7 +248,7 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
                 "sharpe": 0.5,
             },
             "market_benchmark_available": False,
-            "market_benchmark_unavailable_reason": "No local MIWD00000PUS data",
+            "market_benchmark_unavailable_reason": "No local ACWI data",
             "market_benchmark_coverage_pct": 0.0,
             "market_benchmark_multiple": None,
             "market_excess_roi_pct": None,
@@ -349,20 +349,20 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
             )
 
         loaded_tickers = [call.args[0] for call in price_loader.call_args_list]
-        self.assertEqual(loaded_tickers, ["AAA", subject.MSCI_ACWI_TICKER])
+        self.assertEqual(loaded_tickers, ["AAA", subject.ACWI_TICKER])
         self.assertEqual({call.args[1] for call in runner.call_args_list}, {"AAA"})
         self.assertEqual(performance_row.call_args.args[5], ["AAA"])
         benchmark_loader = performance_row.call_args.kwargs[
             "market_benchmark_loader"
         ]
         pd.testing.assert_frame_equal(
-            benchmark_loader(subject.MSCI_ACWI_TICKER),
+            benchmark_loader(subject.ACWI_TICKER),
             prices,
         )
         self.assertEqual(metadata["schema_version"], subject.SCHEMA_VERSION)
         self.assertEqual(
             metadata["benchmark_roles"]["primary_pass_fail"]["ticker"],
-            "MIWD00000PUS",
+            "ACWI",
         )
         self.assertEqual(
             metadata["benchmark_roles"]["stock_selection_diagnostic"]["label"],

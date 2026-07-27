@@ -3,14 +3,15 @@ import math
 
 import pandas as pd
 
+import core_backtest_periods
 import core_market_data_store
 from core_portfolio_allocator import PortfolioPolicy
 from core_portfolio_ledger import simulate_portfolio
 
 
 TRADING_DAYS_PER_YEAR = 252
-MARKET_BENCHMARK_TICKER = "MIWD00000PUS"
-MARKET_BENCHMARK_LABEL = "MSCI ACWI"
+MARKET_BENCHMARK_TICKER = "ACWI"
+MARKET_BENCHMARK_LABEL = "ACWI"
 
 
 def evaluate_return_target(
@@ -251,19 +252,58 @@ def _market_benchmark(
     except Exception as exc:
         unavailable["reason"] = f"{ticker} load failed: {exc}"
         return unavailable
-    if prices is None or prices.empty or "Close" not in prices:
-        return unavailable
-
-    series = pd.to_numeric(prices["Close"], errors="coerce").dropna()
-    series.index = pd.to_datetime(series.index).normalize()
-    series = series[~series.index.duplicated(keep="last")].sort_index()
-    series = series[(series > 0) & series.map(math.isfinite)]
-    if series.empty:
-        unavailable["reason"] = f"No valid local {ticker} closes"
+    if prices is None or prices.empty:
         return unavailable
 
     start = calendar[0]
     end = calendar[-1]
+    price_column = None
+    series = pd.Series(dtype=float)
+    candidate_reasons = []
+    for candidate in ("Adj Close", "Close"):
+        if candidate not in prices:
+            continue
+        candidate_series = pd.to_numeric(prices[candidate], errors="coerce").dropna()
+        candidate_series = candidate_series[
+            (candidate_series > 0) & candidate_series.map(math.isfinite)
+        ]
+        if candidate_series.empty:
+            candidate_reasons.append(f"{candidate} has no valid values")
+            continue
+        candidate_series.index = pd.to_datetime(candidate_series.index).normalize()
+        candidate_series = candidate_series[
+            ~candidate_series.index.duplicated(keep="last")
+        ].sort_index()
+        prior = candidate_series.index[candidate_series.index < start]
+        end_candidates = candidate_series.index[candidate_series.index <= end]
+        if prior.empty:
+            candidate_reasons.append(f"{candidate} has no close before {start.date()}")
+            continue
+        if end_candidates.empty:
+            candidate_reasons.append(
+                f"{candidate} has no close on or before {end.date()}"
+            )
+            continue
+        seed_date = prior[-1]
+        end_level_date = end_candidates[-1]
+        if (start - seed_date).days > max_stale_calendar_days:
+            candidate_reasons.append(
+                f"{candidate} start level is {(start - seed_date).days} days stale"
+            )
+            continue
+        if (end - end_level_date).days > max_stale_calendar_days:
+            candidate_reasons.append(
+                f"{candidate} end level is {(end - end_level_date).days} days stale"
+            )
+            continue
+        price_column = candidate
+        series = candidate_series
+        break
+    if price_column is None:
+        if candidate_reasons:
+            unavailable["reason"] = f"{ticker}: " + "; ".join(candidate_reasons)
+        return unavailable
+
     prior = series.index[series.index < start]
     end_candidates = series.index[series.index <= end]
     observed_in_window = series.loc[(series.index >= start) & (series.index <= end)]
@@ -349,6 +389,7 @@ def _market_benchmark(
         "end_level": end_level,
         "daily_curve_available": daily_curve_available,
         "daily_curve_reason": daily_curve_reason,
+        "price_column": price_column,
     }
 
 
@@ -429,6 +470,7 @@ def _performance_payload(strategy_summary, daily, calendar, close_frame, benchma
         "market_benchmark_end_level": market["end_level"],
         "market_benchmark_daily_curve_available": market["daily_curve_available"],
         "market_benchmark_daily_curve_reason": market["daily_curve_reason"],
+        "market_benchmark_price_column": market.get("price_column"),
         "market_benchmark_multiple": market_multiple,
         "universe_ew_benchmark": universe_summary,
         "market_excess_roi_pct": _difference(strategy_roi, market_roi),
@@ -458,7 +500,7 @@ def calculate_equal_weight_performance(
     start_date,
     end_date,
     price_loader=core_market_data_store.get_price_data,
-    max_stale_calendar_days=7,
+    max_stale_calendar_days=core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS,
     market_benchmark_loader=None,
     market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
     market_benchmark_label=MARKET_BENCHMARK_LABEL,
@@ -467,7 +509,7 @@ def calculate_equal_weight_performance(
 
     Each active trade is a sleeve. Sleeves are rebalanced to equal portfolio
     weight daily; cash created by a partial exit remains inside that sleeve.
-    MSCI ACWI is the primary target benchmark. The daily equal-weight raw-close
+    ACWI is the primary target benchmark. The daily equal-weight raw-close
     universe is retained as a stock-selection diagnostic.
     """
     calendar, close_frame = _calendar_and_closes(
@@ -526,7 +568,7 @@ def calculate_score_weighted_performance(
     price_loader=core_market_data_store.get_price_data,
     position_mode="LONG_SHORT_NEUTRAL",
     policy=None,
-    max_stale_calendar_days=7,
+    max_stale_calendar_days=core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS,
     market_benchmark_loader=None,
     market_benchmark_ticker=MARKET_BENCHMARK_TICKER,
     market_benchmark_label=MARKET_BENCHMARK_LABEL,
@@ -605,7 +647,7 @@ def calculate_universe_performance(
     price_loader=core_market_data_store.get_price_data,
     benchmark_multiple=2.0,
     minimum_win_rate_pct=58.0,
-    max_stale_calendar_days=7,
+    max_stale_calendar_days=core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS,
     position_mode="LONG_SHORT_NEUTRAL",
     policy=None,
     market_benchmark_loader=None,

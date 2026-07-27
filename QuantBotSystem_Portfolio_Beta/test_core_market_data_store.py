@@ -1,8 +1,6 @@
 import unittest
-import io
 import os
 import tempfile
-from urllib.error import HTTPError
 from unittest.mock import patch
 
 import numpy as np
@@ -10,7 +8,6 @@ import pandas as pd
 
 import test_experiment_momentum_volume_alpha_ab as subject
 import core_market_data_store
-import import_market_benchmark_csv
 
 
 class MomentumVolumeAlphaTest(unittest.TestCase):
@@ -89,18 +86,40 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
         self.assertEqual(metadata["7203.T"]["listing_country"], "JP")
 
     def test_listing_country_refresh_excludes_reserved_benchmark_ticker(self):
+        rows = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-24"])
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "market_data.sqlite")
             with patch.object(core_market_data_store, "DB_PATH", db_path):
-                core_market_data_store.upsert_close_series(
-                    "MIWD00000PUS",
-                    pd.DataFrame({"Date": ["2026-07-24"], "Close": [912.5]}),
-                )
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", rows)
+                    core_market_data_store._upsert_ohlcv(
+                        conn, "MIWD00000PUS", rows
+                    )
+                finally:
+                    conn.close()
                 summary = core_market_data_store.refresh_listing_country_labels_from_cache()
                 metadata = core_market_data_store.get_security_metadata()
 
         self.assertEqual(summary["requested"], 0)
+        self.assertNotIn("ACWI", metadata)
         self.assertNotIn("MIWD00000PUS", metadata)
+
+    @patch("core_market_data_store._download_security_metadata")
+    def test_metadata_refresh_excludes_reserved_benchmark_tickers(self, download):
+        download.return_value = {"sector": "Technology"}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                summary = core_market_data_store.refresh_security_metadata(
+                    ["ACWI", "MIWD00000PUS", "AAA"],
+                    sleep_seconds=0,
+                )
+
+        self.assertEqual(summary["requested"], 1)
+        download.assert_called_once_with("AAA")
 
     @patch("core_market_data_store._download_security_metadata")
     def test_refresh_security_metadata_persists_classification(self, download):
@@ -230,356 +249,256 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
             {"AAA": "2026-07-23", "BBB": "2026-07-22"},
         )
 
-    def test_close_series_insert_is_available_through_get_price_data(self):
-        frame = pd.DataFrame(
-            {
-                "Date": ["2026-07-22", "2026-07-23"],
-                "Close": [900.25, 904.75],
-            }
-        )
+    def test_refresh_market_benchmark_downloads_full_acwi_history_and_reports_progress(self):
+        progress = []
+        downloaded = _valid_benchmark_frame()
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "market_data.sqlite")
             with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
-                core_market_data_store.yf, "download"
-            ) as yahoo_download:
-                summary = core_market_data_store.upsert_close_series(
-                    "MIWD00000PUS", frame
+                core_market_data_store,
+                "_download_market_benchmark_history",
+                return_value=downloaded,
+            ) as range_download:
+                summary = core_market_data_store.refresh_market_benchmark(
+                    progress_callback=lambda completed, total, stage: progress.append(
+                        (completed, total, stage)
+                    ),
+                    as_of="2026-07-27",
                 )
-                cached = core_market_data_store.get_price_data("MIWD00000PUS")
+                cached = core_market_data_store.get_price_data("ACWI")
 
-        yahoo_download.assert_not_called()
-        self.assertEqual(summary["updated"], 2)
-        self.assertEqual(summary["first_date"], "2026-07-22")
-        self.assertEqual(summary["latest_date"], "2026-07-23")
-        self.assertEqual(cached["Close"].tolist(), [900.25, 904.75])
-        self.assertTrue(cached["Open"].isna().all())
+        range_download.assert_called_once_with(
+            "ACWI",
+            start="2023-12-01",
+            end="2026-07-28",
+        )
+        self.assertEqual(summary["ticker"], "ACWI")
+        self.assertEqual(summary["source_kind"], "yfinance")
+        self.assertEqual(summary["data_basis"], "Adj Close")
+        self.assertEqual(summary["cached_rows"], len(downloaded))
+        self.assertEqual(cached["Adj Close"].tolist(), downloaded["Adj Close"].tolist())
+        self.assertEqual(
+            progress,
+            [
+                (1, 4, "ACWI 다운로드 준비"),
+                (2, 4, "ACWI 가격 다운로드"),
+                (3, 4, "ACWI Adj Close 검증"),
+                (4, 4, "ACWI DB 확인 완료"),
+            ],
+        )
+        formatted = core_market_data_store.format_market_benchmark_refresh_summary(
+            summary
+        )
+        self.assertIn("Benchmark: ACWI", formatted)
+        self.assertIn("Data basis: Adj Close", formatted)
+        self.assertIn(f"Rows received/upserted: {len(downloaded)}", formatted)
 
-    def test_close_series_reimport_updates_close_only(self):
+    def test_refresh_market_benchmark_restates_older_adjusted_closes(self):
         initial = core_market_data_store._normalize_download(
-            _ohlcv_frame(["2026-07-23"])
+            _ohlcv_frame(
+                [
+                    pd.Timestamp("2023-11-30"),
+                    *pd.bdate_range("2023-12-29", "2026-07-24"),
+                ]
+            )
+        )
+        refreshed = _valid_benchmark_frame()
+        restated_date = pd.Timestamp("2024-01-02").date()
+        refreshed.loc[restated_date, "Adj Close"] = 95.0
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", initial)
+                finally:
+                    conn.close()
+                with patch.object(
+                    core_market_data_store,
+                    "_download_market_benchmark_history",
+                    return_value=refreshed,
+                ) as full_download:
+                    core_market_data_store.refresh_market_benchmark(
+                        as_of="2026-07-27"
+                    )
+                cached = core_market_data_store.get_price_data("ACWI")
+
+        full_download.assert_called_once()
+        self.assertNotIn(pd.Timestamp("2023-11-30"), cached.index)
+        self.assertEqual(cached.loc["2024-01-02", "Adj Close"], 95.0)
+
+    def test_refresh_market_benchmark_raises_clear_error_on_download_failure(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store,
+                "_download_market_benchmark_history",
+                side_effect=RuntimeError("offline"),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "Yahoo returned no usable OHLCV data"
+                ):
+                    core_market_data_store.refresh_market_benchmark()
+
+    def test_invalid_downloaded_adj_close_does_not_modify_existing_cache(self):
+        initial = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-22"])
+        )
+        invalid = _valid_benchmark_frame()
+        invalid.loc[invalid.index[0], "Adj Close"] = float("nan")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", initial)
+                finally:
+                    conn.close()
+                with patch.object(
+                    core_market_data_store,
+                    "_download_market_benchmark_history",
+                    return_value=invalid,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "finite and positive"):
+                        core_market_data_store.refresh_market_benchmark(
+                            as_of="2026-07-27"
+                        )
+                cached = core_market_data_store.get_price_data("ACWI")
+
+        self.assertEqual(len(cached), 1)
+        self.assertEqual(cached.index[0], pd.Timestamp("2026-07-22"))
+        self.assertEqual(cached["Adj Close"].iloc[0], 100.5)
+
+    def test_partial_benchmark_download_does_not_replace_existing_cache(self):
+        initial = _valid_benchmark_frame()
+        partial = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-23", "2026-07-24"])
         )
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "market_data.sqlite")
             with patch.object(core_market_data_store, "DB_PATH", db_path):
                 conn = core_market_data_store.get_connection()
                 try:
-                    core_market_data_store._upsert_ohlcv(
-                        conn, "MIWD00000PUS", initial
-                    )
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", initial)
                 finally:
                     conn.close()
-
-                core_market_data_store.upsert_close_series(
-                    "MIWD00000PUS",
-                    pd.DataFrame({"Date": ["2026-07-23"], "Close": [777.0]}),
-                )
-                cached = core_market_data_store.get_price_data("MIWD00000PUS")
-
-        row = cached.iloc[0]
-        self.assertEqual(row["Close"], 777.0)
-        self.assertEqual(row["Open"], initial.iloc[0]["Open"])
-        self.assertEqual(row["High"], initial.iloc[0]["High"])
-        self.assertEqual(row["Low"], initial.iloc[0]["Low"])
-        self.assertEqual(row["Adj Close"], initial.iloc[0]["Adj Close"])
-        self.assertEqual(row["Volume"], initial.iloc[0]["Volume"])
-
-    def test_invalid_close_series_has_no_partial_write(self):
-        invalid_frames = {
-            "bad_date": pd.DataFrame(
-                {
-                    "Date": ["2026-07-24", "not-a-date"],
-                    "Close": [901.0, 902.0],
-                }
-            ),
-            "duplicate_date": pd.DataFrame(
-                {
-                    "Date": ["2026-07-24", "2026-07-24 15:00:00"],
-                    "Close": [901.0, 902.0],
-                }
-            ),
-            "non_finite_close": pd.DataFrame(
-                {
-                    "Date": ["2026-07-24", "2026-07-25"],
-                    "Close": [901.0, float("inf")],
-                }
-            ),
-            "non_positive_close": pd.DataFrame(
-                {
-                    "Date": ["2026-07-24", "2026-07-25"],
-                    "Close": [901.0, 0.0],
-                }
-            ),
-        }
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = os.path.join(temp_dir, "market_data.sqlite")
-            with patch.object(core_market_data_store, "DB_PATH", db_path):
-                core_market_data_store.upsert_close_series(
-                    "MIWD00000PUS",
-                    pd.DataFrame({"Date": ["2026-07-23"], "Close": [900.0]}),
-                )
-                for label, invalid_frame in invalid_frames.items():
-                    with self.subTest(label=label):
-                        with self.assertRaises(ValueError):
-                            core_market_data_store.upsert_close_series(
-                                "MIWD00000PUS", invalid_frame
-                            )
-                        cached = core_market_data_store.get_price_data(
-                            "MIWD00000PUS"
+                with patch.object(
+                    core_market_data_store,
+                    "_download_market_benchmark_history",
+                    return_value=partial,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "no pre-IS seed"):
+                        core_market_data_store.refresh_market_benchmark(
+                            as_of="2026-07-27"
                         )
-                        self.assertEqual(len(cached), 1)
-                        self.assertEqual(cached["Close"].iloc[0], 900.0)
+                cached = core_market_data_store.get_price_data("ACWI")
 
-    def test_local_csv_import_never_calls_yahoo(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = os.path.join(temp_dir, "market_data.sqlite")
-            csv_path = os.path.join(temp_dir, "acwi.csv")
-            pd.DataFrame(
-                {
-                    "Date": ["2026-07-22", "2026-07-23"],
-                    "Close": [900.25, 904.75],
-                }
-            ).to_csv(csv_path, index=False)
-            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
-                core_market_data_store.yf, "download"
-            ) as yahoo_download, patch.object(
-                core_market_data_store.yf, "Ticker"
-            ) as yahoo_ticker:
-                summary = import_market_benchmark_csv.import_market_benchmark_csv(
-                    csv_path
+        self.assertEqual(len(cached), len(initial))
+        self.assertEqual(cached.index[0], pd.Timestamp("2023-12-29"))
+
+    def test_stale_benchmark_download_is_rejected(self):
+        stale = core_market_data_store._normalize_download(
+            _ohlcv_frame(pd.bdate_range("2023-12-29", "2026-06-30"))
+        )
+        with patch.object(
+            core_market_data_store,
+            "_download_market_benchmark_history",
+            return_value=stale,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "calendar days stale"):
+                core_market_data_store.refresh_market_benchmark(
+                    as_of="2026-07-27"
                 )
 
-        yahoo_download.assert_not_called()
-        yahoo_ticker.assert_not_called()
-        self.assertEqual(summary["ticker"], "MIWD00000PUS")
-        self.assertEqual(summary["updated"], 2)
-
-    def test_refresh_market_benchmark_uses_default_local_csv_and_reports_progress(self):
-        progress = []
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = os.path.join(temp_dir, "market_data.sqlite")
-            import_dir = os.path.join(temp_dir, "imports")
-            os.makedirs(import_dir)
-            csv_path = os.path.join(import_dir, "msci_acwi.csv")
-            pd.DataFrame(
-                {
-                    "Date": ["2026-07-22", "2026-07-23"],
-                    "Close": [900.25, 904.75],
-                }
-            ).to_csv(csv_path, index=False)
-            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
-                core_market_data_store, "DATA_DIR", temp_dir
-            ), patch.object(
-                core_market_data_store.runtime_settings,
-                "get_setting",
-                return_value=None,
-            ), patch.object(
-                core_market_data_store.yf, "download"
-            ) as yahoo_download, patch.object(
-                core_market_data_store, "build_opener"
-            ) as network_opener:
-                summary = core_market_data_store.refresh_market_benchmark(
-                    progress_callback=lambda completed, total, stage: progress.append(
-                        (completed, total, stage)
-                    )
+    def test_stale_pre_is_seed_is_rejected(self):
+        dates = [
+            pd.Timestamp("2023-12-01"),
+            *pd.bdate_range("2024-01-02", "2026-07-24"),
+        ]
+        stale_seed = core_market_data_store._normalize_download(
+            _ohlcv_frame(dates)
+        )
+        with patch.object(
+            core_market_data_store,
+            "_download_market_benchmark_history",
+            return_value=stale_seed,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "pre-IS seed"):
+                core_market_data_store.refresh_market_benchmark(
+                    as_of="2026-07-27"
                 )
-                cached = core_market_data_store.get_price_data("MIWD00000PUS")
 
-        yahoo_download.assert_not_called()
-        network_opener.assert_not_called()
-        self.assertEqual(summary["ticker"], "MIWD00000PUS")
-        self.assertEqual(summary["source_kind"], "local_csv")
-        self.assertEqual(summary["source_display"], os.path.abspath(csv_path))
-        self.assertEqual(summary["cached_rows"], 2)
-        self.assertEqual(cached["Close"].tolist(), [900.25, 904.75])
-        self.assertEqual(
-            progress,
-            [
-                (1, 4, "벤치마크 소스 확인"),
-                (2, 4, "벤치마크 CSV 읽기"),
-                (3, 4, "벤치마크 검증·저장"),
-                (4, 4, "벤치마크 DB 확인"),
-            ],
+    def test_sparse_benchmark_download_is_rejected(self):
+        dates = pd.bdate_range("2023-12-29", "2026-07-24")
+        sparse = core_market_data_store._normalize_download(
+            _ohlcv_frame(dates[::2])
         )
-        formatted = core_market_data_store.format_market_benchmark_refresh_summary(
-            summary
-        )
-        self.assertIn("MSCI ACWI (MIWD00000PUS)", formatted)
-        self.assertIn("Rows received/upserted: 2", formatted)
+        with patch.object(
+            core_market_data_store,
+            "_download_market_benchmark_history",
+            return_value=sparse,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "appears partial"):
+                core_market_data_store.refresh_market_benchmark(
+                    as_of="2026-07-27"
+                )
 
-    def test_refresh_market_benchmark_reads_authorized_https_without_leaking_details(self):
-        payload = b"Date,Close\n2026-07-22,900.25\n2026-07-23,904.75\n"
-        captured = {}
-
-        def opener(request, timeout):
-            captured["request"] = request
-            captured["timeout"] = timeout
-            return _FakeHttpsResponse(
-                payload,
-                "https://licensed.example.com/private/final.csv?token=redirect-secret",
-            )
-
+    def test_missing_native_adjusted_close_does_not_replace_existing_cache(self):
+        initial = _valid_benchmark_frame()
+        missing_adjusted = _ohlcv_frame(
+            pd.bdate_range("2023-12-29", "2026-07-24")
+        ).drop(columns=["Adj Close"])
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "market_data.sqlite")
             with patch.object(core_market_data_store, "DB_PATH", db_path):
-                summary = core_market_data_store.refresh_market_benchmark(
-                    source_url=(
-                        "https://licensed.example.com/private/acwi.csv"
-                        "?token=request-secret"
-                    ),
-                    source_headers={"Authorization": "Bearer header-secret"},
-                    timeout_seconds=7,
-                    opener=opener,
-                )
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", initial)
+                finally:
+                    conn.close()
+                with patch.object(
+                    core_market_data_store,
+                    "_download_market_benchmark_history",
+                    return_value=missing_adjusted,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "missing Adj Close"):
+                        core_market_data_store.refresh_market_benchmark(
+                            as_of="2026-07-27"
+                        )
+                cached = core_market_data_store.get_price_data("ACWI")
 
-        self.assertEqual(summary["source_kind"], "authorized_https_csv")
-        self.assertEqual(summary["source_display"], "https://licensed.example.com")
-        self.assertNotIn("private", str(summary))
-        self.assertNotIn("secret", str(summary))
-        self.assertEqual(captured["timeout"], 7.0)
-        self.assertEqual(
-            captured["request"].get_header("Authorization"),
-            "Bearer header-secret",
+        self.assertEqual(len(cached), len(initial))
+
+    def test_benchmark_database_write_failure_rolls_back_full_replace(self):
+        initial = core_market_data_store._normalize_download(
+            _ohlcv_frame(["2026-07-22"])
         )
-
-    def test_refresh_market_benchmark_reads_url_and_headers_from_private_settings(self):
-        payload = b"Date,Close\n2026-07-22,900.25\n"
-        settings = {
-            "MSCI_ACWI_SOURCE_PATH": None,
-            "MSCI_ACWI_SOURCE_URL": "https://licensed.example.com/acwi.csv",
-            "MSCI_ACWI_SOURCE_HEADERS": {
-                "Authorization": "Bearer configured-secret"
-            },
-        }
-        captured = {}
-
-        def opener(request, timeout):
-            captured["authorization"] = request.get_header("Authorization")
-            return _FakeHttpsResponse(
-                payload,
-                "https://licensed.example.com/acwi.csv",
-            )
-
+        downloaded = _valid_benchmark_frame()
         with tempfile.TemporaryDirectory() as temp_dir:
             db_path = os.path.join(temp_dir, "market_data.sqlite")
-            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
-                core_market_data_store.runtime_settings,
-                "get_setting",
-                side_effect=lambda name, default=None: settings.get(name, default),
-            ):
-                summary = core_market_data_store.refresh_market_benchmark(
-                    opener=opener
-                )
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                conn = core_market_data_store.get_connection()
+                try:
+                    core_market_data_store._upsert_ohlcv(conn, "ACWI", initial)
+                finally:
+                    conn.close()
+                with patch.object(
+                    core_market_data_store,
+                    "_download_market_benchmark_history",
+                    return_value=downloaded,
+                ), patch.object(
+                    core_market_data_store,
+                    "_upsert_ohlcv",
+                    side_effect=RuntimeError("write failed"),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "write failed"):
+                        core_market_data_store.refresh_market_benchmark(
+                            as_of="2026-07-27"
+                        )
+                cached = core_market_data_store.get_price_data("ACWI")
 
-        self.assertEqual(summary["source_kind"], "authorized_https_csv")
-        self.assertEqual(captured["authorization"], "Bearer configured-secret")
-
-    def test_refresh_market_benchmark_missing_default_source_does_not_touch_db_or_network(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = os.path.join(temp_dir, "market_data.sqlite")
-            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
-                core_market_data_store, "DATA_DIR", temp_dir
-            ), patch.object(
-                core_market_data_store.runtime_settings,
-                "get_setting",
-                return_value=None,
-            ), patch.object(
-                core_market_data_store, "build_opener"
-            ) as network_opener:
-                with self.assertRaisesRegex(FileNotFoundError, "Date/Close CSV"):
-                    core_market_data_store.refresh_market_benchmark()
-
-            network_opener.assert_not_called()
-            self.assertFalse(os.path.exists(db_path))
-
-    def test_refresh_market_benchmark_rejects_non_https_without_opening_it(self):
-        opener_calls = []
-
-        with self.assertRaisesRegex(ValueError, "must use HTTPS"):
-            core_market_data_store.refresh_market_benchmark(
-                source_url="http://example.com/acwi.csv",
-                opener=lambda *args, **kwargs: opener_calls.append((args, kwargs)),
-            )
-
-        self.assertEqual(opener_calls, [])
-
-    def test_refresh_market_benchmark_rejects_oversized_https_response(self):
-        response = _FakeHttpsResponse(
-            b"",
-            "https://licensed.example.com/acwi.csv",
-            content_length=core_market_data_store.MARKET_BENCHMARK_MAX_CSV_BYTES + 1,
-        )
-
-        with self.assertRaisesRegex(ValueError, "exceeds the 5 MB limit"):
-            core_market_data_store.refresh_market_benchmark(
-                source_url="https://licensed.example.com/acwi.csv",
-                opener=lambda request, timeout: response,
-            )
-
-        self.assertFalse(response.read_called)
-
-    def test_refresh_market_benchmark_rejects_cross_origin_redirect(self):
-        response = _FakeHttpsResponse(
-            b"Date,Close\n2026-07-22,900.25\n",
-            "https://different.example.com/acwi.csv",
-        )
-
-        with self.assertRaisesRegex(ValueError, "different host"):
-            core_market_data_store.refresh_market_benchmark(
-                source_url="https://licensed.example.com/acwi.csv",
-                opener=lambda request, timeout: response,
-            )
-
-    def test_production_redirect_handler_blocks_cross_origin_before_request_creation(self):
-        handler = core_market_data_store._SameOriginHttpsRedirectHandler(
-            ("licensed.example.com", 443)
-        )
-        request = core_market_data_store.Request(
-            "https://licensed.example.com/acwi.csv",
-            headers={"Authorization": "Bearer header-secret"},
-        )
-
-        with self.assertRaisesRegex(ValueError, "different host"):
-            handler.redirect_request(
-                request,
-                None,
-                302,
-                "Found",
-                {},
-                "https://different.example.com/acwi.csv",
-            )
-
-    def test_refresh_market_benchmark_redacts_url_on_authorization_error(self):
-        secret_url = "https://licensed.example.com/acwi.csv?token=secret-value"
-
-        def opener(request, timeout):
-            raise HTTPError(secret_url, 401, "Unauthorized", {}, None)
-
-        with self.assertRaises(RuntimeError) as captured:
-            core_market_data_store.refresh_market_benchmark(
-                source_url=secret_url,
-                source_headers={"Authorization": "Bearer header-secret"},
-                opener=opener,
-            )
-
-        message = str(captured.exception)
-        self.assertIn("HTTP 401", message)
-        self.assertNotIn("secret-value", message)
-        self.assertNotIn("header-secret", message)
-
-    def test_refresh_market_benchmark_rejects_invalid_header_without_echoing_secret(self):
-        with self.assertRaises(ValueError) as captured:
-            core_market_data_store.refresh_market_benchmark(
-                source_url="https://licensed.example.com/acwi.csv",
-                source_headers={
-                    "Authorization": "Bearer header-secret\r\nX-Injected: yes"
-                },
-                opener=lambda request, timeout: self.fail(
-                    "invalid headers must be rejected before opening a URL"
-                ),
-            )
-
-        self.assertIn("invalid header", str(captured.exception))
-        self.assertNotIn("header-secret", str(captured.exception))
+        self.assertEqual(len(cached), 1)
+        self.assertEqual(cached.index[0], pd.Timestamp("2026-07-22"))
 
 
 def _ohlcv_frame(dates):
@@ -598,27 +517,10 @@ def _ohlcv_frame(dates):
     )
 
 
-class _FakeHttpsResponse:
-    def __init__(self, payload, final_url, content_length=None):
-        self._payload = payload
-        self._final_url = final_url
-        self.headers = {}
-        if content_length is not None:
-            self.headers["Content-Length"] = str(content_length)
-        self.read_called = False
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        return False
-
-    def geturl(self):
-        return self._final_url
-
-    def read(self, size=-1):
-        self.read_called = True
-        return io.BytesIO(self._payload).read(size)
+def _valid_benchmark_frame():
+    return core_market_data_store._normalize_download(
+        _ohlcv_frame(pd.bdate_range("2023-12-29", "2026-07-24"))
+    )
 
 
 if __name__ == "__main__":

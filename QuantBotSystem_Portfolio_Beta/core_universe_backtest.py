@@ -373,6 +373,7 @@ def _portfolio_lines(result):
         "N/A" if strategy_roi is None else f"{float(strategy_roi):+.1f}%"
     )
     multiple_text = "N/A" if multiple is None else f"{float(multiple):.2f}x"
+    market_label = performance.get("market_benchmark_label", "ACWI")
     universe_text = (
         "N/A" if universe_roi is None else f"{float(universe_roi):+.1f}%"
     )
@@ -390,7 +391,7 @@ def _portfolio_lines(result):
     )
     lines = [
         (
-            f"MSCI ACWI ROI: {market_text} | Strategy ROI: {strategy_text} | "
+            f"{market_label} ROI: {market_text} | Strategy ROI: {strategy_text} | "
             f"Multiple: {multiple_text}"
         ),
         (
@@ -619,10 +620,10 @@ def export_portfolio_bundle(
             {
                 "window": window,
                 "market_benchmark_label": performance.get(
-                    "market_benchmark_label", "MSCI ACWI"
+                    "market_benchmark_label", "ACWI"
                 ),
                 "market_benchmark_ticker": performance.get(
-                    "market_benchmark_ticker", "MIWD00000PUS"
+                    "market_benchmark_ticker", "ACWI"
                 ),
                 "market_benchmark_available": performance.get(
                     "market_benchmark_available", False
@@ -641,6 +642,9 @@ def export_portfolio_bundle(
                 ),
                 "end_level": performance.get(
                     "market_benchmark_end_level", ""
+                ),
+                "price_column": performance.get(
+                    "market_benchmark_price_column", ""
                 ),
                 "msci_acwi_roi_pct": market.get("roi_pct"),
                 "strategy_roi_pct": performance.get("strategy", {}).get(

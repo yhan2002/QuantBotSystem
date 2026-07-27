@@ -78,7 +78,7 @@ class BotUiTests(unittest.TestCase):
         self.assertNotIn("Preload 4Y Market Data", texts)
         self.assertIn("Portfolio Beta", app_bot_ui.admin_text())
         self.assertIn("Private config:", app_bot_ui.admin_text())
-        self.assertIn("no ETF fallback", app_bot_ui.admin_text())
+        self.assertIn("dividend-adjusted benchmark prices", app_bot_ui.admin_text())
         self.assertIn("Portfolio Beta", app_bot_ui.home_text("test-chat"))
         self.assertNotIn("PORTFOLIO_BETA", app_bot_ui.home_text("test-chat"))
 

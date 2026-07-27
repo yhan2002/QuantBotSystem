@@ -12,6 +12,7 @@
 
 ### 베타판 변경
 
+- Portfolio Beta의 1차 벤치마크를 `ACWI`로 단순화했습니다. Admin의 `Refresh Benchmark`가 Yahoo에서 고정 IS 이전부터 최신일까지 전체 가격을 자동 갱신하며, 성과 비교에는 배당·분할을 반영한 `Adj Close`를 우선 사용합니다. 부분 응답은 기간·최신성·영업일 커버리지로 차단하고 기존 CSV·인증 URL 설정은 제거했습니다.
 - Portfolio Beta의 1차 시장 벤치마크를 exact MSCI ACWI(`MIWD00000PUS`) 경계 종가 ROI로 분리하고, Universe EW는 종목선택 초과성과 진단으로 유지했습니다. ACWI 데이터가 없으면 ETF 대체 없이 `N/A/REVIEW`로 처리하며, 로컬 Date/Close CSV 원자적 적재와 검산용 benchmark summary export를 추가했습니다.
 - Portfolio Beta Admin에 `Refresh Benchmark`를 추가해 승인된 로컬/HTTPS `Date,Close` CSV의 exact MSCI ACWI를 백그라운드에서 검증·적재하도록 했습니다. 공개 페이지 스크래핑이나 ETF 대체는 사용하지 않습니다.
 - 성과 PASS/FAIL의 1차 기준을 1년 누적 포트폴리오 ROI와 양의 동일구간 벤치마크 ROI의 2배 비교로 통일하고, 승률 58%는 보조 진단으로 분리했습니다.

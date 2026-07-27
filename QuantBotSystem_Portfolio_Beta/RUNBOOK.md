@@ -60,48 +60,27 @@ See Detail sends a ZIP for portfolio-accounted scans:
 - trade events;
 - actual per-leg entry/exit ledger;
 - daily NAV, cash, long/short market value, gross, and net exposure.
-- benchmark summary with the exact ACWI boundary dates, levels, ROI, market
+- benchmark summary with the ACWI boundary dates, levels, ROI, market
   multiple, Universe EW ROI, and stock-selection excess.
 
-## MSCI ACWI benchmark data
+## ACWI benchmark data
 
-The primary market benchmark is the exact `MIWD00000PUS` MSCI ACWI index
-level. It is never downloaded through Yahoo and is never added to a trading
-universe. Put a legally obtained `Date,Close` CSV at:
+The primary market benchmark is ticker `ACWI`. Choose
+`Admin -> Refresh Benchmark` to download ACWI history from the pre-IS seed
+through the latest available date using the existing Yahoo market-data path.
+The refresh runs in the shared background queue and uses the same runtime lock
+as scans and scheduled market updates.
 
-```text
-QuantBotSystem_Portfolio_Beta/data/imports/msci_acwi.csv
-```
+The full fixed-start window is refreshed each time because new distributions
+can revise historical adjusted prices. The downloaded replacement must cover
+the pre-IS seed, pass a business-day coverage check, and be current before the
+existing cache is replaced. Reports use `Adj Close` and fall back to `Close`
+only when adjusted prices are unavailable. ACWI is excluded from trading
+universes and security metadata refreshes. No CSV or private benchmark source
+configuration is required.
 
-Then choose `Admin -> Refresh Benchmark`. The refresh runs in the shared
-background queue and uses the same runtime lock as scans and scheduled market
-updates. Alternatively, configure one authorized source in the ignored
-private config shown on the Admin screen. When Portfolio Beta is launched by
-the root version selector, this is normally
-`QuantBotSystem_Beta/config.local.py`:
-
-```python
-MSCI_ACWI_SOURCE_PATH = r"C:\path\to\legally_obtained_msci_acwi.csv"
-# or
-MSCI_ACWI_SOURCE_URL = "https://your-authorized-endpoint.example/acwi.csv"
-MSCI_ACWI_SOURCE_HEADERS = {"Authorization": "Bearer YOUR_LOCAL_SECRET"}
-```
-
-The HTTPS endpoint must be an authorized CSV source. The bot does not scrape
-public MSCI web pages and does not substitute an ETF. Manual import remains
-available:
-
-```powershell
-Set-Location .\QuantBotSystem_Portfolio_Beta
-python .\import_market_benchmark_csv.py "C:\path\to\msci_acwi.csv"
-```
-
-For ROI-only comparison, the file may contain only the valid closes needed at
-the IS/OOS boundaries. The importer and Admin refresh validate the complete
-file before one atomic upsert into the existing shared `ohlcv` table. Stop the
-bot before a manual import; the Admin path is serialized automatically. If the
-boundary levels are missing or stale, reports show `MSCI ACWI ROI: N/A` and
-target status `REVIEW`.
+If valid ACWI boundary prices are missing or stale, reports show
+`ACWI ROI: N/A` and target status `REVIEW`.
 
 ## Validation only
 

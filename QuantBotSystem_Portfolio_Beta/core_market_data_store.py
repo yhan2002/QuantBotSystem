@@ -1,19 +1,15 @@
 # File name: market_data_store.py
 # Caches OHLCV price history in SQLite and serves strategy-ready data frames.
-import io
 import os
 import sqlite3
 import time
-from collections.abc import Mapping
 from datetime import datetime, timezone
-from math import isfinite
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from math import ceil, isfinite
 
 import pandas as pd
 import yfinance as yf
 
+import core_backtest_periods
 import runtime_settings
 
 
@@ -24,10 +20,21 @@ INCREMENTAL_OVERLAP_CALENDAR_DAYS = 10
 DOWNLOAD_SLEEP_SECONDS = 0.7
 METADATA_SLEEP_SECONDS = 0.3
 FIXED_IS_OOS_HISTORY_PERIOD = "4y"
-MARKET_BENCHMARK_TICKER = "MIWD00000PUS"
-MARKET_BENCHMARK_NAME = "MSCI ACWI"
-MARKET_BENCHMARK_MAX_CSV_BYTES = 5 * 1024 * 1024
-RESERVED_BENCHMARK_TICKERS = frozenset({MARKET_BENCHMARK_TICKER})
+MARKET_BENCHMARK_TICKER = "ACWI"
+MARKET_BENCHMARK_NAME = "ACWI"
+MARKET_BENCHMARK_DOWNLOAD_START = (
+    pd.Timestamp(core_backtest_periods.SELECTION_START) - pd.Timedelta(days=31)
+).date().isoformat()
+MARKET_BENCHMARK_MAX_STALE_CALENDAR_DAYS = (
+    core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS
+)
+MARKET_BENCHMARK_MIN_BUSINESS_DAY_COVERAGE = 0.75
+RESERVED_BENCHMARK_TICKERS = frozenset(
+    {
+        MARKET_BENCHMARK_TICKER,
+        "MIWD00000PUS",  # Keep legacy exact-index rows out of security universes.
+    }
+)
 
 
 def get_connection():
@@ -207,7 +214,7 @@ def refresh_security_metadata(
     progress_callback=None,
 ):
     """Download and cache country/sector/industry labels independently of prices."""
-    tickers = sorted(set(tickers))
+    tickers = sorted(set(_exclude_reserved_benchmark_tickers(tickers)))
     summary = {
         "requested": len(tickers),
         "updated": 0,
@@ -310,7 +317,7 @@ def format_market_country_summary(summary):
     )
 
 
-def _normalize_download(df):
+def _normalize_download(df, synthesize_adj_close=True):
     if df is None or df.empty:
         return pd.DataFrame()
     if isinstance(df.columns, pd.MultiIndex):
@@ -319,7 +326,7 @@ def _normalize_download(df):
     missing = [col for col in required if col not in df.columns]
     if missing:
         return pd.DataFrame()
-    if "Adj Close" not in df.columns:
+    if "Adj Close" not in df.columns and synthesize_adj_close:
         df["Adj Close"] = df["Close"]
     if "Volume" not in df.columns:
         df["Volume"] = 0
@@ -370,356 +377,227 @@ def _upsert_ohlcv(conn, ticker, df):
     return len(rows)
 
 
-def upsert_close_series(ticker, frame):
-    """Atomically insert or update a validated Date/Close series.
-
-    Existing OHLCV fields are deliberately left unchanged on conflicts. The
-    complete input is normalized and validated before the database is opened,
-    so malformed input cannot produce a partial import.
-    """
-    if not isinstance(ticker, str) or not ticker.strip():
-        raise ValueError("ticker must be a non-empty string")
-    if not isinstance(frame, pd.DataFrame):
-        raise TypeError("frame must be a pandas DataFrame")
-    if frame.columns.duplicated().any():
-        raise ValueError("frame columns must be unique")
-
-    missing = [column for column in ("Date", "Close") if column not in frame.columns]
-    if missing:
-        raise ValueError(f"frame is missing required columns: {', '.join(missing)}")
-    if frame.empty:
-        raise ValueError("frame must contain at least one row")
-
-    dates = []
-    closes = []
-    for row_number, (date_value, close_value) in enumerate(
-        frame.loc[:, ["Date", "Close"]].itertuples(index=False, name=None),
-        start=1,
-    ):
-        try:
-            parsed_date = pd.Timestamp(date_value)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(f"invalid Date at row {row_number}: {date_value!r}") from exc
-        if pd.isna(parsed_date):
-            raise ValueError(f"invalid Date at row {row_number}: {date_value!r}")
-
-        try:
-            parsed_close = float(close_value)
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise ValueError(
-                f"invalid Close at row {row_number}: {close_value!r}"
-            ) from exc
-        if not isfinite(parsed_close) or parsed_close <= 0:
-            raise ValueError(
-                f"Close must be finite and positive at row {row_number}: "
-                f"{close_value!r}"
-            )
-
-        dates.append(parsed_date.date().isoformat())
-        closes.append(parsed_close)
-
-    duplicated_dates = pd.Series(dates).duplicated(keep=False)
-    if duplicated_dates.any():
-        duplicates = sorted(set(pd.Series(dates)[duplicated_dates].tolist()))
-        raise ValueError(f"duplicate Date values after normalization: {', '.join(duplicates)}")
-
-    normalized_ticker = ticker.strip().upper()
-    normalized_rows = sorted(zip(dates, closes))
-    updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    rows = [
-        (normalized_ticker, date_value, close_value, updated_at)
-        for date_value, close_value in normalized_rows
-    ]
-
-    conn = get_connection()
-    try:
-        conn.execute("BEGIN")
-        conn.executemany(
-            """
-            INSERT INTO ohlcv (ticker, date, close, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(ticker, date) DO UPDATE SET
-                close=excluded.close,
-                updated_at=excluded.updated_at
-            """,
-            rows,
-        )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-
-    return {
-        "ticker": normalized_ticker,
-        "updated": len(rows),
-        "first_date": normalized_rows[0][0],
-        "latest_date": normalized_rows[-1][0],
-        "db_path": DB_PATH,
-    }
-
-
 def _report_benchmark_refresh_progress(progress_callback, completed, stage_label):
     if progress_callback is not None:
         progress_callback(completed, 4, stage_label)
 
 
-def _normalize_benchmark_source_path(source_path):
-    raw_path = os.path.expandvars(os.path.expanduser(os.fspath(source_path)))
-    return os.path.abspath(raw_path)
+def refresh_market_benchmark(progress_callback=None, as_of=None):
+    """Refresh ACWI from the fixed pre-IS seed through ``as_of``.
 
-
-def _safe_https_source_display(source_url):
-    parsed = urlsplit(str(source_url).strip())
-    if parsed.scheme.lower() != "https":
-        raise ValueError("MSCI ACWI benchmark source URL must use HTTPS")
-    if not parsed.hostname:
-        raise ValueError("MSCI ACWI benchmark source URL must include a host")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("MSCI ACWI benchmark source URL must not contain credentials")
-
-    host = parsed.hostname
-    if ":" in host and not host.startswith("["):
-        host = f"[{host}]"
-    try:
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError("MSCI ACWI benchmark source URL has an invalid port") from exc
-    port_suffix = f":{port}" if port is not None else ""
-    return f"https://{host}{port_suffix}"
-
-
-def _https_source_origin(source_url):
-    parsed = urlsplit(str(source_url).strip())
-    _safe_https_source_display(source_url)
-    default_port = 443
-    return parsed.hostname.lower(), parsed.port or default_port
-
-
-class _SameOriginHttpsRedirectHandler(HTTPRedirectHandler):
-    def __init__(self, source_origin):
-        super().__init__()
-        self._source_origin = source_origin
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        if _https_source_origin(newurl) != self._source_origin:
-            raise ValueError(
-                "MSCI ACWI benchmark source redirected to a different host"
-            )
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
-
-
-def _read_limited_https_csv(source_url, source_headers, timeout_seconds, opener):
-    safe_display = _safe_https_source_display(source_url)
-    source_origin = _https_source_origin(source_url)
-    if not isinstance(source_headers, Mapping):
-        raise TypeError("MSCI_ACWI_SOURCE_HEADERS must be a mapping")
-    try:
-        timeout = float(timeout_seconds)
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ValueError("timeout_seconds must be a positive number") from exc
-    if not isfinite(timeout) or timeout <= 0:
-        raise ValueError("timeout_seconds must be a positive number")
-
-    headers = {}
-    for raw_name, raw_value in source_headers.items():
-        name = str(raw_name)
-        value = str(raw_value)
-        if (
-            not name
-            or "\r" in name
-            or "\n" in name
-            or "\r" in value
-            or "\n" in value
-        ):
-            raise ValueError(
-                "MSCI_ACWI_SOURCE_HEADERS contains an invalid header"
-            )
-        headers[name] = value
-    headers.setdefault("User-Agent", "QuantBot-MSCI-ACWI-Refresh/1.0")
-    request = Request(str(source_url).strip(), headers=headers, method="GET")
-    open_url = opener
-    if open_url is None:
-        open_url = build_opener(
-            _SameOriginHttpsRedirectHandler(source_origin)
-        ).open
-    try:
-        with open_url(request, timeout=timeout) as response:
-            final_url = response.geturl() if hasattr(response, "geturl") else source_url
-            if _https_source_origin(final_url) != source_origin:
-                raise ValueError(
-                    "MSCI ACWI benchmark source redirected to a different host"
-                )
-
-            content_length = None
-            response_headers = getattr(response, "headers", None)
-            if response_headers is not None:
-                content_length = response_headers.get("Content-Length")
-            if content_length not in (None, ""):
-                try:
-                    declared_bytes = int(content_length)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        "benchmark response has an invalid Content-Length"
-                    ) from exc
-                if declared_bytes > MARKET_BENCHMARK_MAX_CSV_BYTES:
-                    raise ValueError("benchmark CSV response exceeds the 5 MB limit")
-
-            payload = response.read(MARKET_BENCHMARK_MAX_CSV_BYTES + 1)
-    except HTTPError as exc:
-        status_code = exc.code
-        exc.close()
-        if status_code in {401, 403}:
-            raise RuntimeError(
-                f"MSCI ACWI refresh unavailable (HTTP {status_code}). "
-                "Verify MSCI entitlement and local credentials; "
-                "the existing cache was not changed."
-            ) from None
-        raise RuntimeError(
-            f"MSCI ACWI HTTPS source failed (HTTP {status_code}); "
-            "the existing cache was not changed."
-        ) from None
-    except (URLError, TimeoutError, OSError):
-        raise RuntimeError(
-            f"MSCI ACWI HTTPS source could not be reached at {safe_display}; "
-            "the existing cache was not changed."
-        ) from None
-    if len(payload) > MARKET_BENCHMARK_MAX_CSV_BYTES:
-        raise ValueError("benchmark CSV response exceeds the 5 MB limit")
-    if not payload:
-        raise ValueError("benchmark CSV response is empty")
-    return payload, safe_display
-
-
-def _read_limited_local_csv(source_path):
-    normalized_path = _normalize_benchmark_source_path(source_path)
-    if not os.path.isfile(normalized_path):
-        raise FileNotFoundError(
-            "MSCI ACWI benchmark CSV was not found. "
-            f"Place a Date/Close CSV at {normalized_path} or configure "
-            "MSCI_ACWI_SOURCE_PATH / MSCI_ACWI_SOURCE_URL in config.local.py."
-        )
-    if os.path.getsize(normalized_path) > MARKET_BENCHMARK_MAX_CSV_BYTES:
-        raise ValueError("benchmark CSV file exceeds the 5 MB limit")
-    with open(normalized_path, "rb") as csv_file:
-        payload = csv_file.read(MARKET_BENCHMARK_MAX_CSV_BYTES + 1)
-    if len(payload) > MARKET_BENCHMARK_MAX_CSV_BYTES:
-        raise ValueError("benchmark CSV file exceeds the 5 MB limit")
-    if not payload:
-        raise ValueError("benchmark CSV file is empty")
-    return payload, normalized_path
-
-
-def refresh_market_benchmark(
-    source_path=None,
-    source_url=None,
-    source_headers=None,
-    progress_callback=None,
-    timeout_seconds=15,
-    opener=None,
-):
-    """Refresh exact MSCI ACWI levels from a local or authorized HTTPS CSV.
-
-    This function intentionally has no public-site scraper, Yahoo ticker, ETF,
-    or other proxy fallback. CSV input must contain canonical ``Date`` and
-    ``Close`` columns and is validated atomically by :func:`upsert_close_series`.
+    A full refresh is deliberate: a newly paid distribution can cause Yahoo to
+    restate older adjusted closes, which a short incremental overlap would miss.
     """
-    if source_path is None and source_url is None:
-        source_path = runtime_settings.get_setting("MSCI_ACWI_SOURCE_PATH", None)
-        source_url = runtime_settings.get_setting("MSCI_ACWI_SOURCE_URL", None)
-    if source_headers is None:
-        source_headers = runtime_settings.get_setting("MSCI_ACWI_SOURCE_HEADERS", {})
-    if source_headers is None:
-        source_headers = {}
-
-    if isinstance(source_path, str) and not source_path.strip():
-        source_path = None
-    if isinstance(source_url, str) and not source_url.strip():
-        source_url = None
-    if source_path is not None and source_url is not None:
-        raise ValueError(
-            "Configure only one MSCI ACWI benchmark source: "
-            "MSCI_ACWI_SOURCE_PATH or MSCI_ACWI_SOURCE_URL"
-        )
-    if source_path is None and source_url is None:
-        source_path = os.path.join(DATA_DIR, "imports", "msci_acwi.csv")
-
-    if source_url is not None:
-        source_kind = "authorized_https_csv"
-        source_display = _safe_https_source_display(source_url)
-    else:
-        source_kind = "local_csv"
-        source_display = _normalize_benchmark_source_path(source_path)
-    _report_benchmark_refresh_progress(
-        progress_callback, 1, "벤치마크 소스 확인"
-    )
-
-    if source_url is not None:
-        payload, source_display = _read_limited_https_csv(
-            source_url,
-            source_headers,
-            timeout_seconds,
-            opener,
-        )
-    else:
-        payload, source_display = _read_limited_local_csv(source_path)
-    _report_benchmark_refresh_progress(
-        progress_callback, 2, "벤치마크 CSV 읽기"
-    )
-
     try:
-        frame = pd.read_csv(io.BytesIO(payload))
-    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
-        raise ValueError("benchmark source is not a readable CSV") from exc
-    summary = upsert_close_series(MARKET_BENCHMARK_TICKER, frame)
+        as_of_date = pd.Timestamp(
+            as_of if as_of is not None else datetime.now(timezone.utc).date()
+        ).date()
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("as_of must be a valid date") from exc
+    download_end = (pd.Timestamp(as_of_date) + pd.Timedelta(days=1)).date().isoformat()
+
     _report_benchmark_refresh_progress(
-        progress_callback, 3, "벤치마크 검증·저장"
+        progress_callback, 1, "ACWI 다운로드 준비"
     )
+    _report_benchmark_refresh_progress(
+        progress_callback, 2, "ACWI 가격 다운로드"
+    )
+    try:
+        downloaded = _download_market_benchmark_history(
+            MARKET_BENCHMARK_TICKER,
+            start=MARKET_BENCHMARK_DOWNLOAD_START,
+            end=download_end,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed. Yahoo returned no usable OHLCV data; "
+            "the existing cache was not replaced."
+        ) from exc
+
+    _report_benchmark_refresh_progress(
+        progress_callback, 3, "ACWI Adj Close 검증"
+    )
+    required_columns = ("Open", "High", "Low", "Close", "Adj Close", "Volume")
+    if downloaded is None or downloaded.empty:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed. Yahoo returned no usable OHLCV data; "
+            "the existing cache was not replaced."
+        )
+    if downloaded.columns.duplicated().any():
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded columns are duplicated; "
+            "the existing cache was not replaced."
+        )
+    missing_columns = [
+        column for column in required_columns if column not in downloaded.columns
+    ]
+    if missing_columns:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded OHLCV is missing "
+            f"{', '.join(missing_columns)}; the existing cache was not replaced."
+        )
+
+    validated = downloaded.loc[:, list(required_columns)].copy()
+    try:
+        normalized_dates = pd.to_datetime(validated.index, errors="raise")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded dates are invalid; "
+            "the existing cache was not replaced."
+        ) from exc
+    if pd.isna(normalized_dates).any():
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded dates are invalid; "
+            "the existing cache was not replaced."
+        )
+    normalized_dates = pd.Index([pd.Timestamp(value).date() for value in normalized_dates])
+    if normalized_dates.duplicated().any():
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded dates are duplicated; "
+            "the existing cache was not replaced."
+        )
+    validated.index = normalized_dates
+    validated = validated.sort_index()
+
+    for adj_close in validated["Adj Close"]:
+        try:
+            parsed_adj_close = float(adj_close)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(
+                "ACWI benchmark refresh failed: Adj Close must be finite and "
+                "positive for every row; the existing cache was not replaced."
+            ) from exc
+        if not isfinite(parsed_adj_close) or parsed_adj_close <= 0:
+            raise RuntimeError(
+                "ACWI benchmark refresh failed: Adj Close must be finite and "
+                "positive for every row; the existing cache was not replaced."
+            )
+
+    required_start = pd.Timestamp(core_backtest_periods.SELECTION_START).date()
+    first_date = validated.index[0]
+    latest_date = validated.index[-1]
+    if first_date >= required_start:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded history has no pre-IS "
+            f"seed before {required_start}; the existing cache was not replaced."
+        )
+    seed_date = max(
+        date_value for date_value in validated.index if date_value < required_start
+    )
+    seed_stale_days = (required_start - seed_date).days
+    if seed_stale_days > MARKET_BENCHMARK_MAX_STALE_CALENDAR_DAYS:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: the pre-IS seed is "
+            f"{seed_stale_days} calendar days stale; "
+            "the existing cache was not replaced."
+        )
+    stale_days = (as_of_date - latest_date).days
+    if stale_days > MARKET_BENCHMARK_MAX_STALE_CALENDAR_DAYS:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded history is "
+            f"{stale_days} calendar days stale; the existing cache was not replaced."
+        )
+
+    coverage_end = min(as_of_date, latest_date)
+    expected_business_days = len(
+        pd.bdate_range(required_start, coverage_end)
+    )
+    actual_business_days = sum(
+        required_start <= date_value <= coverage_end
+        for date_value in validated.index
+    )
+    minimum_rows = ceil(
+        expected_business_days * MARKET_BENCHMARK_MIN_BUSINESS_DAY_COVERAGE
+    )
+    if expected_business_days and actual_business_days < minimum_rows:
+        raise RuntimeError(
+            "ACWI benchmark refresh failed: downloaded history appears partial "
+            f"({actual_business_days}/{expected_business_days} business-day rows); "
+            "the existing cache was not replaced."
+        )
 
     conn = get_connection()
     try:
-        cached_row = conn.execute(
+        try:
+            conn.execute(
+                "DELETE FROM ohlcv WHERE ticker = ?",
+                (MARKET_BENCHMARK_TICKER,),
+            )
+            updated_rows = _upsert_ohlcv(
+                conn,
+                MARKET_BENCHMARK_TICKER,
+                validated,
+            )
+        except Exception:
+            conn.rollback()
+            raise
+        cached_rows = conn.execute(
             """
-            SELECT COUNT(*), MIN(date), MAX(date)
+            SELECT date, adj_close
             FROM ohlcv
-            WHERE ticker = ? AND close IS NOT NULL
+            WHERE ticker = ?
+            ORDER BY date
             """,
             (MARKET_BENCHMARK_TICKER,),
-        ).fetchone()
+        ).fetchall()
     finally:
         conn.close()
-    cached_rows, cached_first_date, cached_latest_date = cached_row
-    if not cached_rows:
-        raise RuntimeError("MSCI ACWI benchmark DB verification failed")
 
-    summary.update(
-        {
-            "benchmark_name": MARKET_BENCHMARK_NAME,
-            "source_kind": source_kind,
-            "source_display": source_display,
-            "cached_rows": int(cached_rows),
-            "cached_first_date": cached_first_date,
-            "cached_latest_date": cached_latest_date,
-        }
-    )
+    if not cached_rows:
+        raise RuntimeError(
+            "ACWI benchmark refresh produced no cached rows; "
+            "the benchmark remains unavailable."
+        )
+
+    for date_value, adj_close in cached_rows:
+        try:
+            parsed_date = pd.Timestamp(date_value)
+            parsed_adj_close = float(adj_close)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise RuntimeError(
+                "ACWI benchmark cache validation failed: invalid date or Adj Close."
+            ) from exc
+        if pd.isna(parsed_date) or not isfinite(parsed_adj_close) or parsed_adj_close <= 0:
+            raise RuntimeError(
+                "ACWI benchmark cache validation failed: Adj Close must be "
+                "finite and positive for every row."
+            )
+
+    first_date = str(cached_rows[0][0])
+    latest_date = str(cached_rows[-1][0])
+    summary = {
+        "mode": "fixed_start_full_history",
+        "requested": 1,
+        "updated": updated_rows,
+        "full_downloads": 1,
+        "incremental_downloads": 0,
+        "unchanged": 0,
+        "failed": [],
+        "latest_dates": {MARKET_BENCHMARK_TICKER: latest_date},
+        "db_path": DB_PATH,
+        "ticker": MARKET_BENCHMARK_TICKER,
+        "benchmark_name": MARKET_BENCHMARK_NAME,
+        "source_kind": "yfinance",
+        "data_basis": "Adj Close",
+        "cached_rows": len(cached_rows),
+        "cached_first_date": first_date,
+        "cached_latest_date": latest_date,
+        "first_date": first_date,
+        "latest_date": latest_date,
+    }
     _report_benchmark_refresh_progress(
-        progress_callback, 4, "벤치마크 DB 확인"
+        progress_callback, 4, "ACWI DB 확인 완료"
     )
     return summary
 
 
 def format_market_benchmark_refresh_summary(summary):
-    source_name = {
-        "local_csv": "Local CSV",
-        "authorized_https_csv": "Authorized HTTPS CSV",
-    }.get(summary.get("source_kind"), "Configured CSV")
     return (
-        f"{MARKET_BENCHMARK_NAME} Benchmark Refresh Complete\n\n"
-        f"Benchmark: {MARKET_BENCHMARK_NAME} ({MARKET_BENCHMARK_TICKER})\n"
-        f"Source: {source_name} ({summary['source_display']})\n"
+        "ACWI Benchmark Refresh Complete\n\n"
+        "Benchmark: ACWI\n"
+        "Source: Yahoo Finance\n"
+        "Data basis: Adj Close\n"
         f"Rows received/upserted: {summary['updated']}\n"
-        f"Imported range: {summary['first_date']} to {summary['latest_date']}\n"
         f"Cached range: {summary['cached_first_date']} to "
         f"{summary['cached_latest_date']} ({summary['cached_rows']} rows)\n"
         f"DB path: {summary['db_path']}"
@@ -742,6 +620,20 @@ def _download_history_range(ticker, start, end):
             progress=False,
             auto_adjust=False,
         )
+    )
+
+
+def _download_market_benchmark_history(ticker, start, end):
+    """Download benchmark history without fabricating a missing adjusted close."""
+    return _normalize_download(
+        yf.download(
+            ticker,
+            start=pd.Timestamp(start).date().isoformat(),
+            end=pd.Timestamp(end).date().isoformat(),
+            progress=False,
+            auto_adjust=False,
+        ),
+        synthesize_adj_close=False,
     )
 
 

@@ -43,8 +43,8 @@ MODE_POSITION = {
 DIRECTIONAL_STRATEGIES = ("Momentum", "Box Range", "Reversion")
 STRATEGIES = DIRECTIONAL_STRATEGIES
 WINDOW_ORDER = ("IS", "OOS")
-MSCI_ACWI_TICKER = core_portfolio_performance.MARKET_BENCHMARK_TICKER
-MSCI_ACWI_LABEL = core_portfolio_performance.MARKET_BENCHMARK_LABEL
+ACWI_TICKER = core_portfolio_performance.MARKET_BENCHMARK_TICKER
+ACWI_LABEL = core_portfolio_performance.MARKET_BENCHMARK_LABEL
 SCHEMA_VERSION = "2.0"
 SUMMARY_COLUMNS = [
     "strategy", "universe", "mode", "window", "evaluation_start", "evaluation_end",
@@ -231,7 +231,7 @@ def target_status(
 def _universe_specs():
     specs = {
         label: sorted(
-            set(config.universe_groups[group]) - {MSCI_ACWI_TICKER}
+            set(config.universe_groups[group]) - {ACWI_TICKER}
         )
         for label, group in BASE_GROUPS.items()
     }
@@ -531,14 +531,13 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         for ticker in master_universe
     }
     print(
-        f"Loading primary market benchmark once: {MSCI_ACWI_LABEL} "
-        f"({MSCI_ACWI_TICKER})",
+        f"Loading primary market benchmark once: {ACWI_TICKER}",
         flush=True,
     )
     acwi_load_error = ""
     try:
         acwi_price_data = core_market_data_store.get_price_data(
-            MSCI_ACWI_TICKER,
+            ACWI_TICKER,
             period_days=1060,
         )
     except Exception as exc:
@@ -556,7 +555,7 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         acwi_price_data = acwi_price_data.loc[:cutoff].copy()
 
     def market_benchmark_loader(ticker):
-        if ticker != MSCI_ACWI_TICKER:
+        if ticker != ACWI_TICKER:
             raise KeyError(f"Unsupported market benchmark ticker: {ticker}")
         return acwi_price_data
 
@@ -633,13 +632,13 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         "unique_tickers": len(master_universe),
         "universes": {name: len(universe_specs[name]) for name in UNIVERSE_ORDER},
         "stale_tickers": stale_tickers,
-        "market_benchmark_ticker": MSCI_ACWI_TICKER,
-        "primary_benchmark_label": MSCI_ACWI_LABEL,
+        "market_benchmark_ticker": ACWI_TICKER,
+        "primary_benchmark_label": ACWI_LABEL,
         "stock_selection_diagnostic_label": "Universe EW",
         "benchmark_roles": {
             "primary_pass_fail": {
-                "label": MSCI_ACWI_LABEL,
-                "ticker": MSCI_ACWI_TICKER,
+                "label": ACWI_LABEL,
+                "ticker": ACWI_TICKER,
                 "role": "primary market benchmark and PASS/FAIL target",
                 "local_data_loaded": bool(
                     acwi_price_data is not None and not acwi_price_data.empty
@@ -662,13 +661,13 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
             "max_security_weight_pct": 5.0,
             "portfolio": "score-weighted fixed quantities with cash and explicit exits",
             "primary_benchmark": (
-                f"{MSCI_ACWI_LABEL} ({MSCI_ACWI_TICKER}); "
+                f"{ACWI_LABEL}; "
                 "missing data produces REVIEW"
             ),
             "stock_selection_diagnostic": "daily equal-weight raw-close universe",
             "minimum_trades": minimum_trades,
             "minimum_win_rate_pct": 58.0,
-            "primary_target": "2x same-window MSCI ACWI ROI when ACWI ROI is positive",
+            "primary_target": "2x same-window ACWI ROI when ACWI ROI is positive",
             "win_rate_target": "58% secondary diagnostic; does not determine PASS/FAIL",
             "ls_definition": "50% long / 50% short entry-side caps; cash is allowed",
             "max_stale_calendar_days": max_stale_days,

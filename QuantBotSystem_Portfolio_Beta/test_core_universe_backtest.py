@@ -213,7 +213,7 @@ class UniverseBacktestTests(unittest.TestCase):
             detail,
         )
         self.assertIn(
-            "MSCI ACWI ROI: +3.0% | Strategy ROI: +6.0% | Multiple: 2.00x",
+            "ACWI ROI: +3.0% | Strategy ROI: +6.0% | Multiple: 2.00x",
             detail,
         )
         self.assertIn(
@@ -238,7 +238,7 @@ class UniverseBacktestTests(unittest.TestCase):
                 "market_benchmark": {"roi_pct": None},
                 "universe_ew_benchmark": {"roi_pct": 4.0},
                 "stock_selection_excess_pct": 1.0,
-                "market_benchmark_unavailable_reason": "No local MIWD00000PUS data",
+                "market_benchmark_unavailable_reason": "No local ACWI data",
                 "daily": pd.DataFrame({"gross_exposure_pct": [10.0]}),
                 "ledger": {
                     "filled_trades": 1,
@@ -256,7 +256,7 @@ class UniverseBacktestTests(unittest.TestCase):
         lines = core_universe_backtest._portfolio_lines(result)
 
         self.assertIn(
-            "MSCI ACWI ROI: N/A | Strategy ROI: +5.0% | Multiple: N/A",
+            "ACWI ROI: N/A | Strategy ROI: +5.0% | Multiple: N/A",
             lines,
         )
         self.assertTrue(any("Benchmark status: REVIEW" in line for line in lines))
@@ -324,8 +324,8 @@ class UniverseBacktestTests(unittest.TestCase):
                 "daily": daily,
                 "strategy": {"roi_pct": 2.0},
                 "market_benchmark": {"roi_pct": 1.0},
-                "market_benchmark_label": "MSCI ACWI",
-                "market_benchmark_ticker": "MIWD00000PUS",
+                "market_benchmark_label": "ACWI",
+                "market_benchmark_ticker": "ACWI",
                 "market_benchmark_available": True,
                 "market_benchmark_start_level_date": "2025-12-31",
                 "market_benchmark_start_level": 100.0,
@@ -389,7 +389,7 @@ class UniverseBacktestTests(unittest.TestCase):
                 "universe_ew_constituents",
             }.issubset(daily_rows.columns)
         )
-        self.assertEqual(set(benchmark_rows["market_benchmark_ticker"]), {"MIWD00000PUS"})
+        self.assertEqual(set(benchmark_rows["market_benchmark_ticker"]), {"ACWI"})
         self.assertEqual(set(benchmark_rows["start_level_date"]), {"2025-12-31"})
         self.assertEqual(set(benchmark_rows["market_multiple"]), {2.0})
 
