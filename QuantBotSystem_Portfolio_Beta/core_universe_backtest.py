@@ -307,9 +307,29 @@ def _stats_line(label, stats):
     if not stats["count"]:
         return f"{label}: no closed trades"
     return (
-        f"{label}: trades {stats['count']} | avg {stats['avg']:+.2f}% | "
+        f"{label}: trades {stats['count']} | avg trade {stats['avg']:+.2f}% | "
         f"median {stats['median']:+.2f}% | win {stats['win_rate']:.1f}% "
         f"({stats['wins']}/{stats['count']})"
+    )
+
+
+def _portfolio_cagr_line(label, result):
+    """Use actual ledger NAV for the headline return when it is available."""
+    performance = result.get("portfolio_performance")
+    if not performance:
+        return _stats_line(label, result["all"])
+
+    stats = result["all"]
+    cagr = performance["strategy"].get("cagr_pct")
+    cagr_text = "N/A" if cagr is None else f"{float(cagr):+.2f}%"
+    win_text = (
+        f"{stats['win_rate']:.1f}% ({stats['wins']}/{stats['count']})"
+        if stats["count"]
+        else "N/A (0/0)"
+    )
+    return (
+        f"{label}: trades {stats['count']} | portfolio CAGR {cagr_text} | "
+        f"trade win {win_text}"
     )
 
 
@@ -328,20 +348,14 @@ def _portfolio_lines(result):
     average_gross = (
         float(daily["gross_exposure_pct"].mean()) if not daily.empty else 0.0
     )
+    performance_parts = [f"ROI {strategy['roi_pct']:+.2f}%"]
+    if strategy["cagr_pct"] is not None:
+        performance_parts.append(f"CAGR {strategy['cagr_pct']:+.2f}%")
+    performance_parts.append(f"MDD {strategy['mdd_pct']:+.2f}%")
+    if strategy["sharpe"] is not None:
+        performance_parts.append(f"Sharpe {strategy['sharpe']:.2f}")
     return [
-        (
-            "Portfolio: "
-            f"ROI {strategy['roi_pct']:+.2f}% | CAGR "
-            f"{strategy['cagr_pct']:+.2f}% | MDD {strategy['mdd_pct']:+.2f}% | "
-            f"Sharpe {strategy['sharpe']:.2f}"
-            if strategy["cagr_pct"] is not None
-            and strategy["sharpe"] is not None
-            else (
-                "Portfolio: "
-                f"ROI {strategy['roi_pct']:+.2f}% | "
-                f"MDD {strategy['mdd_pct']:+.2f}%"
-            )
-        ),
+        "Portfolio: " + " | ".join(performance_parts),
         (
             f"Benchmark ROI {benchmark['roi_pct']:+.2f}% | "
             f"filled {ledger['filled_trades']} | skipped {ledger['skipped_trades']}"
@@ -585,7 +599,9 @@ def format_universe_backtest(result, entry_text, exit_text):
         f"Evaluation: {result['period']} | universe {result['universe_count']} | "
         f"data eligible {result['eligible_tickers']} | traded tickers {result['traded_tickers']}\n"
     )
-    report += _stats_line("ALL", result["all"]) + "\n"
+    report += _portfolio_cagr_line("ALL", result) + "\n"
+    if result.get("portfolio_performance"):
+        report += "CAGR: annualized from daily portfolio NAV using 252 trading days.\n"
     report += "Use See Detail for rules, LONG/SHORT statistics, and all trade dates.\n"
     report += "-----------------------------------------\n"
 
@@ -595,13 +611,14 @@ def format_universe_backtest(result, entry_text, exit_text):
     detail += (
         "Method: all qualifying signals across the selected universe; no overlap per ticker; "
         "score-proportional entry size; fixed quantities until explicit exits; "
-        "cash and gross/side/name limits enforced; trading costs excluded.\n"
+        "cash and gross/side/name limits enforced; trading costs excluded; "
+        "CAGR annualized from daily portfolio NAV using 252 trading days.\n"
     )
     detail += (
         f"Evaluation: {result['period']} | universe {result['universe_count']} | "
         f"data eligible {result['eligible_tickers']} | traded tickers {result['traded_tickers']}\n"
     )
-    detail += _stats_line("ALL", result["all"]) + "\n"
+    detail += _portfolio_cagr_line("ALL", result) + "\n"
     detail += _stats_line("LONG", result["long"]) + "\n"
     detail += _stats_line("SHORT", result["short"]) + "\n"
     for line in _portfolio_lines(result):
@@ -632,7 +649,7 @@ def format_fixed_is_oos_backtest(
             f"data eligible {result['eligible_tickers']} | traded tickers {result['traded_tickers']}"
         )
         separator = "\n" if separate_all else " | "
-        return prefix + separator + _stats_line("ALL", result["all"])
+        return prefix + separator + _portfolio_cagr_line("ALL", result)
 
     report = "\n\nBacktest Summary\n"
     report += "-----------------------------------------\n"
@@ -643,6 +660,11 @@ def format_fixed_is_oos_backtest(
     _, oos_latest_date = _period_bounds(oos_result["period"])
     report += f"Fixed OOS (2026-01 ~ {oos_latest_date or 'N/A'}):\n"
     report += result_line(oos_result, include_period=False, separate_all=True) + "\n"
+    if any(
+        result.get("portfolio_performance")
+        for result in (selection_result, oos_result)
+    ):
+        report += "CAGR: annualized from daily portfolio NAV using 252 trading days.\n"
     report += "Use See Detail for LONG/SHORT statistics and the backtest export.\n"
     report += "-----------------------------------------\n"
 
@@ -652,7 +674,8 @@ def format_fixed_is_oos_backtest(
     detail += (
         "Method: all qualifying signals across the selected universe; no overlap per ticker; "
         "score-proportional entry size; fixed quantities until explicit exits; "
-        "cash and gross/side/name limits enforced; trading costs excluded.\n"
+        "cash and gross/side/name limits enforced; trading costs excluded; "
+        "CAGR annualized from daily portfolio NAV using 252 trading days.\n"
     )
     for label, result in (
         ("Candidate selection (IS: 2024-01 to 2025-12)", selection_result),

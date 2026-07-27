@@ -71,9 +71,9 @@ def _wins_text(win_rate, count):
 def _bt_line(label, avg_return, win_rate, count, side_label):
     side_text = f" | {side_label}" if side_label else ""
     if count <= 0:
-        return f"- {label}{side_text}: avg N/A | win N/A (0/0)"
+        return f"- {label}{side_text}: avg trade N/A | win N/A (0/0)"
     return (
-        f"- {label}{side_text}: avg {avg_return:+.1f}% | "
+        f"- {label}{side_text}: avg trade {avg_return:+.1f}% | "
         f"win {_wins_text(win_rate, count)}"
     )
 
