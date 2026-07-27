@@ -15,36 +15,39 @@ This experiment instead optimizes the actual portfolio decision:
 - A NumPy-only antithetic evolution strategy searches the policy directly;
   it does not train a return classifier.
 - Momentum, Box Range, and Reversion signals and exits remain unchanged.
-- The action is continuous: scale each new trade and the whole new-entry
-  cohort from `0` to `1`.
+- The action is continuous: tilt candidate weights up or down inside each
+  new-entry LONG and SHORT cohort.
+- Each cohort's requested LONG gross and SHORT gross are preserved
+  separately. The overlay reallocates capital; it does not shrink it.
 - Existing positions are never rebalanced by the overlay.
 - LONG and SHORT use separate policy heads.
 - The reward is portfolio log return minus same-window ACWI log return.
 - Daily downside CVaR at the configured confidence (95% by default) may not
   exceed the baseline CVaR limit.
-- The selected seed checkpoint must also retain at least 25% of baseline
-  average gross exposure, at least 25% average effective scale on every
-  feature-eligible candidate, and the configured total/eligible/side
-  filled-trade coverage.
+- The selected seed checkpoint must preserve eligible requested capital,
+  retain the configured total/eligible/side filled-trade coverage, and pass
+  the portfolio CVaR constraint.
 - Every reward evaluation replays cash, quantities, partial exits, gross,
   side, and name limits through the normal Portfolio Beta ledger.
 - Five fixed seeds can be ensembled; there is no 58% win-rate training gate.
 
-The policy can only reduce a score-proportional requested weight. It cannot
-create a signal, flip a side, enlarge a position beyond the original request,
-change an exit, or bypass the existing portfolio hard caps.
+The policy may enlarge one requested position only by reducing peers on the
+same side and entry cohort by the same total amount. It cannot create a
+signal, flip a side, change an exit, alter total requested side gross, or
+bypass the existing 5% name and portfolio hard caps.
 
 For an A/B comparison, `BASELINE` is the current Portfolio Beta strategy with
 no RL sizing overlay. `RL_ENSEMBLE` receives the exact same signals, scores,
 next-open entries, and strategy exits, and changes only the requested entry
-weights and new-cohort gross scale. The experiment explicitly uses
+weights within each side. Zero policy parameters reproduce the baseline
+requested weights exactly. The experiment explicitly uses
 `LONG_SHORT_NEUTRAL`: LONG and SHORT are both allowed with the normal 50% side
 caps, but the ledger does not force exact daily dollar neutrality.
 
 If a signal lacks enough point-in-time feature history, it remains in both
 baseline and RL ledger replays at its original requested size. The policy does
-not silently delete it. Its individual multiplier stays at `1`, and the cohort
-gross head is disabled for any cohort containing such a passthrough signal.
+not silently delete it. Its individual multiplier stays at `1`; eligible peers
+redistribute only their own side capital.
 
 ## Point-in-time boundary
 
@@ -145,6 +148,8 @@ The experiment writes:
 - baseline versus ensemble summary;
 - daily strategy and ACWI NAV;
 - per-trade size decisions and executed weights;
+- eligible capital-preservation ratio and redistribution turnover, including
+  separate LONG and SHORT diagnostics;
 - every portfolio ledger entry/partial exit/final exit event;
 - per-seed IS metrics;
 - optimization history;

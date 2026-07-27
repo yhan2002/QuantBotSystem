@@ -514,7 +514,7 @@ class PortfolioLedgerTests(unittest.TestCase):
             "invalid multiplier": lambda signals, portfolio_state: {
                 "gross_scale": 1.0,
                 "trade_multipliers": {
-                    signals[0]["trade_id"]: 1.01,
+                    signals[0]["trade_id"]: -0.01,
                 },
             },
         }
@@ -528,6 +528,40 @@ class PortfolioLedgerTests(unittest.TestCase):
                     price_loader=self.loader,
                     entry_sizing_policy=sizing_policy,
                 )
+
+    def test_entry_sizing_policy_allows_upweight_but_name_cap_still_applies(self):
+        trade = {
+            "ticker": "AAA",
+            "side": "LONG",
+            "entry_date": "2026-01-02",
+            "entry_price": 100.0,
+            "signal_score": 2.0,
+            "exit_events": [
+                {
+                    "date": "2026-01-05",
+                    "weight": 1.0,
+                    "price": 110.0,
+                }
+            ],
+        }
+
+        result = simulate_portfolio(
+            [trade],
+            "2026-01-02",
+            "2026-01-05",
+            price_loader=self.loader,
+            entry_sizing_policy=lambda signals, portfolio_state: {
+                "gross_scale": 1.0,
+                "trade_multipliers": {
+                    signals[0]["trade_id"]: 1.5,
+                },
+            },
+        )
+
+        allocation = result["trades"][0]
+        self.assertEqual(allocation["policy_trade_multiplier"], 1.5)
+        self.assertAlmostEqual(allocation["requested_weight"], 0.075)
+        self.assertAlmostEqual(allocation["entry_weight_pct"], 5.0)
 
     def test_policy_sees_only_sanitized_signal_and_prior_close_state(self):
         calls = []

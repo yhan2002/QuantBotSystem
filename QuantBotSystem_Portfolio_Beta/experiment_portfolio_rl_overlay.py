@@ -42,7 +42,7 @@ STRATEGY_ALIASES = {
 }
 DEFAULT_GROUPS = ("CSQ_UNIV",)
 DEFAULT_STRATEGIES = ("REVERSION",)
-SCHEMA_VERSION = "portfolio-rl-experiment-1.1"
+SCHEMA_VERSION = "portfolio-rl-experiment-1.2"
 EXPERIMENT_POSITION_MODE = "LONG_SHORT_NEUTRAL"
 _SAFE_STAMP = re.compile(r"^[A-Za-z0-9_-]+$")
 MINIMUM_DATA_COVERAGE_RATIO = 0.95
@@ -500,6 +500,12 @@ def _summary_row(
         "eligible_average_effective_scale": metrics.get(
             "eligible_average_effective_scale"
         ),
+        "eligible_capital_preservation_ratio": metrics.get(
+            "eligible_capital_preservation_ratio"
+        ),
+        "eligible_redistribution_turnover_pct": metrics.get(
+            "eligible_redistribution_turnover_pct"
+        ),
         "eligible_long_candidates": metrics.get(
             "eligible_long_candidates"
         ),
@@ -509,6 +515,12 @@ def _summary_row(
         "eligible_long_average_effective_scale": metrics.get(
             "eligible_long_average_effective_scale"
         ),
+        "eligible_long_capital_preservation_ratio": metrics.get(
+            "eligible_long_capital_preservation_ratio"
+        ),
+        "eligible_long_redistribution_turnover_pct": metrics.get(
+            "eligible_long_redistribution_turnover_pct"
+        ),
         "eligible_short_candidates": metrics.get(
             "eligible_short_candidates"
         ),
@@ -517,6 +529,12 @@ def _summary_row(
         ),
         "eligible_short_average_effective_scale": metrics.get(
             "eligible_short_average_effective_scale"
+        ),
+        "eligible_short_capital_preservation_ratio": metrics.get(
+            "eligible_short_capital_preservation_ratio"
+        ),
+        "eligible_short_redistribution_turnover_pct": metrics.get(
+            "eligible_short_redistribution_turnover_pct"
         ),
         "average_net_exposure_pct": metrics.get(
             "average_net_exposure_pct"
@@ -1108,6 +1126,8 @@ def run_experiment(
                         f"    {iteration:>2}/{total} | "
                         f"ROI {row['roi_pct']:+.2f}% | "
                         f"CVaR {row['cvar'] * 100.0:.2f}% | "
+                        f"realloc "
+                        f"{row['redistribution_turnover_pct']:.1f}% | "
                         f"objective {row['objective']:+.4f}",
                         flush=True,
                     )
@@ -1222,6 +1242,36 @@ def run_experiment(
                         "is_eligible_average_effective_scale": (
                             result.trained_metrics[
                                 "eligible_average_effective_scale"
+                            ]
+                        ),
+                        "is_capital_preservation_ratio": (
+                            result.trained_metrics[
+                                "eligible_capital_preservation_ratio"
+                            ]
+                        ),
+                        "is_redistribution_turnover_pct": (
+                            result.trained_metrics[
+                                "eligible_redistribution_turnover_pct"
+                            ]
+                        ),
+                        "is_long_capital_preservation_ratio": (
+                            result.trained_metrics[
+                                "eligible_long_capital_preservation_ratio"
+                            ]
+                        ),
+                        "is_long_redistribution_turnover_pct": (
+                            result.trained_metrics[
+                                "eligible_long_redistribution_turnover_pct"
+                            ]
+                        ),
+                        "is_short_capital_preservation_ratio": (
+                            result.trained_metrics[
+                                "eligible_short_capital_preservation_ratio"
+                            ]
+                        ),
+                        "is_short_redistribution_turnover_pct": (
+                            result.trained_metrics[
+                                "eligible_short_redistribution_turnover_pct"
                             ]
                         ),
                         "is_average_net_exposure_pct": (
@@ -1440,8 +1490,9 @@ def run_experiment(
                     "feature_scaler": prepared_is.scaler.to_dict(),
                     "ensemble": {
                         "aggregation": (
-                            "arithmetic mean of per-seed gross and trade "
-                            "multipliers"
+                            "arithmetic mean of per-seed trade multipliers; "
+                            "each component preserves LONG and SHORT cohort "
+                            "gross separately"
                         ),
                         "constraint_satisfied": ensemble_feasibility[
                             "satisfied"
@@ -1527,6 +1578,10 @@ def run_experiment(
         "feature_schema_version": (
             portfolio_rl_overlay.FEATURE_SCHEMA_VERSION
         ),
+        "policy_schema_version": (
+            portfolio_rl_overlay.POLICY_SCHEMA_VERSION
+        ),
+        "action_mode": portfolio_rl_overlay.ACTION_MODE,
         "groups": list(groups),
         "universe_construction": universe_construction,
         "position_mode": portfolio_policy.position_mode,
@@ -1540,7 +1595,8 @@ def run_experiment(
         "comparison_design": (
             "same current strategy signals, scores, entries, and exits; "
             "BASELINE has no sizing overlay; RL_ENSEMBLE changes only "
-            "entry weights and cohort gross scale"
+            "relative entry weights while preserving each entry cohort's "
+            "requested LONG and SHORT gross separately"
         ),
         "strategies": list(strategy_names),
         "seeds": list(seeds),
@@ -1563,8 +1619,8 @@ def run_experiment(
         ),
         "risk_constraint": (
             "portfolio CVaR at configured confidence no worse than "
-            "baseline times cvar_tolerance, with eligible-signal and gross "
-            "collapse gates"
+            "baseline times cvar_tolerance, with eligible-signal coverage "
+            "and exact side-capital preservation gates"
         ),
         "cvar_confidence": training_config.cvar_confidence,
         "estimated_upper_bound_ledger_replays": estimated_replays,
