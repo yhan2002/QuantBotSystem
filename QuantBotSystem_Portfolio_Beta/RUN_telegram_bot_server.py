@@ -12,6 +12,7 @@ import app_daily_market_scheduler
 import app_runtime_lock
 import app_scan_jobs
 import core_market_data_store
+import core_portfolio_performance
 from app_bot_reports import (
     quick_report,
     run_compiled_scan,
@@ -739,10 +740,24 @@ def handle_menu_callbacks(call):
                 core_market_data_store.freshness_summary,
                 all_tickers,
             )
+            benchmark_ticker = (
+                core_portfolio_performance.MARKET_BENCHMARK_TICKER
+            )
+            benchmark_freshness = serialized_runtime_call(
+                core_market_data_store.get_data_freshness,
+                [benchmark_ticker],
+            )
+            benchmark_latest = benchmark_freshness.get(benchmark_ticker)
+            benchmark_status = (
+                f"latest {benchmark_latest}"
+                if benchmark_latest
+                else "NOT LOADED (reports show N/A / REVIEW)"
+            )
             report = (
                 "**Data Cache Status**\n\n"
                 f"Configured tickers: {len(all_tickers)}\n"
                 f"{cache_summary}\n"
+                f"MSCI ACWI ({benchmark_ticker}): {benchmark_status}\n"
                 f"DB: `{os.path.basename(core_market_data_store.DB_PATH)}`"
             )
             bot.answer_callback_query(call.id)

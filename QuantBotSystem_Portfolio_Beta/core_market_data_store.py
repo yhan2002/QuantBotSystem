@@ -4,6 +4,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timezone
+from math import isfinite
 
 import pandas as pd
 import yfinance as yf
@@ -18,6 +19,7 @@ INCREMENTAL_OVERLAP_CALENDAR_DAYS = 10
 DOWNLOAD_SLEEP_SECONDS = 0.7
 METADATA_SLEEP_SECONDS = 0.3
 FIXED_IS_OOS_HISTORY_PERIOD = "4y"
+RESERVED_BENCHMARK_TICKERS = frozenset({"MIWD00000PUS"})
 
 
 def get_connection():
@@ -71,6 +73,14 @@ def _infer_listing_country(ticker):
     return "US"
 
 
+def _exclude_reserved_benchmark_tickers(tickers):
+    return [
+        ticker
+        for ticker in tickers
+        if str(ticker).upper() not in RESERVED_BENCHMARK_TICKERS
+    ]
+
+
 def refresh_listing_country_labels_from_cache(tickers=None):
     """Populate US/CH/JP/KR listing-market labels from cached ticker symbols only."""
     conn = get_connection()
@@ -79,7 +89,7 @@ def refresh_listing_country_labels_from_cache(tickers=None):
             tickers = [row[0] for row in conn.execute(
                 "SELECT DISTINCT ticker FROM ohlcv ORDER BY ticker"
             ).fetchall()]
-        tickers = sorted(set(tickers))
+        tickers = sorted(set(_exclude_reserved_benchmark_tickers(tickers)))
         updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         rows = [
             (ticker, _infer_listing_country(ticker), "ticker_suffix", updated_at)
@@ -350,6 +360,96 @@ def _upsert_ohlcv(conn, ticker, df):
     )
     conn.commit()
     return len(rows)
+
+
+def upsert_close_series(ticker, frame):
+    """Atomically insert or update a validated Date/Close series.
+
+    Existing OHLCV fields are deliberately left unchanged on conflicts. The
+    complete input is normalized and validated before the database is opened,
+    so malformed input cannot produce a partial import.
+    """
+    if not isinstance(ticker, str) or not ticker.strip():
+        raise ValueError("ticker must be a non-empty string")
+    if not isinstance(frame, pd.DataFrame):
+        raise TypeError("frame must be a pandas DataFrame")
+    if frame.columns.duplicated().any():
+        raise ValueError("frame columns must be unique")
+
+    missing = [column for column in ("Date", "Close") if column not in frame.columns]
+    if missing:
+        raise ValueError(f"frame is missing required columns: {', '.join(missing)}")
+    if frame.empty:
+        raise ValueError("frame must contain at least one row")
+
+    dates = []
+    closes = []
+    for row_number, (date_value, close_value) in enumerate(
+        frame.loc[:, ["Date", "Close"]].itertuples(index=False, name=None),
+        start=1,
+    ):
+        try:
+            parsed_date = pd.Timestamp(date_value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"invalid Date at row {row_number}: {date_value!r}") from exc
+        if pd.isna(parsed_date):
+            raise ValueError(f"invalid Date at row {row_number}: {date_value!r}")
+
+        try:
+            parsed_close = float(close_value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                f"invalid Close at row {row_number}: {close_value!r}"
+            ) from exc
+        if not isfinite(parsed_close) or parsed_close <= 0:
+            raise ValueError(
+                f"Close must be finite and positive at row {row_number}: "
+                f"{close_value!r}"
+            )
+
+        dates.append(parsed_date.date().isoformat())
+        closes.append(parsed_close)
+
+    duplicated_dates = pd.Series(dates).duplicated(keep=False)
+    if duplicated_dates.any():
+        duplicates = sorted(set(pd.Series(dates)[duplicated_dates].tolist()))
+        raise ValueError(f"duplicate Date values after normalization: {', '.join(duplicates)}")
+
+    normalized_ticker = ticker.strip().upper()
+    normalized_rows = sorted(zip(dates, closes))
+    updated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [
+        (normalized_ticker, date_value, close_value, updated_at)
+        for date_value, close_value in normalized_rows
+    ]
+
+    conn = get_connection()
+    try:
+        conn.execute("BEGIN")
+        conn.executemany(
+            """
+            INSERT INTO ohlcv (ticker, date, close, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(ticker, date) DO UPDATE SET
+                close=excluded.close,
+                updated_at=excluded.updated_at
+            """,
+            rows,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    return {
+        "ticker": normalized_ticker,
+        "updated": len(rows),
+        "first_date": normalized_rows[0][0],
+        "latest_date": normalized_rows[-1][0],
+        "db_path": DB_PATH,
+    }
 
 
 def _download_history(ticker, period):

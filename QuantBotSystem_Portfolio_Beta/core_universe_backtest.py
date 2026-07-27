@@ -338,7 +338,10 @@ def _portfolio_lines(result):
     if not performance:
         return ["Portfolio accounting: unavailable"]
     strategy = performance["strategy"]
-    benchmark = performance["benchmark"]
+    market = performance.get("market_benchmark", performance.get("benchmark", {}))
+    universe_ew = performance.get(
+        "universe_ew_benchmark", performance.get("benchmark", {})
+    )
     daily = performance["daily"]
     ledger = performance["ledger"]
     policy = ledger["policy"]
@@ -348,16 +351,55 @@ def _portfolio_lines(result):
     average_gross = (
         float(daily["gross_exposure_pct"].mean()) if not daily.empty else 0.0
     )
-    performance_parts = [f"ROI {strategy['roi_pct']:+.2f}%"]
+    performance_parts = []
     if strategy["cagr_pct"] is not None:
         performance_parts.append(f"CAGR {strategy['cagr_pct']:+.2f}%")
     performance_parts.append(f"MDD {strategy['mdd_pct']:+.2f}%")
     if strategy["sharpe"] is not None:
         performance_parts.append(f"Sharpe {strategy['sharpe']:.2f}")
-    return [
-        "Portfolio: " + " | ".join(performance_parts),
+    market_roi = market.get("roi_pct")
+    universe_roi = universe_ew.get("roi_pct")
+    strategy_roi = strategy.get("roi_pct")
+    multiple = performance.get("market_benchmark_multiple")
+    if (
+        multiple is None
+        and market_roi is not None
+        and float(market_roi) > 0
+        and strategy_roi is not None
+    ):
+        multiple = float(strategy_roi) / float(market_roi)
+    market_text = "N/A" if market_roi is None else f"{float(market_roi):+.1f}%"
+    strategy_text = (
+        "N/A" if strategy_roi is None else f"{float(strategy_roi):+.1f}%"
+    )
+    multiple_text = "N/A" if multiple is None else f"{float(multiple):.2f}x"
+    universe_text = (
+        "N/A" if universe_roi is None else f"{float(universe_roi):+.1f}%"
+    )
+    stock_selection_excess = performance.get("stock_selection_excess_pct")
+    if (
+        stock_selection_excess is None
+        and strategy_roi is not None
+        and universe_roi is not None
+    ):
+        stock_selection_excess = float(strategy_roi) - float(universe_roi)
+    stock_selection_text = (
+        "N/A"
+        if stock_selection_excess is None
+        else f"{float(stock_selection_excess):+.1f}%p"
+    )
+    lines = [
         (
-            f"Benchmark ROI {benchmark['roi_pct']:+.2f}% | "
+            f"MSCI ACWI ROI: {market_text} | Strategy ROI: {strategy_text} | "
+            f"Multiple: {multiple_text}"
+        ),
+        (
+            f"Universe EW ROI: {universe_text} | "
+            f"Stock-selection excess: {stock_selection_text}"
+        ),
+        "Portfolio risk: " + " | ".join(performance_parts),
+        (
+            "Execution: "
             f"filled {ledger['filled_trades']} | skipped {ledger['skipped_trades']}"
         ),
         (
@@ -368,6 +410,14 @@ def _portfolio_lines(result):
             f"short {policy['short_cap'] * 100:.0f}%"
         ),
     ]
+    if market_roi is None:
+        reason = performance.get("market_benchmark_unavailable_reason")
+        lines.insert(
+            2,
+            "Benchmark status: REVIEW"
+            + (f" | {reason}" if reason else ""),
+        )
+    return lines
 
 
 def _box_attribution_lines(result):
@@ -545,10 +595,12 @@ def export_portfolio_bundle(
     )
     daily_path = directory / f"{safe_key}_{stamp}_portfolio_daily.csv"
     event_path = directory / f"{safe_key}_{stamp}_ledger_events.csv"
+    benchmark_path = directory / f"{safe_key}_{stamp}_benchmark_summary.csv"
     bundle_path = directory / f"{safe_key}_{stamp}_portfolio_bundle.zip"
 
     daily_frames = []
     ledger_rows = []
+    benchmark_rows = []
     for window, result in (("IS", selection_result), ("OOS", oos_result)):
         performance = result.get("portfolio_performance")
         if not performance:
@@ -561,6 +613,54 @@ def export_portfolio_bundle(
             row = dict(event)
             row["window"] = window
             ledger_rows.append(row)
+        market = performance.get("market_benchmark", {})
+        universe_ew = performance.get("universe_ew_benchmark", {})
+        benchmark_rows.append(
+            {
+                "window": window,
+                "market_benchmark_label": performance.get(
+                    "market_benchmark_label", "MSCI ACWI"
+                ),
+                "market_benchmark_ticker": performance.get(
+                    "market_benchmark_ticker", "MIWD00000PUS"
+                ),
+                "market_benchmark_available": performance.get(
+                    "market_benchmark_available", False
+                ),
+                "market_benchmark_unavailable_reason": performance.get(
+                    "market_benchmark_unavailable_reason", ""
+                ),
+                "start_level_date": performance.get(
+                    "market_benchmark_start_level_date", ""
+                ),
+                "start_level": performance.get(
+                    "market_benchmark_start_level", ""
+                ),
+                "end_level_date": performance.get(
+                    "market_benchmark_end_level_date", ""
+                ),
+                "end_level": performance.get(
+                    "market_benchmark_end_level", ""
+                ),
+                "msci_acwi_roi_pct": market.get("roi_pct"),
+                "strategy_roi_pct": performance.get("strategy", {}).get(
+                    "roi_pct"
+                ),
+                "market_multiple": performance.get(
+                    "market_benchmark_multiple"
+                ),
+                "universe_ew_roi_pct": universe_ew.get("roi_pct"),
+                "stock_selection_excess_pct": performance.get(
+                    "stock_selection_excess_pct"
+                ),
+                "daily_curve_available": performance.get(
+                    "market_benchmark_daily_curve_available", False
+                ),
+                "daily_curve_reason": performance.get(
+                    "market_benchmark_daily_curve_reason", ""
+                ),
+            }
+        )
 
     if daily_frames:
         pd.concat(daily_frames, ignore_index=True).to_csv(
@@ -579,13 +679,18 @@ def export_portfolio_bundle(
         index=False,
         encoding="utf-8-sig",
     )
+    pd.DataFrame(benchmark_rows).to_csv(
+        benchmark_path,
+        index=False,
+        encoding="utf-8-sig",
+    )
 
     with zipfile.ZipFile(
         bundle_path,
         mode="w",
         compression=zipfile.ZIP_DEFLATED,
     ) as archive:
-        for path in (trade_path, daily_path, event_path):
+        for path in (trade_path, daily_path, event_path, benchmark_path):
             archive.write(path, arcname=path.name)
     return bundle_path
 
@@ -692,7 +797,8 @@ def format_fixed_is_oos_backtest(
         detail += f"Closed trades: {result['all']['count']}\n"
     detail += (
         "\nSee Detail also sends an analysis-ready export. Portfolio-accounted "
-        "runs include trade events, per-leg ledger events, and daily NAV in a ZIP.\n"
+        "runs include trade events, per-leg ledger events, daily NAV, and "
+        "benchmark boundary levels in a ZIP.\n"
     )
     detail += "-----------------------------------------\n"
     csv_path = None

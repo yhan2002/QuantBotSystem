@@ -12,6 +12,7 @@
 
 ### 베타판 변경
 
+- Portfolio Beta의 1차 시장 벤치마크를 exact MSCI ACWI(`MIWD00000PUS`) 경계 종가 ROI로 분리하고, Universe EW는 종목선택 초과성과 진단으로 유지했습니다. ACWI 데이터가 없으면 ETF 대체 없이 `N/A/REVIEW`로 처리하며, 로컬 Date/Close CSV 원자적 적재와 검산용 benchmark summary export를 추가했습니다.
 - 성과 PASS/FAIL의 1차 기준을 1년 누적 포트폴리오 ROI와 양의 동일구간 벤치마크 ROI의 2배 비교로 통일하고, 승률 58%는 보조 진단으로 분리했습니다.
 - Box Range를 40개 완료 봉 기반의 횡보·상승·하락 채널 V2로 교체하고 채널 품질, 다음 시가 진입, 고정 목표 경로와 계산 캐시를 보강했습니다.
 - Admin 데이터 작업을 마지막 캐시일 기준 10일 중첩 최신분 갱신과 확인이 필요한 4년 전체 backfill로 분리했습니다.

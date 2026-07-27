@@ -131,7 +131,24 @@ Portfolio reports expose:
 - quantity and each partial/full exit;
 - daily NAV, cash, gross, net, long, short, and active positions;
 - Box FLAT/TREND attribution;
-- portfolio ROI, CAGR, MDD, Sharpe, and benchmark comparison.
+- portfolio ROI, CAGR, MDD, and Sharpe;
+- exact `MIWD00000PUS` MSCI ACWI boundary-level ROI as the primary market
+  benchmark and PASS/FAIL input;
+- daily equal-weight selected-universe ROI as the secondary stock-selection
+  diagnostic.
+
+The primary comparison is reported as:
+
+```text
+MSCI ACWI ROI: ... | Strategy ROI: ... | Multiple: ...x
+Universe EW ROI: ... | Stock-selection excess: ...%p
+```
+
+ACWI ROI needs only the last valid index close before the evaluation window
+and the last valid close through its end. It never substitutes an ETF or
+Universe EW when exact ACWI data is absent; the report then shows `N/A` and the
+target status is `REVIEW`. ACWI MDD, Sharpe, and a daily curve are exposed only
+when complete daily index levels are available.
 
 The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
 with 252 trading days. Trade-level averages remain explicitly labelled
