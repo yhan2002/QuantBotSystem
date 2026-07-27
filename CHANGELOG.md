@@ -17,6 +17,7 @@
 - Admin 데이터 작업을 마지막 캐시일 기준 10일 중첩 최신분 갱신과 확인이 필요한 4년 전체 backfill로 분리했습니다.
 - Reversion의 계획 기대손익 필터를 제한적으로 시험했으나 채택 근거가 부족해 코드·테스트·문서를 실험 전 상태로 롤백했습니다.
 - `QuantBotSystem_Portfolio_Beta/` 독립 개발선을 추가해 점수 기반 비중 배분, 현금·수량 원장, 포트폴리오 한도 및 Residual Stat-Arb를 구현했습니다.
+- Residual Stat-Arb는 거래비용 0 가정에서도 IS CAGR -1.26%, OOS CAGR -11.25%로 가설 지지 근거가 없어 Portfolio Beta의 메뉴·실행·분석 코드에서 제거했습니다. 공용 점수·포트폴리오 원장 인프라는 유지합니다.
 - Classic Beta와 Portfolio Beta를 선택 실행하는 버전 선택기와 프로세스 잠금을 추가하고, 오래된 독립 추세선 실험 파일은 제거했습니다.
 
 ### GitHub 커밋 요약

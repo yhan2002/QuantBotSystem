@@ -29,7 +29,7 @@ class JobManagerTests(unittest.TestCase):
             "scan",
             runner,
             task_type="STRATEGY_SCAN",
-            label="Residual Stat-Arb",
+            label="Momentum",
         )
         elapsed = time.perf_counter() - started
 
@@ -42,7 +42,7 @@ class JobManagerTests(unittest.TestCase):
 
         snapshot = self.manager.get(submission.job_id)
         self.assertEqual(snapshot.task_type, "STRATEGY_SCAN")
-        self.assertEqual(snapshot.label, "Residual Stat-Arb")
+        self.assertEqual(snapshot.label, "Momentum")
         self.assertEqual(snapshot.state, app_scan_jobs.RUNNING)
         release.set()
         completed = self.manager.wait(submission.job_id, timeout=1.0)

@@ -15,9 +15,12 @@ import runtime_settings
 import strategy_ma_cross
 import core_market_data_store
 import strategy_price_liquidity_reversion
-import strategy_residual_stat_arb_app
 import core_universe_backtest
-from app_bot_session import USER_SESSIONS, compile_selected_universe
+from app_bot_session import (
+    STRATEGY_LABELS,
+    USER_SESSIONS,
+    compile_selected_universe,
+)
 
 _scheduler_started = False
 MORNING_DATA_REFRESH_TIME = "08:00"
@@ -82,6 +85,9 @@ def _daily_market_scanner():
             continue
 
         selected_strategy = session.get("strategy", "MA_CROSS")
+        if selected_strategy not in STRATEGY_LABELS:
+            selected_strategy = "MA_CROSS"
+            session["strategy"] = selected_strategy
         neutralization = session.get("neutralization", "NONE")
         position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
         compiled_universe = compile_selected_universe(session)
@@ -110,15 +116,6 @@ def _daily_market_scanner():
                     position_mode=position_mode,
                 )
                 header = f"*Scheduled Alert* Reversion Scan ({now_str})\n"
-            elif selected_strategy == "RESIDUAL_STAT_ARB":
-                report_content = strategy_residual_stat_arb_app.scan_residual_stat_arb(
-                    compiled_universe,
-                    neutralization=neutralization,
-                    position_mode=position_mode,
-                )
-                header = (
-                    f"*Scheduled Alert* Residual Stat-Arb Scan ({now_str})\n"
-                )
             else:
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"

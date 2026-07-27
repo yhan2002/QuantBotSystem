@@ -6,6 +6,18 @@ import app_bot_session
 
 
 class BotSessionTests(unittest.TestCase):
+    def tearDown(self):
+        app_bot_session.USER_SESSIONS.clear()
+
+    def test_removed_strategy_falls_back_to_momentum(self):
+        app_bot_session.USER_SESSIONS["legacy-chat"] = {
+            "strategy": "REMOVED_STRATEGY",
+        }
+
+        session = app_bot_session.get_or_create_session("legacy-chat")
+
+        self.assertEqual(session["strategy"], "MA_CROSS")
+
     def test_report_ids_keep_results_independent(self):
         session = {}
         first = app_bot_session.store_backtest_report(

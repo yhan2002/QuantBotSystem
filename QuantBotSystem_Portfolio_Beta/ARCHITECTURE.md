@@ -11,7 +11,6 @@ This version adds:
 - score-proportional position sizing with a 5% per-security cap;
 - cash, quantity, partial-exit, gross/net exposure, and NAV accounting;
 - separate Box FLAT and TREND attribution;
-- a fourth Residual Stat-Arb strategy;
 - a stop/start version selector for Telegram operation.
 
 ## Non-negotiable invariants
@@ -46,8 +45,8 @@ Admin data mutations through one re-entrant operation lock. Each completed
 manual scan stores an immutable report id, so an older See Detail button
 cannot be redirected to a newer scan.
 
-Interactive scans for Momentum, Box Range, Reversion, and Residual Stat-Arb,
-plus Admin price/backfill/metadata downloads, run through one process-local
+Interactive scans for Momentum, Box Range, and Reversion, plus Admin
+price/backfill/metadata downloads, run through one process-local
 FIFO background worker. The Telegram callback returns immediately and edits
 one loading message in monotonic 5% steps. A frozen request snapshot keeps the
 strategy, universe, neutralization, and position mode unchanged while a job is
@@ -122,35 +121,6 @@ last available close, rather than omitted from end-of-window NAV.
   - `TREND / FALLING_RALLY`;
   - `TRANSITION` remains non-tradable.
 - Reversion remains unchanged as a raw-price mean-reversion strategy.
-- Residual Stat-Arb is a new fourth strategy and does not replace Reversion.
-
-## Residual Stat-Arb first version
-
-The first implementation is deterministic rather than ML-based:
-
-- select up to five same-listing-country and same-sector peers from trailing
-  correlations known before the evaluation window;
-- retain rolling market and sector/peer betas as diagnostics;
-- estimate the executable target-versus-peer-basket beta from completed
-  observations and calculate the matching stock-specific residual;
-- standardize a short-horizon cumulative residual using prior history;
-- enter only after an extreme residual starts reverting;
-- hold the stock alpha leg and an offsetting peer-basket hedge;
-- exit on residual normalization, residual stop, or time stop.
-
-Regression coefficients used for a close signal are estimated no later than
-the preceding close. A non-positive executable hedge beta is rejected rather
-than converted with an absolute value. Entry and any signal-driven exit
-execute at the following open.
-
-Residual peer rankings and residual-regression features use a job-local memory
-cache backed by a Portfolio-Beta-only SQLite cache. Keys include the engine
-version, configuration, cutoff, universe/metadata snapshot, and relevant Close
-history, so a changed input becomes a cache miss. IS/OOS cutoffs remain
-separate, cache failures fall back to calculation, and no cache file is shared
-with the deployment or Classic Beta code. The persistent store retains roughly
-the newest 4,000 entries so daily input fingerprints cannot grow it without
-bound.
 
 ## Reporting
 

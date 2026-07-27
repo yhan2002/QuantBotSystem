@@ -58,7 +58,6 @@ class BotUiTests(unittest.TestCase):
                 "[x] Momentum",
                 "[ ] Box Range",
                 "[ ] Reversion",
-                "[ ] Residual Stat-Arb",
             ],
         )
         self.assertIn("Strategy: Momentum", app_bot_ui.settings_text(chat_id))

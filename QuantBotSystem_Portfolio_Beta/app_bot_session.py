@@ -28,7 +28,6 @@ STRATEGY_LABELS = {
     "MA_CROSS": "Momentum",
     "BOX_RANGE": "Box Range",
     "VALUE_REVERSION": "Reversion",
-    "RESIDUAL_STAT_ARB": "Residual Stat-Arb",
 }
 
 NEUTRALIZATION_LABELS = {
@@ -133,7 +132,10 @@ def get_or_create_session(chat_id):
             "last_backtest_report_id": None,
             "backtest_reports": {},
         }
-    return USER_SESSIONS[chat_id]
+    session = USER_SESSIONS[chat_id]
+    if session.get("strategy") not in STRATEGY_LABELS:
+        session["strategy"] = "MA_CROSS"
+    return session
 
 
 def store_backtest_report(session, detail, export_path):
