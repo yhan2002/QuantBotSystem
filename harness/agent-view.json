@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "view_id": "quantbot",
+  "title": "QuantBot Operator Review Surface",
+  "subtitle": "Synthetic Telegram and selector state for deterministic agent review",
+  "notice": "SYNTHETIC FIXTURE — no token, chat, account, cache, or market data",
+  "cards": [
+    {
+      "label": "Selected version",
+      "value": "PORTFOLIO_BETA",
+      "tone": "neutral"
+    },
+    {
+      "label": "Poller",
+      "value": "STOPPED",
+      "tone": "ok"
+    },
+    {
+      "label": "Position mode",
+      "value": "Long / Short Neutral",
+      "tone": "neutral"
+    },
+    {
+      "label": "External calls",
+      "value": "BLOCKED",
+      "tone": "blocked"
+    }
+  ],
+  "tables": [
+    {
+      "title": "Telegram report preview",
+      "columns": ["Strategy", "Market", "Side", "Candidate", "State"],
+      "rows": [
+        ["Momentum", "SYNTH-US", "LONG", "SYNTH-A", "READY"],
+        ["Box Range", "SYNTH-JP", "SHORT", "SYNTH-B", "REVIEW"],
+        ["Reversion", "SYNTH-CSQ", "LONG", "SYNTH-C", "SKIP"]
+      ]
+    },
+    {
+      "title": "Operator action boundaries",
+      "columns": ["Action", "Preview state", "Safety evidence"],
+      "rows": [
+        ["Select version", "SIMULATED", "No local selector file written"],
+        ["Run scan", "BLOCKED", "No market download"],
+        ["Send Telegram", "BLOCKED", "No token or chat destination"]
+      ]
+    }
+  ],
+  "notes": [
+    {
+      "title": "Promotion boundary",
+      "tone": "warning",
+      "items": [
+        "The production QuantBotSystem line is not modified by this preview.",
+        "All candidates, markets, and states are deliberately synthetic.",
+        "The view checks message hierarchy and labels, not strategy performance."
+      ]
+    }
+  ]
+}

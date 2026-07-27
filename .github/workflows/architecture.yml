@@ -27,4 +27,20 @@ jobs:
         with:
           python-version: "3.11"
       - name: Check all version boundaries
-        run: python -m unittest test_architecture.py test_review_gate.py -v
+        run: >-
+          python -m unittest
+          test_architecture.py
+          test_agent_view.py
+          test_review_gate.py
+          -v
+      - name: Build synthetic DOM and screenshot
+        run: >-
+          python tools/build_agent_view.py
+          --output-dir .agent-artifacts
+          --screenshot
+      - name: Upload agent-readable preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-view-quantbot
+          path: .agent-artifacts/
+          if-no-files-found: error
