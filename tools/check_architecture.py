@@ -55,8 +55,12 @@ REQUIRED_ROOT_PATHS = {
     "RUN_quantbot_version_switch.py",
     "test_RUN_quantbot_version_switch.py",
     "test_architecture.py",
+    "test_review_gate.py",
     "docs/architecture.md",
+    "docs/review-loop.md",
     "docs/validation.md",
+    "harness/review-policy.json",
+    "tools/review_gate.py",
     "QuantBotSystem_Portfolio_Beta/ARCHITECTURE.md",
     "QuantBotSystem_Portfolio_Beta/RUNBOOK.md",
 }

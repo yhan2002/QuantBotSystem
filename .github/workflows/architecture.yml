@@ -6,12 +6,16 @@ on:
       - "**/*.py"
       - "AGENTS.md"
       - "docs/**"
+      - "harness/**"
+      - ".gitignore"
       - ".github/workflows/architecture.yml"
   push:
     paths:
       - "**/*.py"
       - "AGENTS.md"
       - "docs/**"
+      - "harness/**"
+      - ".gitignore"
       - ".github/workflows/architecture.yml"
 
 jobs:
@@ -23,4 +27,4 @@ jobs:
         with:
           python-version: "3.11"
       - name: Check all version boundaries
-        run: python -m unittest test_architecture.py -v
+        run: python -m unittest test_architecture.py test_review_gate.py -v

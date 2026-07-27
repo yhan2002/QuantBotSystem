@@ -17,6 +17,7 @@
 - [버전·모듈 아키텍처](docs/architecture.md)
 - [개발·승격·기록 절차](docs/development-workflow.md)
 - [테스트·성과 판정 규칙](docs/validation.md)
+- [독립 에이전트 리뷰 루프](docs/review-loop.md)
 - [비밀값·데이터·Telegram 운영 안전](docs/data-operations.md)
 - [Portfolio Beta 상세 아키텍처](QuantBotSystem_Portfolio_Beta/ARCHITECTURE.md)
 - [Portfolio Beta 실행 Runbook](QuantBotSystem_Portfolio_Beta/RUNBOOK.md)
@@ -29,6 +30,8 @@
 - 사용자 변경을 보존하고 버전 폴더 사이를 무조건 덮어쓰지 않는다.
 - 모듈 계층이나 새 파일 접두사를 추가하면 `tools/check_architecture.py`의
   분류 계약도 함께 갱신한다.
+- 코드·아키텍처·데이터 계약 변경은 구현자와 다른 에이전트가 검토하고
+  `python .\tools\review_gate.py <record>`로 최종 승인을 확인한다.
 - 신호는 종가까지의 정보만 사용하고 신규 진입은 다음 시가보다 빠를 수 없다.
 - 비밀 설정, SQLite, 캐시, 로그, 생성 CSV·JSON·Excel을 커밋하지 않는다.
 - 전체 백테스트·대량 다운로드·Telegram 발송·봇 실행은 현재 요청에서
@@ -37,6 +40,7 @@
 ## 완료 기준
 
 - 관련 집중 테스트와 문법 검사가 통과했다.
+- P0~P2 발견사항이 해소되고 독립 리뷰어의 최종 `APPROVE`가 기록됐다.
 - 전략·검증·릴리스·위험 변경은 `CHANGELOG.md`에 기록했다.
 - 배포선 변경은 Beta 검증 근거와 승격 범위가 명확하다.
 - 변경 파일, 검증 결과, 실행하지 않은 작업, 남은 위험을 인계한다.
