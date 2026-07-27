@@ -34,6 +34,13 @@ The policy can only reduce a score-proportional requested weight. It cannot
 create a signal, flip a side, enlarge a position beyond the original request,
 change an exit, or bypass the existing portfolio hard caps.
 
+For an A/B comparison, `BASELINE` is the current Portfolio Beta strategy with
+no RL sizing overlay. `RL_ENSEMBLE` receives the exact same signals, scores,
+next-open entries, and strategy exits, and changes only the requested entry
+weights and new-cohort gross scale. The experiment explicitly uses
+`LONG_SHORT_NEUTRAL`: LONG and SHORT are both allowed with the normal 50% side
+caps, but the ledger does not force exact daily dollar neutrality.
+
 If a signal lacks enough point-in-time feature history, it remains in both
 baseline and RL ledger replays at its original requested size. The policy does
 not silently delete it. Its individual multiplier stays at `1`, and the cohort
@@ -82,8 +89,10 @@ First print the scope without loading market data:
 ```powershell
 Set-Location .\QuantBotSystem_Portfolio_Beta
 python .\experiment_portfolio_rl_overlay.py `
-  --groups CSQ_UNIV `
-  --strategies REVERSION `
+  --groups CSQ_UNIV US_LARGE_CAP_100_20260630_PROXY `
+  --combine-groups `
+  --combined-universe-name CSQ_US100 `
+  --strategies BOX `
   --seeds 11 23 37 `
   --iterations 6 `
   --population 3 `
@@ -93,12 +102,14 @@ python .\experiment_portfolio_rl_overlay.py `
 ```
 
 If the printed upper-bound replay count is acceptable, run the focused
-Reversion pilot:
+Box Range A/B:
 
 ```powershell
 python .\experiment_portfolio_rl_overlay.py `
-  --groups CSQ_UNIV `
-  --strategies REVERSION `
+  --groups CSQ_UNIV US_LARGE_CAP_100_20260630_PROXY `
+  --combine-groups `
+  --combined-universe-name CSQ_US100 `
+  --strategies BOX `
   --seeds 11 23 37 `
   --iterations 6 `
   --population 3 `
@@ -106,6 +117,12 @@ python .\experiment_portfolio_rl_overlay.py `
   --minimum-feature-eligible-filled-trades 60 `
   --confirm-long-run
 ```
+
+Without `--combine-groups`, multiple group names remain separate portfolio
+experiments. With the flag, their members are sorted and deduplicated before
+one portfolio is trained and evaluated. At the current configuration,
+`CSQ_UNIV` and US Top 100 contain 44 overlapping names and resolve to one
+207-name `CSQ_US100` universe.
 
 The pilot performs many exact ledger replays, so runtime depends on universe
 size and trade count. The command above has an upper bound of 139 full ledger

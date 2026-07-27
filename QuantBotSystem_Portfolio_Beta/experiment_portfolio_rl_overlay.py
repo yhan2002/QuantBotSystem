@@ -26,6 +26,7 @@ import analyze_strategy_universe_direction as performance_cube
 import config
 import core_backtest_periods
 import core_market_data_store
+import core_portfolio_allocator
 import core_portfolio_performance
 import core_signal_scoring
 import portfolio_rl_overlay
@@ -41,7 +42,8 @@ STRATEGY_ALIASES = {
 }
 DEFAULT_GROUPS = ("CSQ_UNIV",)
 DEFAULT_STRATEGIES = ("REVERSION",)
-SCHEMA_VERSION = "portfolio-rl-experiment-1.0"
+SCHEMA_VERSION = "portfolio-rl-experiment-1.1"
+EXPERIMENT_POSITION_MODE = "LONG_SHORT_NEUTRAL"
 _SAFE_STAMP = re.compile(r"^[A-Za-z0-9_-]+$")
 MINIMUM_DATA_COVERAGE_RATIO = 0.95
 _ACTIVE_CHECKPOINT_PATH = None
@@ -164,7 +166,12 @@ def _strategy_name(value):
     return STRATEGY_ALIASES[key]
 
 
-def _universe_specs(groups):
+def _universe_specs(
+    groups,
+    *,
+    combine_groups=False,
+    combined_universe_name=None,
+):
     specs = {}
     for group in groups:
         if group not in config.universe_groups:
@@ -175,7 +182,21 @@ def _universe_specs(groups):
         )
         if not specs[group]:
             raise ValueError(f"Universe group is empty: {group}")
-    return specs
+    if not combine_groups:
+        return specs
+    if len(specs) < 2:
+        raise ValueError(
+            "combine_groups requires at least two source universe groups"
+        )
+    combined_name = str(
+        combined_universe_name or "COMBINED_GROUPS"
+    ).strip()
+    if not combined_name:
+        raise ValueError("combined_universe_name must not be empty")
+    combined = sorted(set().union(*(set(values) for values in specs.values())))
+    if not combined:
+        raise ValueError("Combined universe is empty")
+    return {combined_name: combined}
 
 
 def _collect_ticker_results(strategy, tickers, price_data, window):
@@ -385,6 +406,8 @@ def _summary_row(
     cvar_confidence=0.95,
     coverage=None,
     feasibility=None,
+    universe_mode="SEPARATE",
+    source_groups=(),
 ):
     target = core_portfolio_performance.evaluate_return_target(
         metrics["roi_pct"],
@@ -406,6 +429,9 @@ def _summary_row(
         "schema_version": SCHEMA_VERSION,
         "strategy": strategy,
         "universe": group,
+        "universe_mode": universe_mode,
+        "source_groups": "|".join(source_groups),
+        "position_mode": EXPERIMENT_POSITION_MODE,
         "window": window,
         "variant": variant,
         "seed": seed,
@@ -655,6 +681,7 @@ def _evaluate(
     window,
     price_loader,
     market_loader,
+    portfolio_policy,
     policy=None,
     decision_log=None,
     cvar_confidence=0.95,
@@ -666,6 +693,7 @@ def _evaluate(
         window["evaluation_end"],
         price_loader=price_loader,
         market_benchmark_loader=market_loader,
+        portfolio_policy=portfolio_policy,
         sizing_policy=policy,
         decision_log=decision_log,
     )
@@ -680,6 +708,8 @@ def _evaluate(
 def run_experiment(
     *,
     groups=DEFAULT_GROUPS,
+    combine_groups=False,
+    combined_universe_name=None,
     strategies=DEFAULT_STRATEGIES,
     seeds=portfolio_rl_overlay.DEFAULT_SEEDS,
     training_config=None,
@@ -695,6 +725,14 @@ def run_experiment(
         raise ValueError("at least one universe group is required")
     if len(set(groups)) != len(groups):
         raise ValueError("universe groups must be unique")
+    if combine_groups and len(groups) < 2:
+        raise ValueError(
+            "combine_groups requires at least two source universe groups"
+        )
+    if combined_universe_name is not None and not combine_groups:
+        raise ValueError(
+            "combined_universe_name requires combine_groups=True"
+        )
     if not strategy_names:
         raise ValueError("at least one strategy is required")
     if len(set(strategy_names)) != len(strategy_names):
@@ -711,13 +749,60 @@ def run_experiment(
         training_config
         or portfolio_rl_overlay.EvolutionStrategyConfig()
     )
-    universes = _universe_specs(groups)
-    combination_count = len(strategy_names) * len(groups)
+    universes = _universe_specs(
+        groups,
+        combine_groups=combine_groups,
+        combined_universe_name=combined_universe_name,
+    )
+    combination_count = len(strategy_names) * len(universes)
+    portfolio_policy = core_portfolio_allocator.PortfolioPolicy(
+        position_mode=EXPERIMENT_POSITION_MODE
+    )
+    source_group_counts = {
+        group: len(
+            set(config.universe_groups[group])
+            - {core_portfolio_performance.MARKET_BENCHMARK_TICKER}
+        )
+        for group in groups
+    }
+    universe_construction = {
+        "mode": "COMBINED_UNION" if combine_groups else "SEPARATE",
+        "source_groups": source_group_counts,
+        "deduplicated_members_removed": (
+            sum(source_group_counts.values())
+            - sum(len(values) for values in universes.values())
+            if combine_groups
+            else 0
+        ),
+        "portfolio_universes": {
+            name: {
+                "count": len(values),
+                "members": list(values),
+            }
+            for name, values in universes.items()
+        },
+    }
+    checkpoint_scope = {
+        "groups": list(groups),
+        "universe_construction": universe_construction,
+        "position_mode": portfolio_policy.position_mode,
+        "strategies": list(strategy_names),
+        "seeds": list(seeds),
+        "training_config": asdict(training_config),
+    }
     replays_per_seed = 3 + training_config.iterations * (
         2 * training_config.population + 1
     )
     estimated_replays = combination_count * (
         len(seeds) * replays_per_seed + 4
+    )
+    print(
+        "Resolved portfolio universes: "
+        + ", ".join(
+            f"{name}={len(values)}"
+            for name, values in universes.items()
+        ),
+        flush=True,
     )
     print(
         "Estimated upper-bound full portfolio ledger replays: "
@@ -729,6 +814,11 @@ def run_experiment(
         return {
             "estimated_upper_bound_ledger_replays": estimated_replays,
             "strategy_universe_combinations": combination_count,
+            "portfolio_universes": {
+                name: len(values) for name, values in universes.items()
+            },
+            "universe_construction": universe_construction,
+            "position_mode": portfolio_policy.position_mode,
         }
     if not confirm_long_run:
         raise RuntimeError(
@@ -744,10 +834,7 @@ def run_experiment(
             "schema_version": SCHEMA_VERSION,
             "status": "STARTED",
             "estimated_upper_bound_ledger_replays": estimated_replays,
-            "groups": list(groups),
-            "strategies": list(strategy_names),
-            "seeds": list(seeds),
-            "training_config": asdict(training_config),
+            **checkpoint_scope,
             "completed_seeds": [],
         },
     )
@@ -858,8 +945,7 @@ def run_experiment(
                 for ticker, result in results.items()
                 if isinstance(result, Exception)
             )
-        for group in groups:
-            universe = universes[group]
+        for group, universe in universes.items():
             print(f"\n{strategy} | {group}", flush=True)
             is_trades, is_coverage = _scored_trades(
                 strategy, universe, is_results
@@ -884,6 +970,9 @@ def run_experiment(
                         "schema_version": SCHEMA_VERSION,
                         "strategy": strategy,
                         "universe": group,
+                        "universe_mode": universe_construction["mode"],
+                        "source_groups": "|".join(groups),
+                        "position_mode": portfolio_policy.position_mode,
                         "window": "IS",
                         "variant": "NO_MODEL",
                         "run_status": "DATA_COVERAGE_REVIEW",
@@ -904,6 +993,9 @@ def run_experiment(
                         "schema_version": SCHEMA_VERSION,
                         "strategy": strategy,
                         "universe": group,
+                        "universe_mode": universe_construction["mode"],
+                        "source_groups": "|".join(groups),
+                        "position_mode": portfolio_policy.position_mode,
                         "window": "IS",
                         "variant": "NO_MODEL",
                         "run_status": "NO_IS_TRADES",
@@ -971,6 +1063,7 @@ def run_experiment(
                 windows["IS"],
                 price_loader,
                 market_loader,
+                portfolio_policy,
                 cvar_confidence=training_config.cvar_confidence,
             )
             summary_rows.append(
@@ -983,6 +1076,8 @@ def run_experiment(
                     baseline_is_metrics,
                     cvar_confidence=training_config.cvar_confidence,
                     coverage=is_coverage,
+                    universe_mode=universe_construction["mode"],
+                    source_groups=groups,
                 )
             )
             daily_rows.extend(
@@ -1025,6 +1120,7 @@ def run_experiment(
                         windows["IS"]["evaluation_end"],
                         price_loader=price_loader,
                         market_benchmark_loader=market_loader,
+                        portfolio_policy=portfolio_policy,
                         config=training_config,
                         seed=seed,
                         progress_callback=progress,
@@ -1036,6 +1132,7 @@ def run_experiment(
                             "schema_version": SCHEMA_VERSION,
                             "status": "FAILED",
                             "phase": "TRAINING",
+                            **checkpoint_scope,
                             "strategy": strategy,
                             "universe": group,
                             "seed": seed,
@@ -1163,10 +1260,7 @@ def run_experiment(
                         "estimated_upper_bound_ledger_replays": (
                             estimated_replays
                         ),
-                        "groups": list(groups),
-                        "strategies": list(strategy_names),
-                        "seeds": list(seeds),
-                        "training_config": asdict(training_config),
+                        **checkpoint_scope,
                         "completed_seed_models": completed_seed_models,
                     },
                 )
@@ -1181,6 +1275,7 @@ def run_experiment(
                 windows["IS"],
                 price_loader,
                 market_loader,
+                portfolio_policy,
                 policy=ensemble,
                 decision_log=ensemble_is_log,
                 cvar_confidence=training_config.cvar_confidence,
@@ -1199,6 +1294,7 @@ def run_experiment(
                         "schema_version": SCHEMA_VERSION,
                         "status": "FAILED",
                         "phase": "ENSEMBLE_IS_FEASIBILITY",
+                        **checkpoint_scope,
                         "strategy": strategy,
                         "universe": group,
                         "failed_checks": ensemble_feasibility[
@@ -1224,6 +1320,8 @@ def run_experiment(
                     cvar_confidence=training_config.cvar_confidence,
                     coverage=is_coverage,
                     feasibility=ensemble_feasibility,
+                    universe_mode=universe_construction["mode"],
+                    source_groups=groups,
                 )
             )
             daily_rows.extend(
@@ -1260,6 +1358,7 @@ def run_experiment(
                 windows["OBSERVED_OOS"],
                 price_loader,
                 market_loader,
+                portfolio_policy,
                 cvar_confidence=training_config.cvar_confidence,
             )
             ensemble_oos_log = []
@@ -1269,6 +1368,7 @@ def run_experiment(
                 windows["OBSERVED_OOS"],
                 price_loader,
                 market_loader,
+                portfolio_policy,
                 policy=ensemble,
                 decision_log=ensemble_oos_log,
                 cvar_confidence=training_config.cvar_confidence,
@@ -1290,6 +1390,8 @@ def run_experiment(
                             training_config.cvar_confidence
                         ),
                         coverage=oos_coverage,
+                        universe_mode=universe_construction["mode"],
+                        source_groups=groups,
                     )
                 )
                 daily_rows.extend(
@@ -1324,6 +1426,12 @@ def run_experiment(
                 {
                     "strategy": strategy,
                     "universe": group,
+                    "position_mode": portfolio_policy.position_mode,
+                    "comparison": (
+                        "CURRENT_BOX_BASELINE_VS_RL_WEIGHTED_BOX"
+                        if strategy == "Box Range"
+                        else "CURRENT_STRATEGY_BASELINE_VS_RL_WEIGHTED"
+                    ),
                     "deployable": False,
                     "evaluation_role": {
                         "is": "TRAINING_FIT",
@@ -1420,6 +1528,20 @@ def run_experiment(
             portfolio_rl_overlay.FEATURE_SCHEMA_VERSION
         ),
         "groups": list(groups),
+        "universe_construction": universe_construction,
+        "position_mode": portfolio_policy.position_mode,
+        "portfolio_policy": {
+            "initial_nav": portfolio_policy.initial_nav,
+            "max_gross": portfolio_policy.max_gross,
+            "max_name_weight": portfolio_policy.max_name_weight,
+            "long_cap": portfolio_policy.side_caps[0],
+            "short_cap": portfolio_policy.side_caps[1],
+        },
+        "comparison_design": (
+            "same current strategy signals, scores, entries, and exits; "
+            "BASELINE has no sizing overlay; RL_ENSEMBLE changes only "
+            "entry weights and cohort gross scale"
+        ),
         "strategies": list(strategy_names),
         "seeds": list(seeds),
         "training_config": asdict(training_config),
@@ -1466,6 +1588,7 @@ def run_experiment(
             "status": run_status,
             "estimated_upper_bound_ledger_replays": estimated_replays,
             "completed_seed_count": len(seed_rows),
+            **checkpoint_scope,
             "model_path": str(paths["model"]),
             "completed_seed_models": completed_seed_models,
         },
@@ -1515,6 +1638,21 @@ def main():
         "--groups",
         nargs="+",
         default=list(DEFAULT_GROUPS),
+    )
+    parser.add_argument(
+        "--combine-groups",
+        action="store_true",
+        help=(
+            "deduplicate all --groups into one portfolio universe instead "
+            "of evaluating each group separately"
+        ),
+    )
+    parser.add_argument(
+        "--combined-universe-name",
+        help=(
+            "stable output label for --combine-groups "
+            "(default: COMBINED_GROUPS)"
+        ),
     )
     parser.add_argument(
         "--strategies",
@@ -1603,6 +1741,8 @@ def main():
     )
     run_experiment(
         groups=args.groups,
+        combine_groups=args.combine_groups,
+        combined_universe_name=args.combined_universe_name,
         strategies=args.strategies,
         seeds=args.seeds,
         training_config=training_config,

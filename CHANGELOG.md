@@ -12,6 +12,7 @@
 
 ### 베타판 변경
 
+- Portfolio Beta의 RL 연구기에 `CSQ_UNIV ∪ US Top 100`을 중복 제거한 단일 포트폴리오로 평가하는 결합 유니버스 모드를 추가했습니다. Box 원형과 동일 신호·진입·청산을 유지하면서 RL이 진입 비중과 신규 코호트 gross만 조정하는 A/B로 한정하고, 양방향 50% side cap의 `LONG_SHORT_NEUTRAL` 정책을 baseline·학습·검증에 동일하게 고정했습니다.
 - 이전의 거래별 `ENTER/SKIP` RL 파일럿을 운영에 복원하지 않고, Portfolio Beta에 독립적인 연속 비중 RL 연구 오버레이를 추가했습니다. 기존 신호·방향·청산은 고정하고 신규 진입 비중만 `0~1`로 축소하며, 실제 현금·수량 원장의 ACWI 대비 로그수익과 일별 CVaR 제약으로 학습합니다. 정책 입력은 신호 종가와 전일 포트폴리오 상태로 제한하고, 2026 구간은 이미 관찰된 연구 검증으로 명시합니다. Telegram·예약 스캔·배포판에는 연결하지 않았습니다.
 - Portfolio Beta의 `See Detail`은 텍스트만 표시하고, 별도 `Download Export`를 눌렀을 때만 해당 스캔의 ZIP/CSV를 백그라운드에서 임시 생성·전송한 뒤 정리하도록 세 전략의 동작을 통일했습니다. 저장된 내보내기 스냅샷은 압축·불변화하고 24시간/채팅당 8건·32MB의 보관 한도를 적용했습니다.
 - Portfolio Beta 개발자 PASS/FAIL 기준을 기존 2배 목표에서 양의 동일구간 iShares `ACWI` ETF 조정가격 ROI를 엄격히 초과하는 기준으로 변경했습니다. 전략·Universe EW·ACWI 성과의 종료일은 최신 공통 ACWI 거래일로 자동 정렬하며, 동률은 `FAIL`, ACWI 누락·0·음수는 `REVIEW`입니다. 승률 58%와 CAGR·MDD·Sharpe는 보조 진단으로 유지합니다.
