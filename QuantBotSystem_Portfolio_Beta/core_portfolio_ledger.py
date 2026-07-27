@@ -268,6 +268,18 @@ def _entry_policy_scale(value, label):
     return result
 
 
+def _entry_policy_multiplier(value, label):
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"{label} must be a finite non-negative number"
+        ) from exc
+    if not math.isfinite(result) or result < 0.0:
+        raise ValueError(f"{label} must be a finite non-negative number")
+    return result
+
+
 def _entry_policy_decision(cohort, entry_sizing_policy, portfolio_state):
     trade_ids = [trade["trade_id"] for trade in cohort]
     if len(set(trade_ids)) != len(trade_ids):
@@ -310,7 +322,7 @@ def _entry_policy_decision(cohort, entry_sizing_policy, portfolio_state):
         "gross_scale",
     )
     validated_multipliers = {
-        trade_id: _entry_policy_scale(
+        trade_id: _entry_policy_multiplier(
             multipliers[trade_id],
             f"trade multiplier for {trade_id}",
         )
@@ -383,7 +395,10 @@ def simulate_portfolio(
     ``entry_sizing_policy`` is called once per entry cohort with keyword-only
     ``signals`` (a signal-time allowlist) and ``portfolio_state`` (the previous
     ledger close). It must return one ``gross_scale`` and an exact
-    ``trade_multipliers`` mapping, all constrained to ``[0, 1]``.
+    ``trade_multipliers`` mapping. Gross scale remains constrained to
+    ``[0, 1]``; non-negative trade multipliers may exceed one so a policy can
+    redistribute cohort capital. Final name, side, and gross caps are still
+    enforced by the normal allocator.
     """
     policy = policy or PortfolioPolicy()
     scored_trades = _annotate_scores(

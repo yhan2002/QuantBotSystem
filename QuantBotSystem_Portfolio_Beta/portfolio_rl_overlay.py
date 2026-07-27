@@ -1,9 +1,9 @@
-"""Experimental portfolio-aware continuous sizing policy.
+"""Experimental portfolio-aware capital-redistribution policy.
 
 The policy never creates a signal, changes its direction, or changes an exit.
-It can only scale a close-known strategy candidate and the whole next-open
-entry cohort by values in ``[0, 1]``.  Training uses exact Portfolio Beta
-ledger replays and an ACWI-relative portfolio objective.
+It redistributes each side's close-known next-open cohort capital among the
+existing candidates while preserving the side's requested gross. Training
+uses exact Portfolio Beta ledger replays and an ACWI-relative objective.
 """
 
 from __future__ import annotations
@@ -20,8 +20,11 @@ import core_portfolio_performance
 
 EXPERIMENTAL = True
 FEATURE_SCHEMA_VERSION = "portfolio-rl-overlay-1.0"
+POLICY_SCHEMA_VERSION = "portfolio-rl-redistribution-2.0"
+ACTION_MODE = "SIDE_GROSS_PRESERVING_REDISTRIBUTION"
 DEFAULT_SEEDS = (11, 23, 37, 53, 71)
 MAX_NAME_WEIGHT = 0.05
+MAX_ABS_LOG_TILT = 2.0
 MINIMUM_CLOSE_HISTORY = 66
 
 STATIC_FEATURE_NAMES = (
@@ -47,14 +50,6 @@ STATIC_FEATURE_NAMES = (
     "strategy_box",
     "strategy_reversion",
 )
-
-_MARKET_RETURN_INDEX = STATIC_FEATURE_NAMES.index(
-    "lagged_acwi_return_20d_pct"
-)
-_MARKET_VOLATILITY_INDEX = STATIC_FEATURE_NAMES.index(
-    "lagged_acwi_volatility_20d_pct"
-)
-
 
 def _finite_float(value, name):
     try:
@@ -400,18 +395,87 @@ def prepare_point_in_time_trades(
     )
 
 
-def _sigmoid(value):
-    value = float(np.clip(value, -40.0, 40.0))
-    return 1.0 / (1.0 + math.exp(-value))
+def _capped_redistributed_weights(base_weights, raw_tilts):
+    """Tilt base weights while preserving their sum and the name cap."""
+
+    base = np.asarray(base_weights, dtype=np.float64)
+    tilts = np.asarray(raw_tilts, dtype=np.float64)
+    if base.ndim != 1 or base.shape != tilts.shape or base.size == 0:
+        raise ValueError("redistribution inputs must be non-empty 1D peers")
+    if not np.isfinite(base).all() or not np.isfinite(tilts).all():
+        raise ValueError("redistribution inputs must be finite")
+    if (base <= 0.0).any() or (base > MAX_NAME_WEIGHT + 1e-12).any():
+        raise ValueError("base weights must be within the positive name cap")
+
+    target_total = float(base.sum())
+    clipped = np.clip(tilts, -MAX_ABS_LOG_TILT, MAX_ABS_LOG_TILT)
+    preferences = base * np.exp(clipped - float(clipped.max()))
+    targets = np.zeros_like(base)
+    remaining = list(range(base.size))
+    remaining_total = target_total
+
+    while remaining:
+        remaining_preferences = preferences[remaining]
+        preference_sum = float(remaining_preferences.sum())
+        if preference_sum <= 0.0:
+            proposed = np.full(
+                len(remaining),
+                remaining_total / len(remaining),
+            )
+        else:
+            proposed = (
+                remaining_preferences
+                / preference_sum
+                * remaining_total
+            )
+        capped_positions = [
+            position
+            for position, weight in enumerate(proposed)
+            if weight > MAX_NAME_WEIGHT + 1e-12
+        ]
+        if not capped_positions:
+            for position, index in enumerate(remaining):
+                targets[index] = proposed[position]
+            remaining_total = 0.0
+            break
+        capped_indices = {
+            remaining[position] for position in capped_positions
+        }
+        for index in capped_indices:
+            targets[index] = MAX_NAME_WEIGHT
+        remaining_total -= MAX_NAME_WEIGHT * len(capped_indices)
+        remaining = [
+            index for index in remaining if index not in capped_indices
+        ]
+
+    residual = target_total - float(targets.sum())
+    if residual > 1e-12:
+        for index in np.argsort(-(MAX_NAME_WEIGHT - targets)):
+            room = MAX_NAME_WEIGHT - targets[index]
+            addition = min(float(room), residual)
+            targets[index] += addition
+            residual -= addition
+            if residual <= 1e-12:
+                break
+    elif residual < -1e-12:
+        for index in np.argsort(-targets):
+            reduction = min(float(targets[index]), -residual)
+            targets[index] -= reduction
+            residual += reduction
+            if residual >= -1e-12:
+                break
+
+    if abs(float(targets.sum()) - target_total) > 1e-9:
+        raise RuntimeError("redistribution failed to preserve cohort capital")
+    return targets
 
 
 @dataclass(frozen=True)
 class ContinuousSizingPolicy:
-    """Linear continuous policy with separate LONG, SHORT, and gross heads."""
+    """Linear LONG/SHORT tilt policy with side-gross preservation."""
 
     long_parameters: tuple[float, ...]
     short_parameters: tuple[float, ...]
-    gross_parameters: tuple[float, ...]
 
     @property
     def static_feature_count(self):
@@ -419,61 +483,40 @@ class ContinuousSizingPolicy:
 
     @property
     def size_input_count(self):
-        return 1 + self.static_feature_count + 4
-
-    @property
-    def gross_input_count(self):
-        return 6
+        return self.static_feature_count + 4
 
     def __post_init__(self):
         if len(self.long_parameters) != self.size_input_count:
             raise ValueError("LONG parameter vector has the wrong width")
         if len(self.short_parameters) != self.size_input_count:
             raise ValueError("SHORT parameter vector has the wrong width")
-        if len(self.gross_parameters) != self.gross_input_count:
-            raise ValueError("gross parameter vector has the wrong width")
         values = self.to_vector()
         if not np.isfinite(values).all():
             raise ValueError("policy parameters must be finite")
 
     @classmethod
-    def initial(cls, baseline_logit=6.0):
-        baseline = _finite_float(baseline_logit, "baseline_logit")
-        size_count = 1 + len(STATIC_FEATURE_NAMES) + 4
-        gross_count = 6
-        long_parameters = np.zeros(size_count)
-        short_parameters = np.zeros(size_count)
-        gross_parameters = np.zeros(gross_count)
-        long_parameters[0] = baseline
-        short_parameters[0] = baseline
-        gross_parameters[0] = baseline
+    def initial(cls):
+        size_count = len(STATIC_FEATURE_NAMES) + 4
         return cls(
-            tuple(long_parameters),
-            tuple(short_parameters),
-            tuple(gross_parameters),
+            tuple(np.zeros(size_count)),
+            tuple(np.zeros(size_count)),
         )
 
     @classmethod
     def from_vector(cls, values):
         vector = np.asarray(values, dtype=np.float64)
-        size_count = 1 + len(STATIC_FEATURE_NAMES) + 4
-        gross_count = 6
-        expected = size_count * 2 + gross_count
+        size_count = len(STATIC_FEATURE_NAMES) + 4
+        expected = size_count * 2
         if vector.shape != (expected,) or not np.isfinite(vector).all():
             raise ValueError("flat policy vector has the wrong shape or values")
         return cls(
             tuple(vector[:size_count]),
-            tuple(vector[size_count : size_count * 2]),
-            tuple(vector[size_count * 2 :]),
+            tuple(vector[size_count:]),
         )
 
     def to_vector(self):
         return np.asarray(
-            (
-                *self.long_parameters,
-                *self.short_parameters,
-                *self.gross_parameters,
-            ),
+            (*self.long_parameters, *self.short_parameters),
             dtype=np.float64,
         )
 
@@ -498,8 +541,7 @@ class ContinuousSizingPolicy:
             1.0, max(0.0, float(state.get("active_positions", 0))) / 20.0
         )
 
-        static_vectors = []
-        eligible_signals = []
+        eligible_by_side = {"LONG": [], "SHORT": []}
         multipliers = {
             str(signal["trade_id"]): 1.0 for signal in signals
         }
@@ -513,47 +555,6 @@ class ContinuousSizingPolicy:
                 raise ValueError("sanitized signal has an invalid policy feature")
             if not np.isfinite(features).all():
                 raise ValueError("sanitized signal policy features must be finite")
-            static_vectors.append(features)
-            eligible_signals.append(signal)
-        if not eligible_signals:
-            return {
-                "gross_scale": 1.0,
-                "trade_multipliers": multipliers,
-            }
-        market_return = float(
-            np.mean(
-                [features[_MARKET_RETURN_INDEX] for features in static_vectors]
-            )
-        )
-        market_volatility = float(
-            np.mean(
-                [
-                    features[_MARKET_VOLATILITY_INDEX]
-                    for features in static_vectors
-                ]
-            )
-        )
-        gross_input = np.asarray(
-            (
-                1.0,
-                market_return,
-                market_volatility,
-                current_gross,
-                abs(current_net),
-                active_scaled,
-            )
-        )
-        gross_scale = (
-            _sigmoid(
-                np.dot(np.asarray(self.gross_parameters), gross_input)
-            )
-            if len(eligible_signals) == len(signals)
-            else 1.0
-        )
-
-        for signal, static_features in zip(
-            eligible_signals, static_vectors
-        ):
             side = str(signal.get("side") or "").upper()
             if side == "LONG":
                 side_fraction = long_fraction
@@ -563,21 +564,44 @@ class ContinuousSizingPolicy:
                 parameters = np.asarray(self.short_parameters)
             else:
                 raise ValueError("sanitized signal side must be LONG or SHORT")
+            base_weight = _finite_float(
+                signal.get("requested_weight", 0.0),
+                "requested_weight",
+            )
+            if base_weight <= 0.0:
+                continue
             size_input = np.asarray(
                 (
-                    1.0,
-                    *static_features,
+                    *features,
                     current_gross,
                     current_net,
                     side_fraction,
                     active_scaled,
                 )
             )
-            multipliers[str(signal["trade_id"])] = _sigmoid(
-                np.dot(parameters, size_input)
+            eligible_by_side[side].append(
+                (
+                    signal,
+                    base_weight,
+                    float(np.dot(parameters, size_input)),
+                )
             )
+
+        for items in eligible_by_side.values():
+            if not items:
+                continue
+            targets = _capped_redistributed_weights(
+                [item[1] for item in items],
+                [item[2] for item in items],
+            )
+            for (signal, base_weight, _), target_weight in zip(
+                items, targets
+            ):
+                multipliers[str(signal["trade_id"])] = (
+                    float(target_weight) / base_weight
+                )
         return {
-            "gross_scale": gross_scale,
+            "gross_scale": 1.0,
             "trade_multipliers": multipliers,
         }
 
@@ -612,10 +636,11 @@ class ContinuousSizingPolicy:
 
     def to_dict(self):
         return {
-            "schema_version": FEATURE_SCHEMA_VERSION,
+            "schema_version": POLICY_SCHEMA_VERSION,
+            "action_mode": ACTION_MODE,
+            "max_abs_log_tilt": MAX_ABS_LOG_TILT,
             "long_parameters": list(self.long_parameters),
             "short_parameters": list(self.short_parameters),
-            "gross_parameters": list(self.gross_parameters),
         }
 
 
@@ -797,6 +822,46 @@ def policy_metrics(performance, confidence=0.95):
         for trade in feature_eligible_candidates
     ]
 
+    def redistribution_statistics(trades):
+        base_weights = np.asarray(
+            [
+                float(trade.get("base_requested_weight", 0.0))
+                for trade in trades
+            ],
+            dtype=np.float64,
+        )
+        requested_weights = np.asarray(
+            [
+                float(trade.get("requested_weight", 0.0))
+                for trade in trades
+            ],
+            dtype=np.float64,
+        )
+        positive = base_weights > 0.0
+        base_weights = base_weights[positive]
+        requested_weights = requested_weights[positive]
+        base_total = float(base_weights.sum())
+        if base_total <= 0.0:
+            return {
+                "capital_preservation_ratio": None,
+                "redistribution_turnover_pct": None,
+            }
+        return {
+            "capital_preservation_ratio": (
+                float(requested_weights.sum()) / base_total
+            ),
+            "redistribution_turnover_pct": (
+                0.5
+                * float(np.abs(requested_weights - base_weights).sum())
+                / base_total
+                * 100.0
+            ),
+        }
+
+    eligible_redistribution = redistribution_statistics(
+        feature_eligible_candidates
+    )
+
     def eligible_side(side):
         candidates = [
             trade
@@ -819,6 +884,7 @@ def policy_metrics(performance, confidence=0.95):
             "average_effective_scale": (
                 float(np.mean(scales)) if scales else None
             ),
+            **redistribution_statistics(candidates),
         }
 
     eligible_long = eligible_side("LONG")
@@ -882,15 +948,33 @@ def policy_metrics(performance, confidence=0.95):
             if eligible_candidate_effective_scales
             else None
         ),
+        "eligible_capital_preservation_ratio": (
+            eligible_redistribution["capital_preservation_ratio"]
+        ),
+        "eligible_redistribution_turnover_pct": (
+            eligible_redistribution["redistribution_turnover_pct"]
+        ),
         "eligible_long_candidates": eligible_long["candidates"],
         "eligible_long_filled_trades": eligible_long["filled"],
         "eligible_long_average_effective_scale": eligible_long[
             "average_effective_scale"
         ],
+        "eligible_long_capital_preservation_ratio": eligible_long[
+            "capital_preservation_ratio"
+        ],
+        "eligible_long_redistribution_turnover_pct": eligible_long[
+            "redistribution_turnover_pct"
+        ],
         "eligible_short_candidates": eligible_short["candidates"],
         "eligible_short_filled_trades": eligible_short["filled"],
         "eligible_short_average_effective_scale": eligible_short[
             "average_effective_scale"
+        ],
+        "eligible_short_capital_preservation_ratio": eligible_short[
+            "capital_preservation_ratio"
+        ],
+        "eligible_short_redistribution_turnover_pct": eligible_short[
+            "redistribution_turnover_pct"
         ],
         "average_net_exposure_pct": float(
             daily.get(
@@ -1070,6 +1154,13 @@ def policy_feasibility(metrics, baseline_metrics, config):
             metrics["eligible_average_effective_scale"] is not None
             and float(metrics["eligible_average_effective_scale"])
             >= config.minimum_eligible_effective_scale - 1e-12
+        ),
+        "capital_preservation": (
+            metrics["eligible_capital_preservation_ratio"] is not None
+            and abs(
+                float(metrics["eligible_capital_preservation_ratio"]) - 1.0
+            )
+            <= 1e-8
         ),
     }
     side_limits = {}
@@ -1367,6 +1458,12 @@ def train_policy(
             ],
             "eligible_average_effective_scale": current_metrics[
                 "eligible_average_effective_scale"
+            ],
+            "capital_preservation_ratio": current_metrics[
+                "eligible_capital_preservation_ratio"
+            ],
+            "redistribution_turnover_pct": current_metrics[
+                "eligible_redistribution_turnover_pct"
             ],
             "minimum_eligible_effective_scale": (
                 config.minimum_eligible_effective_scale

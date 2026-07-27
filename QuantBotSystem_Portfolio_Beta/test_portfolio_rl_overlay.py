@@ -50,32 +50,40 @@ def _trade(frame, *, side="LONG"):
     }
 
 
-def _policy(long_bias, short_bias, gross_bias):
-    size_count = 1 + len(subject.STATIC_FEATURE_NAMES) + 4
-    gross_count = 6
+def _policy(long_tilt=0.0, short_tilt=0.0, feature_index=0):
+    size_count = len(subject.STATIC_FEATURE_NAMES) + 4
+    long_parameters = np.zeros(size_count)
+    short_parameters = np.zeros(size_count)
+    long_parameters[feature_index] = float(long_tilt)
+    short_parameters[feature_index] = float(short_tilt)
     return subject.ContinuousSizingPolicy(
-        (float(long_bias),) + (0.0,) * (size_count - 1),
-        (float(short_bias),) + (0.0,) * (size_count - 1),
-        (float(gross_bias),) + (0.0,) * (gross_count - 1),
+        tuple(long_parameters),
+        tuple(short_parameters),
     )
 
 
 def _signals():
-    features = (0.0,) * len(subject.STATIC_FEATURE_NAMES)
-    return [
-        {
-            "trade_id": "LONG-1",
-            "ticker": "AAA",
-            "side": "LONG",
-            "policy_features": features,
-        },
-        {
-            "trade_id": "SHORT-1",
-            "ticker": "BBB",
-            "side": "SHORT",
-            "policy_features": features,
-        },
-    ]
+    result = []
+    specifications = (
+        ("LONG-1", "AAA", "LONG", 0.03, 1.0),
+        ("LONG-2", "AAB", "LONG", 0.02, -1.0),
+        ("SHORT-1", "BBB", "SHORT", 0.025, 1.0),
+        ("SHORT-2", "BBC", "SHORT", 0.025, -1.0),
+    )
+    for trade_id, ticker, side, weight, feature in specifications:
+        features = np.zeros(len(subject.STATIC_FEATURE_NAMES))
+        features[0] = feature
+        result.append(
+            {
+                "trade_id": trade_id,
+                "ticker": ticker,
+                "side": side,
+                "requested_weight": weight,
+                "policy_feature_eligible": True,
+                "policy_features": tuple(features),
+            }
+        )
+    return result
 
 
 def _ledger_trade(
@@ -86,6 +94,7 @@ def _ledger_trade(
     allocation_status="FILLED",
     gross_scale=1.0,
     multiplier=1.0,
+    base_weight=0.02,
 ):
     trade = {
         "trade_id": trade_id,
@@ -96,6 +105,8 @@ def _ledger_trade(
         "policy_feature_eligible": eligible,
         "policy_gross_scale": gross_scale,
         "policy_trade_multiplier": multiplier,
+        "base_requested_weight": base_weight,
+        "requested_weight": base_weight * gross_scale * multiplier,
     }
     if eligible:
         trade["policy_features"] = (0.0,) * len(
@@ -318,19 +329,52 @@ class FeatureScalerTests(unittest.TestCase):
 
 
 class SizingPolicyTests(unittest.TestCase):
-    def test_continuous_policy_uses_long_and_short_heads_with_bounded_outputs(self):
-        policy = _policy(long_bias=20.0, short_bias=-20.0, gross_bias=0.5)
+    def test_initial_policy_exactly_reproduces_baseline_weights(self):
+        signals = _signals()
+        decision = subject.ContinuousSizingPolicy.initial().decide(
+            signals,
+            {},
+        )
 
-        decision = policy.decide(_signals(), {})
+        self.assertEqual(decision["gross_scale"], 1.0)
+        self.assertEqual(
+            decision["trade_multipliers"],
+            {signal["trade_id"]: 1.0 for signal in signals},
+        )
 
-        self.assertGreater(decision["trade_multipliers"]["LONG-1"], 0.99)
-        self.assertLess(decision["trade_multipliers"]["SHORT-1"], 0.01)
-        for value in (
-            decision["gross_scale"],
-            *decision["trade_multipliers"].values(),
-        ):
-            self.assertGreaterEqual(value, 0.0)
-            self.assertLessEqual(value, 1.0)
+    def test_policy_redistributes_capital_and_preserves_each_side_gross(self):
+        signals = _signals()
+        policy = _policy(long_tilt=1.0, short_tilt=-1.0)
+
+        decision = policy.decide(signals, {})
+
+        self.assertEqual(decision["gross_scale"], 1.0)
+        self.assertGreater(decision["trade_multipliers"]["LONG-1"], 1.0)
+        self.assertLess(decision["trade_multipliers"]["LONG-2"], 1.0)
+        self.assertLess(decision["trade_multipliers"]["SHORT-1"], 1.0)
+        self.assertGreater(decision["trade_multipliers"]["SHORT-2"], 1.0)
+        for side in ("LONG", "SHORT"):
+            selected = [
+                signal for signal in signals if signal["side"] == side
+            ]
+            base_total = sum(
+                signal["requested_weight"] for signal in selected
+            )
+            target_total = sum(
+                signal["requested_weight"]
+                * decision["trade_multipliers"][signal["trade_id"]]
+                for signal in selected
+            )
+            self.assertAlmostEqual(target_total, base_total)
+            for signal in selected:
+                target = (
+                    signal["requested_weight"]
+                    * decision["trade_multipliers"][signal["trade_id"]]
+                )
+                self.assertLessEqual(
+                    target,
+                    subject.MAX_NAME_WEIGHT + 1e-12,
+                )
 
     def test_ensemble_returns_the_component_arithmetic_mean(self):
         signals = _signals()
@@ -342,8 +386,8 @@ class SizingPolicyTests(unittest.TestCase):
             "active_positions": 4,
         }
         policies = (
-            _policy(long_bias=4.0, short_bias=-3.0, gross_bias=2.0),
-            _policy(long_bias=-2.0, short_bias=3.0, gross_bias=-1.0),
+            _policy(long_tilt=1.0, short_tilt=-0.5),
+            _policy(long_tilt=-0.5, short_tilt=1.0),
         )
         components = [policy.decide(signals, state) for policy in policies]
 
@@ -353,7 +397,12 @@ class SizingPolicyTests(unittest.TestCase):
             actual["gross_scale"],
             np.mean([item["gross_scale"] for item in components]),
         )
-        for trade_id in ("LONG-1", "SHORT-1"):
+        for trade_id in (
+            "LONG-1",
+            "LONG-2",
+            "SHORT-1",
+            "SHORT-2",
+        ):
             self.assertAlmostEqual(
                 actual["trade_multipliers"][trade_id],
                 np.mean(
@@ -364,46 +413,97 @@ class SizingPolicyTests(unittest.TestCase):
                 ),
             )
             self.assertGreaterEqual(actual["trade_multipliers"][trade_id], 0.0)
-            self.assertLessEqual(actual["trade_multipliers"][trade_id], 1.0)
+        for side in ("LONG", "SHORT"):
+            selected = [
+                signal for signal in signals if signal["side"] == side
+            ]
+            self.assertAlmostEqual(
+                sum(
+                    signal["requested_weight"]
+                    * actual["trade_multipliers"][signal["trade_id"]]
+                    for signal in selected
+                ),
+                sum(signal["requested_weight"] for signal in selected),
+            )
 
-    def test_mixed_passthrough_cohort_preserves_gross_and_only_scales_eligible(self):
-        eligible = {
-            "trade_id": "ELIGIBLE",
-            "ticker": "AAA",
-            "side": "LONG",
-            "policy_feature_eligible": True,
-            "policy_features": (0.0,) * len(subject.STATIC_FEATURE_NAMES),
-        }
+    def test_mixed_passthrough_cohort_preserves_eligible_and_total_gross(self):
+        eligible = _signals()[:2]
         passthrough = {
             "trade_id": "PASSTHROUGH",
-            "ticker": "BBB",
-            "side": "SHORT",
+            "ticker": "AAC",
+            "side": "LONG",
+            "requested_weight": 0.01,
             "policy_feature_eligible": False,
         }
-        policy = _policy(
-            long_bias=-4.0,
-            short_bias=20.0,
-            gross_bias=-20.0,
-        )
+        policy = _policy(long_tilt=1.0)
 
-        decision = policy.decide([eligible, passthrough], {})
+        decision = policy.decide([*eligible, passthrough], {})
 
         self.assertEqual(decision["gross_scale"], 1.0)
         self.assertEqual(
             decision["trade_multipliers"]["PASSTHROUGH"],
             1.0,
         )
-        self.assertAlmostEqual(
-            decision["trade_multipliers"]["ELIGIBLE"],
-            subject._sigmoid(-4.0),
-        )
-        self.assertNotEqual(
-            decision["trade_multipliers"]["ELIGIBLE"],
+        self.assertGreater(
+            decision["trade_multipliers"]["LONG-1"],
             1.0,
         )
+        self.assertLess(
+            decision["trade_multipliers"]["LONG-2"],
+            1.0,
+        )
+        base_total = sum(
+            signal["requested_weight"] for signal in [*eligible, passthrough]
+        )
+        target_total = sum(
+            signal["requested_weight"]
+            * decision["trade_multipliers"][signal["trade_id"]]
+            for signal in [*eligible, passthrough]
+        )
+        self.assertAlmostEqual(target_total, base_total)
 
 
 class FeasibilityTests(unittest.TestCase):
+    def test_metrics_report_capital_preservation_and_redistribution_turnover(
+        self,
+    ):
+        trades = [
+            _ledger_trade(
+                "LONG-UP",
+                "LONG",
+                multiplier=1.5,
+                base_weight=0.02,
+            ),
+            _ledger_trade(
+                "LONG-DOWN",
+                "LONG",
+                multiplier=0.5,
+                base_weight=0.02,
+            ),
+            _ledger_trade("SHORT-UNCHANGED", "SHORT"),
+        ]
+
+        metrics = subject.policy_metrics(
+            _performance([0.01, -0.01], ledger_trades=trades)
+        )
+
+        self.assertAlmostEqual(
+            metrics["eligible_capital_preservation_ratio"],
+            1.0,
+        )
+        self.assertAlmostEqual(
+            metrics["eligible_long_capital_preservation_ratio"],
+            1.0,
+        )
+        self.assertAlmostEqual(
+            metrics["eligible_long_redistribution_turnover_pct"],
+            25.0,
+        )
+        self.assertAlmostEqual(
+            metrics["eligible_short_redistribution_turnover_pct"],
+            0.0,
+        )
+
     def test_zero_multiplier_skipped_candidate_remains_in_collapse_denominator(
         self,
     ):
