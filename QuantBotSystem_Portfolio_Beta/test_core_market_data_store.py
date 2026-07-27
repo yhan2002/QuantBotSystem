@@ -1,6 +1,8 @@
 import unittest
+import io
 import os
 import tempfile
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 import numpy as np
@@ -351,6 +353,234 @@ class MomentumVolumeAlphaTest(unittest.TestCase):
         self.assertEqual(summary["ticker"], "MIWD00000PUS")
         self.assertEqual(summary["updated"], 2)
 
+    def test_refresh_market_benchmark_uses_default_local_csv_and_reports_progress(self):
+        progress = []
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            import_dir = os.path.join(temp_dir, "imports")
+            os.makedirs(import_dir)
+            csv_path = os.path.join(import_dir, "msci_acwi.csv")
+            pd.DataFrame(
+                {
+                    "Date": ["2026-07-22", "2026-07-23"],
+                    "Close": [900.25, 904.75],
+                }
+            ).to_csv(csv_path, index=False)
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store, "DATA_DIR", temp_dir
+            ), patch.object(
+                core_market_data_store.runtime_settings,
+                "get_setting",
+                return_value=None,
+            ), patch.object(
+                core_market_data_store.yf, "download"
+            ) as yahoo_download, patch.object(
+                core_market_data_store, "build_opener"
+            ) as network_opener:
+                summary = core_market_data_store.refresh_market_benchmark(
+                    progress_callback=lambda completed, total, stage: progress.append(
+                        (completed, total, stage)
+                    )
+                )
+                cached = core_market_data_store.get_price_data("MIWD00000PUS")
+
+        yahoo_download.assert_not_called()
+        network_opener.assert_not_called()
+        self.assertEqual(summary["ticker"], "MIWD00000PUS")
+        self.assertEqual(summary["source_kind"], "local_csv")
+        self.assertEqual(summary["source_display"], os.path.abspath(csv_path))
+        self.assertEqual(summary["cached_rows"], 2)
+        self.assertEqual(cached["Close"].tolist(), [900.25, 904.75])
+        self.assertEqual(
+            progress,
+            [
+                (1, 4, "벤치마크 소스 확인"),
+                (2, 4, "벤치마크 CSV 읽기"),
+                (3, 4, "벤치마크 검증·저장"),
+                (4, 4, "벤치마크 DB 확인"),
+            ],
+        )
+        formatted = core_market_data_store.format_market_benchmark_refresh_summary(
+            summary
+        )
+        self.assertIn("MSCI ACWI (MIWD00000PUS)", formatted)
+        self.assertIn("Rows received/upserted: 2", formatted)
+
+    def test_refresh_market_benchmark_reads_authorized_https_without_leaking_details(self):
+        payload = b"Date,Close\n2026-07-22,900.25\n2026-07-23,904.75\n"
+        captured = {}
+
+        def opener(request, timeout):
+            captured["request"] = request
+            captured["timeout"] = timeout
+            return _FakeHttpsResponse(
+                payload,
+                "https://licensed.example.com/private/final.csv?token=redirect-secret",
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path):
+                summary = core_market_data_store.refresh_market_benchmark(
+                    source_url=(
+                        "https://licensed.example.com/private/acwi.csv"
+                        "?token=request-secret"
+                    ),
+                    source_headers={"Authorization": "Bearer header-secret"},
+                    timeout_seconds=7,
+                    opener=opener,
+                )
+
+        self.assertEqual(summary["source_kind"], "authorized_https_csv")
+        self.assertEqual(summary["source_display"], "https://licensed.example.com")
+        self.assertNotIn("private", str(summary))
+        self.assertNotIn("secret", str(summary))
+        self.assertEqual(captured["timeout"], 7.0)
+        self.assertEqual(
+            captured["request"].get_header("Authorization"),
+            "Bearer header-secret",
+        )
+
+    def test_refresh_market_benchmark_reads_url_and_headers_from_private_settings(self):
+        payload = b"Date,Close\n2026-07-22,900.25\n"
+        settings = {
+            "MSCI_ACWI_SOURCE_PATH": None,
+            "MSCI_ACWI_SOURCE_URL": "https://licensed.example.com/acwi.csv",
+            "MSCI_ACWI_SOURCE_HEADERS": {
+                "Authorization": "Bearer configured-secret"
+            },
+        }
+        captured = {}
+
+        def opener(request, timeout):
+            captured["authorization"] = request.get_header("Authorization")
+            return _FakeHttpsResponse(
+                payload,
+                "https://licensed.example.com/acwi.csv",
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store.runtime_settings,
+                "get_setting",
+                side_effect=lambda name, default=None: settings.get(name, default),
+            ):
+                summary = core_market_data_store.refresh_market_benchmark(
+                    opener=opener
+                )
+
+        self.assertEqual(summary["source_kind"], "authorized_https_csv")
+        self.assertEqual(captured["authorization"], "Bearer configured-secret")
+
+    def test_refresh_market_benchmark_missing_default_source_does_not_touch_db_or_network(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = os.path.join(temp_dir, "market_data.sqlite")
+            with patch.object(core_market_data_store, "DB_PATH", db_path), patch.object(
+                core_market_data_store, "DATA_DIR", temp_dir
+            ), patch.object(
+                core_market_data_store.runtime_settings,
+                "get_setting",
+                return_value=None,
+            ), patch.object(
+                core_market_data_store, "build_opener"
+            ) as network_opener:
+                with self.assertRaisesRegex(FileNotFoundError, "Date/Close CSV"):
+                    core_market_data_store.refresh_market_benchmark()
+
+            network_opener.assert_not_called()
+            self.assertFalse(os.path.exists(db_path))
+
+    def test_refresh_market_benchmark_rejects_non_https_without_opening_it(self):
+        opener_calls = []
+
+        with self.assertRaisesRegex(ValueError, "must use HTTPS"):
+            core_market_data_store.refresh_market_benchmark(
+                source_url="http://example.com/acwi.csv",
+                opener=lambda *args, **kwargs: opener_calls.append((args, kwargs)),
+            )
+
+        self.assertEqual(opener_calls, [])
+
+    def test_refresh_market_benchmark_rejects_oversized_https_response(self):
+        response = _FakeHttpsResponse(
+            b"",
+            "https://licensed.example.com/acwi.csv",
+            content_length=core_market_data_store.MARKET_BENCHMARK_MAX_CSV_BYTES + 1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "exceeds the 5 MB limit"):
+            core_market_data_store.refresh_market_benchmark(
+                source_url="https://licensed.example.com/acwi.csv",
+                opener=lambda request, timeout: response,
+            )
+
+        self.assertFalse(response.read_called)
+
+    def test_refresh_market_benchmark_rejects_cross_origin_redirect(self):
+        response = _FakeHttpsResponse(
+            b"Date,Close\n2026-07-22,900.25\n",
+            "https://different.example.com/acwi.csv",
+        )
+
+        with self.assertRaisesRegex(ValueError, "different host"):
+            core_market_data_store.refresh_market_benchmark(
+                source_url="https://licensed.example.com/acwi.csv",
+                opener=lambda request, timeout: response,
+            )
+
+    def test_production_redirect_handler_blocks_cross_origin_before_request_creation(self):
+        handler = core_market_data_store._SameOriginHttpsRedirectHandler(
+            ("licensed.example.com", 443)
+        )
+        request = core_market_data_store.Request(
+            "https://licensed.example.com/acwi.csv",
+            headers={"Authorization": "Bearer header-secret"},
+        )
+
+        with self.assertRaisesRegex(ValueError, "different host"):
+            handler.redirect_request(
+                request,
+                None,
+                302,
+                "Found",
+                {},
+                "https://different.example.com/acwi.csv",
+            )
+
+    def test_refresh_market_benchmark_redacts_url_on_authorization_error(self):
+        secret_url = "https://licensed.example.com/acwi.csv?token=secret-value"
+
+        def opener(request, timeout):
+            raise HTTPError(secret_url, 401, "Unauthorized", {}, None)
+
+        with self.assertRaises(RuntimeError) as captured:
+            core_market_data_store.refresh_market_benchmark(
+                source_url=secret_url,
+                source_headers={"Authorization": "Bearer header-secret"},
+                opener=opener,
+            )
+
+        message = str(captured.exception)
+        self.assertIn("HTTP 401", message)
+        self.assertNotIn("secret-value", message)
+        self.assertNotIn("header-secret", message)
+
+    def test_refresh_market_benchmark_rejects_invalid_header_without_echoing_secret(self):
+        with self.assertRaises(ValueError) as captured:
+            core_market_data_store.refresh_market_benchmark(
+                source_url="https://licensed.example.com/acwi.csv",
+                source_headers={
+                    "Authorization": "Bearer header-secret\r\nX-Injected: yes"
+                },
+                opener=lambda request, timeout: self.fail(
+                    "invalid headers must be rejected before opening a URL"
+                ),
+            )
+
+        self.assertIn("invalid header", str(captured.exception))
+        self.assertNotIn("header-secret", str(captured.exception))
+
 
 def _ohlcv_frame(dates):
     index = pd.to_datetime(dates)
@@ -366,6 +596,29 @@ def _ohlcv_frame(dates):
         },
         index=index,
     )
+
+
+class _FakeHttpsResponse:
+    def __init__(self, payload, final_url, content_length=None):
+        self._payload = payload
+        self._final_url = final_url
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        self.read_called = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        return False
+
+    def geturl(self):
+        return self._final_url
+
+    def read(self, size=-1):
+        self.read_called = True
+        return io.BytesIO(self._payload).read(size)
 
 
 if __name__ == "__main__":

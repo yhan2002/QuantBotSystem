@@ -1,10 +1,15 @@
 # File name: market_data_store.py
 # Caches OHLCV price history in SQLite and serves strategy-ready data frames.
+import io
 import os
 import sqlite3
 import time
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from math import isfinite
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 import pandas as pd
 import yfinance as yf
@@ -19,7 +24,10 @@ INCREMENTAL_OVERLAP_CALENDAR_DAYS = 10
 DOWNLOAD_SLEEP_SECONDS = 0.7
 METADATA_SLEEP_SECONDS = 0.3
 FIXED_IS_OOS_HISTORY_PERIOD = "4y"
-RESERVED_BENCHMARK_TICKERS = frozenset({"MIWD00000PUS"})
+MARKET_BENCHMARK_TICKER = "MIWD00000PUS"
+MARKET_BENCHMARK_NAME = "MSCI ACWI"
+MARKET_BENCHMARK_MAX_CSV_BYTES = 5 * 1024 * 1024
+RESERVED_BENCHMARK_TICKERS = frozenset({MARKET_BENCHMARK_TICKER})
 
 
 def get_connection():
@@ -450,6 +458,272 @@ def upsert_close_series(ticker, frame):
         "latest_date": normalized_rows[-1][0],
         "db_path": DB_PATH,
     }
+
+
+def _report_benchmark_refresh_progress(progress_callback, completed, stage_label):
+    if progress_callback is not None:
+        progress_callback(completed, 4, stage_label)
+
+
+def _normalize_benchmark_source_path(source_path):
+    raw_path = os.path.expandvars(os.path.expanduser(os.fspath(source_path)))
+    return os.path.abspath(raw_path)
+
+
+def _safe_https_source_display(source_url):
+    parsed = urlsplit(str(source_url).strip())
+    if parsed.scheme.lower() != "https":
+        raise ValueError("MSCI ACWI benchmark source URL must use HTTPS")
+    if not parsed.hostname:
+        raise ValueError("MSCI ACWI benchmark source URL must include a host")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("MSCI ACWI benchmark source URL must not contain credentials")
+
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("MSCI ACWI benchmark source URL has an invalid port") from exc
+    port_suffix = f":{port}" if port is not None else ""
+    return f"https://{host}{port_suffix}"
+
+
+def _https_source_origin(source_url):
+    parsed = urlsplit(str(source_url).strip())
+    _safe_https_source_display(source_url)
+    default_port = 443
+    return parsed.hostname.lower(), parsed.port or default_port
+
+
+class _SameOriginHttpsRedirectHandler(HTTPRedirectHandler):
+    def __init__(self, source_origin):
+        super().__init__()
+        self._source_origin = source_origin
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if _https_source_origin(newurl) != self._source_origin:
+            raise ValueError(
+                "MSCI ACWI benchmark source redirected to a different host"
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _read_limited_https_csv(source_url, source_headers, timeout_seconds, opener):
+    safe_display = _safe_https_source_display(source_url)
+    source_origin = _https_source_origin(source_url)
+    if not isinstance(source_headers, Mapping):
+        raise TypeError("MSCI_ACWI_SOURCE_HEADERS must be a mapping")
+    try:
+        timeout = float(timeout_seconds)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("timeout_seconds must be a positive number") from exc
+    if not isfinite(timeout) or timeout <= 0:
+        raise ValueError("timeout_seconds must be a positive number")
+
+    headers = {}
+    for raw_name, raw_value in source_headers.items():
+        name = str(raw_name)
+        value = str(raw_value)
+        if (
+            not name
+            or "\r" in name
+            or "\n" in name
+            or "\r" in value
+            or "\n" in value
+        ):
+            raise ValueError(
+                "MSCI_ACWI_SOURCE_HEADERS contains an invalid header"
+            )
+        headers[name] = value
+    headers.setdefault("User-Agent", "QuantBot-MSCI-ACWI-Refresh/1.0")
+    request = Request(str(source_url).strip(), headers=headers, method="GET")
+    open_url = opener
+    if open_url is None:
+        open_url = build_opener(
+            _SameOriginHttpsRedirectHandler(source_origin)
+        ).open
+    try:
+        with open_url(request, timeout=timeout) as response:
+            final_url = response.geturl() if hasattr(response, "geturl") else source_url
+            if _https_source_origin(final_url) != source_origin:
+                raise ValueError(
+                    "MSCI ACWI benchmark source redirected to a different host"
+                )
+
+            content_length = None
+            response_headers = getattr(response, "headers", None)
+            if response_headers is not None:
+                content_length = response_headers.get("Content-Length")
+            if content_length not in (None, ""):
+                try:
+                    declared_bytes = int(content_length)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        "benchmark response has an invalid Content-Length"
+                    ) from exc
+                if declared_bytes > MARKET_BENCHMARK_MAX_CSV_BYTES:
+                    raise ValueError("benchmark CSV response exceeds the 5 MB limit")
+
+            payload = response.read(MARKET_BENCHMARK_MAX_CSV_BYTES + 1)
+    except HTTPError as exc:
+        status_code = exc.code
+        exc.close()
+        if status_code in {401, 403}:
+            raise RuntimeError(
+                f"MSCI ACWI refresh unavailable (HTTP {status_code}). "
+                "Verify MSCI entitlement and local credentials; "
+                "the existing cache was not changed."
+            ) from None
+        raise RuntimeError(
+            f"MSCI ACWI HTTPS source failed (HTTP {status_code}); "
+            "the existing cache was not changed."
+        ) from None
+    except (URLError, TimeoutError, OSError):
+        raise RuntimeError(
+            f"MSCI ACWI HTTPS source could not be reached at {safe_display}; "
+            "the existing cache was not changed."
+        ) from None
+    if len(payload) > MARKET_BENCHMARK_MAX_CSV_BYTES:
+        raise ValueError("benchmark CSV response exceeds the 5 MB limit")
+    if not payload:
+        raise ValueError("benchmark CSV response is empty")
+    return payload, safe_display
+
+
+def _read_limited_local_csv(source_path):
+    normalized_path = _normalize_benchmark_source_path(source_path)
+    if not os.path.isfile(normalized_path):
+        raise FileNotFoundError(
+            "MSCI ACWI benchmark CSV was not found. "
+            f"Place a Date/Close CSV at {normalized_path} or configure "
+            "MSCI_ACWI_SOURCE_PATH / MSCI_ACWI_SOURCE_URL in config.local.py."
+        )
+    if os.path.getsize(normalized_path) > MARKET_BENCHMARK_MAX_CSV_BYTES:
+        raise ValueError("benchmark CSV file exceeds the 5 MB limit")
+    with open(normalized_path, "rb") as csv_file:
+        payload = csv_file.read(MARKET_BENCHMARK_MAX_CSV_BYTES + 1)
+    if len(payload) > MARKET_BENCHMARK_MAX_CSV_BYTES:
+        raise ValueError("benchmark CSV file exceeds the 5 MB limit")
+    if not payload:
+        raise ValueError("benchmark CSV file is empty")
+    return payload, normalized_path
+
+
+def refresh_market_benchmark(
+    source_path=None,
+    source_url=None,
+    source_headers=None,
+    progress_callback=None,
+    timeout_seconds=15,
+    opener=None,
+):
+    """Refresh exact MSCI ACWI levels from a local or authorized HTTPS CSV.
+
+    This function intentionally has no public-site scraper, Yahoo ticker, ETF,
+    or other proxy fallback. CSV input must contain canonical ``Date`` and
+    ``Close`` columns and is validated atomically by :func:`upsert_close_series`.
+    """
+    if source_path is None and source_url is None:
+        source_path = runtime_settings.get_setting("MSCI_ACWI_SOURCE_PATH", None)
+        source_url = runtime_settings.get_setting("MSCI_ACWI_SOURCE_URL", None)
+    if source_headers is None:
+        source_headers = runtime_settings.get_setting("MSCI_ACWI_SOURCE_HEADERS", {})
+    if source_headers is None:
+        source_headers = {}
+
+    if isinstance(source_path, str) and not source_path.strip():
+        source_path = None
+    if isinstance(source_url, str) and not source_url.strip():
+        source_url = None
+    if source_path is not None and source_url is not None:
+        raise ValueError(
+            "Configure only one MSCI ACWI benchmark source: "
+            "MSCI_ACWI_SOURCE_PATH or MSCI_ACWI_SOURCE_URL"
+        )
+    if source_path is None and source_url is None:
+        source_path = os.path.join(DATA_DIR, "imports", "msci_acwi.csv")
+
+    if source_url is not None:
+        source_kind = "authorized_https_csv"
+        source_display = _safe_https_source_display(source_url)
+    else:
+        source_kind = "local_csv"
+        source_display = _normalize_benchmark_source_path(source_path)
+    _report_benchmark_refresh_progress(
+        progress_callback, 1, "벤치마크 소스 확인"
+    )
+
+    if source_url is not None:
+        payload, source_display = _read_limited_https_csv(
+            source_url,
+            source_headers,
+            timeout_seconds,
+            opener,
+        )
+    else:
+        payload, source_display = _read_limited_local_csv(source_path)
+    _report_benchmark_refresh_progress(
+        progress_callback, 2, "벤치마크 CSV 읽기"
+    )
+
+    try:
+        frame = pd.read_csv(io.BytesIO(payload))
+    except (pd.errors.ParserError, pd.errors.EmptyDataError, UnicodeDecodeError) as exc:
+        raise ValueError("benchmark source is not a readable CSV") from exc
+    summary = upsert_close_series(MARKET_BENCHMARK_TICKER, frame)
+    _report_benchmark_refresh_progress(
+        progress_callback, 3, "벤치마크 검증·저장"
+    )
+
+    conn = get_connection()
+    try:
+        cached_row = conn.execute(
+            """
+            SELECT COUNT(*), MIN(date), MAX(date)
+            FROM ohlcv
+            WHERE ticker = ? AND close IS NOT NULL
+            """,
+            (MARKET_BENCHMARK_TICKER,),
+        ).fetchone()
+    finally:
+        conn.close()
+    cached_rows, cached_first_date, cached_latest_date = cached_row
+    if not cached_rows:
+        raise RuntimeError("MSCI ACWI benchmark DB verification failed")
+
+    summary.update(
+        {
+            "benchmark_name": MARKET_BENCHMARK_NAME,
+            "source_kind": source_kind,
+            "source_display": source_display,
+            "cached_rows": int(cached_rows),
+            "cached_first_date": cached_first_date,
+            "cached_latest_date": cached_latest_date,
+        }
+    )
+    _report_benchmark_refresh_progress(
+        progress_callback, 4, "벤치마크 DB 확인"
+    )
+    return summary
+
+
+def format_market_benchmark_refresh_summary(summary):
+    source_name = {
+        "local_csv": "Local CSV",
+        "authorized_https_csv": "Authorized HTTPS CSV",
+    }.get(summary.get("source_kind"), "Configured CSV")
+    return (
+        f"{MARKET_BENCHMARK_NAME} Benchmark Refresh Complete\n\n"
+        f"Benchmark: {MARKET_BENCHMARK_NAME} ({MARKET_BENCHMARK_TICKER})\n"
+        f"Source: {source_name} ({summary['source_display']})\n"
+        f"Rows received/upserted: {summary['updated']}\n"
+        f"Imported range: {summary['first_date']} to {summary['latest_date']}\n"
+        f"Cached range: {summary['cached_first_date']} to "
+        f"{summary['cached_latest_date']} ({summary['cached_rows']} rows)\n"
+        f"DB path: {summary['db_path']}"
+    )
 
 
 def _download_history(ticker, period):

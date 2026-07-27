@@ -50,6 +50,11 @@ def build_admin_markup():
             "Refresh Sector / Industry", callback_data="admin_refresh_classifications"
         )
     )
+    markup.row(
+        InlineKeyboardButton(
+            "Refresh Benchmark", callback_data="admin_refresh_benchmark"
+        )
+    )
     markup.row(InlineKeyboardButton("Show Data Cache Status", callback_data="admin_cache_status"))
     markup.row(InlineKeyboardButton("Back", callback_data="go_home"))
     return markup
@@ -74,6 +79,7 @@ def admin_text():
     return (
         "**Admin**\n\n"
         f"Version: {runtime_settings.VERSION_LABEL}\n"
+        f"Private config: `{runtime_settings.config_path_for_display()}`\n"
         "Market cache: shared with Classic Beta; exports and portfolio state are isolated.\n\n"
         "Update Latest: fetch from each ticker's last cached date with a 10-day overlap. "
         "Uncached tickers receive four years.\n"
@@ -81,6 +87,8 @@ def admin_text():
         "confirmation is required.\n"
         "Refresh Market Countries: derive US/CH/JP/KR from cached ticker suffixes (local DB only).\n"
         "Refresh Sector / Industry: refresh sector/industry metadata; market country is also refreshed.\n"
+        "Refresh Benchmark: load exact MSCI ACWI levels from the configured local or "
+        "authorized HTTPS Date/Close CSV; no ETF fallback.\n"
         "Show Data Cache Status: show the current universe cache range and "
         "whether exact MSCI ACWI benchmark levels are loaded."
     )

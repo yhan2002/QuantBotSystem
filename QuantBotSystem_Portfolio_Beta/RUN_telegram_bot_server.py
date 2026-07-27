@@ -165,6 +165,23 @@ def _download_progress_adapter(progress, cancel_event, stage_label):
     return report
 
 
+def _benchmark_progress_adapter(progress, cancel_event):
+    def report(completed, total, stage_label):
+        if cancel_event.is_set():
+            raise app_scan_jobs.JobCancelled()
+        ratio = (
+            min(max(float(completed) / float(total), 0.0), 1.0)
+            if total
+            else 0.0
+        )
+        progress(
+            5.0 + 90.0 * ratio,
+            stage_label,
+        )
+
+    return report
+
+
 def submit_background_operation(
     chat_id,
     message_id,
@@ -258,6 +275,33 @@ def submit_ticker_background_operation(
         runner=runner,
         on_result=on_result,
         error_markup=result_markup,
+    )
+
+
+def submit_benchmark_background_operation(chat_id, message_id):
+    def runner(progress, cancel_event):
+        progress(5, "벤치마크 소스 확인")
+        return serialized_runtime_call(
+            core_market_data_store.refresh_market_benchmark,
+            progress_callback=_benchmark_progress_adapter(progress, cancel_event),
+        )
+
+    def on_result(summary):
+        bot.edit_message_text(
+            core_market_data_store.format_market_benchmark_refresh_summary(summary),
+            chat_id,
+            message_id,
+            reply_markup=build_admin_markup(),
+        )
+
+    return submit_background_operation(
+        chat_id,
+        message_id,
+        label="MSCI ACWI Benchmark Refresh",
+        task_type="BENCHMARK_REFRESH",
+        runner=runner,
+        on_result=on_result,
+        error_markup=build_admin_markup(),
     )
 
 
@@ -729,6 +773,19 @@ def handle_menu_callbacks(call):
             bot.answer_callback_query(
                 call.id,
                 "Background 4Y backfill started."
+                if submission.created
+                else f"Another task is already {submission.progress}% complete.",
+                show_alert=not submission.created,
+            )
+
+        elif data == "admin_refresh_benchmark":
+            submission = submit_benchmark_background_operation(
+                chat_id,
+                call.message.message_id,
+            )
+            bot.answer_callback_query(
+                call.id,
+                "Background benchmark refresh started."
                 if submission.created
                 else f"Another task is already {submission.progress}% complete.",
                 show_alert=not submission.created,

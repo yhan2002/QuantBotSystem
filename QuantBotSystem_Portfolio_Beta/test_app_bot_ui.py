@@ -73,8 +73,12 @@ class BotUiTests(unittest.TestCase):
         self.assertIn("Backfill All (4Y)", texts)
         self.assertIn("admin_refresh_selected", callbacks)
         self.assertIn("admin_refresh_all", callbacks)
+        self.assertIn("Refresh Benchmark", texts)
+        self.assertIn("admin_refresh_benchmark", callbacks)
         self.assertNotIn("Preload 4Y Market Data", texts)
         self.assertIn("Portfolio Beta", app_bot_ui.admin_text())
+        self.assertIn("Private config:", app_bot_ui.admin_text())
+        self.assertIn("no ETF fallback", app_bot_ui.admin_text())
         self.assertIn("Portfolio Beta", app_bot_ui.home_text("test-chat"))
         self.assertNotIn("PORTFOLIO_BETA", app_bot_ui.home_text("test-chat"))
 
