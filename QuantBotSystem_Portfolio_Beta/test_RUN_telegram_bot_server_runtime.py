@@ -117,12 +117,12 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
 
     def test_benchmark_refresh_runs_under_runtime_lock_and_formats_result(self):
         summary = {
-            "ticker": "MIWD00000PUS",
+            "ticker": "ACWI",
             "updated": 2,
             "first_date": "2026-01-01",
             "latest_date": "2026-07-27",
-            "source_kind": "local_csv",
-            "source_display": "msci_acwi.csv",
+            "source_kind": "yfinance",
+            "data_basis": "Adj Close",
             "cached_rows": 2,
             "cached_first_date": "2026-01-01",
             "cached_latest_date": "2026-07-27",
@@ -161,14 +161,14 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
 
         self.assertTrue(submission.created)
         self.assertEqual(summary, result)
-        self.assertEqual((5, "벤치마크 소스 확인"), progress[0])
+        self.assertEqual((5, "ACWI 다운로드 준비"), progress[0])
         serialized.assert_called_once()
         self.assertIs(
             serialized.call_args.args[0],
             RUN_telegram_bot_server.core_market_data_store.refresh_market_benchmark,
         )
         self.assertEqual("BENCHMARK_REFRESH", captured["task_type"])
-        self.assertIn("MSCI ACWI", edit.call_args.args[0])
+        self.assertIn("ACWI", edit.call_args.args[0])
         self.assertNotIn("parse_mode", edit.call_args.kwargs)
 
     def test_admin_benchmark_callback_routes_to_background_submission(self):

@@ -132,28 +132,29 @@ Portfolio reports expose:
 - daily NAV, cash, gross, net, long, short, and active positions;
 - Box FLAT/TREND attribution;
 - portfolio ROI, CAGR, MDD, and Sharpe;
-- exact `MIWD00000PUS` MSCI ACWI boundary-level ROI as the primary market
-  benchmark and PASS/FAIL input;
+- ACWI adjusted-price boundary ROI as the primary market benchmark and
+  PASS/FAIL input;
 - daily equal-weight selected-universe ROI as the secondary stock-selection
   diagnostic.
 
 The primary comparison is reported as:
 
 ```text
-MSCI ACWI ROI: ... | Strategy ROI: ... | Multiple: ...x
+ACWI ROI: ... | Strategy ROI: ... | Multiple: ...x
 Universe EW ROI: ... | Stock-selection excess: ...%p
 ```
 
-ACWI ROI needs only the last valid index close before the evaluation window
-and the last valid close through its end. It never substitutes an ETF or
-Universe EW when exact ACWI data is absent; the report then shows `N/A` and the
-target status is `REVIEW`. ACWI MDD, Sharpe, and a daily curve are exposed only
-when complete daily index levels are available.
+ACWI ROI uses the last valid adjusted price before the evaluation window and
+the last valid adjusted price through its end. It does not substitute Universe
+EW when ACWI data is absent; the report then shows `N/A` and the target status
+is `REVIEW`. ACWI MDD, Sharpe, and a daily curve are exposed only when complete
+daily prices are available.
 
-`Admin -> Refresh Benchmark` feeds only validated `Date,Close` data for
-`MIWD00000PUS` into the shared market database. Its source is either a configured
-local CSV or an authorized HTTPS CSV; both use the background job queue,
-runtime serialization lock, and the existing atomic close-series upsert.
+`Admin -> Refresh Benchmark` downloads the full fixed-start ACWI history from a
+pre-IS seed through the latest available date so historical `Adj Close`
+revisions are captured. A coverage and freshness gate protects the existing
+cache from partial Yahoo responses. The job uses the background queue and
+runtime serialization lock.
 
 The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
 with 252 trading days. Trade-level averages remain explicitly labelled

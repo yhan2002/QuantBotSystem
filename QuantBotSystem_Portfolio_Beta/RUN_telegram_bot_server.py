@@ -280,7 +280,7 @@ def submit_ticker_background_operation(
 
 def submit_benchmark_background_operation(chat_id, message_id):
     def runner(progress, cancel_event):
-        progress(5, "벤치마크 소스 확인")
+        progress(5, "ACWI 다운로드 준비")
         return serialized_runtime_call(
             core_market_data_store.refresh_market_benchmark,
             progress_callback=_benchmark_progress_adapter(progress, cancel_event),
@@ -297,7 +297,7 @@ def submit_benchmark_background_operation(chat_id, message_id):
     return submit_background_operation(
         chat_id,
         message_id,
-        label="MSCI ACWI Benchmark Refresh",
+        label="ACWI Benchmark Refresh",
         task_type="BENCHMARK_REFRESH",
         runner=runner,
         on_result=on_result,
@@ -814,7 +814,7 @@ def handle_menu_callbacks(call):
                 "**Data Cache Status**\n\n"
                 f"Configured tickers: {len(all_tickers)}\n"
                 f"{cache_summary}\n"
-                f"MSCI ACWI ({benchmark_ticker}): {benchmark_status}\n"
+                f"ACWI: {benchmark_status}\n"
                 f"DB: `{os.path.basename(core_market_data_store.DB_PATH)}`"
             )
             bot.answer_callback_query(call.id)
