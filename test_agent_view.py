@@ -3,18 +3,42 @@ from __future__ import annotations
 from html.parser import HTMLParser
 import json
 from pathlib import Path
+import struct
 import tempfile
+import threading
+import time
 import unittest
+import zlib
 
 from tools.build_agent_view import (
     CONTENT_SECURITY_POLICY,
     DEFAULT_FIXTURE,
+    PNG_IEND_CHUNK,
+    PNG_SIGNATURE,
+    _is_complete_png,
+    _wait_for_complete_png,
     build_view,
     load_fixture,
     render_html,
     validate_fixture,
     validate_rendered_html,
 )
+
+
+def _png_chunk(chunk_type: bytes, payload: bytes) -> bytes:
+    crc = zlib.crc32(chunk_type + payload) & 0xFFFFFFFF
+    return struct.pack(">I", len(payload)) + chunk_type + payload + struct.pack(">I", crc)
+
+
+def _minimal_png() -> bytes:
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    scanline = zlib.compress(b"\x00\x00\x00\x00\x00")
+    return (
+        PNG_SIGNATURE
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", scanline)
+        + PNG_IEND_CHUNK
+    )
 
 
 class _DomContractParser(HTMLParser):
@@ -126,6 +150,32 @@ class AgentViewTest(unittest.TestCase):
             "DOM CSS must not contain external resource directives",
             errors,
         )
+
+    def test_delayed_png_write_waits_for_complete_stable_file(self) -> None:
+        complete_png = _minimal_png()
+        with tempfile.TemporaryDirectory() as directory:
+            screenshot_path = Path(directory) / "delayed.png"
+            screenshot_path.write_bytes(complete_png[: -len(PNG_IEND_CHUNK)])
+
+            def finish_write() -> None:
+                time.sleep(0.15)
+                with screenshot_path.open("ab") as screenshot:
+                    screenshot.write(PNG_IEND_CHUNK)
+
+            writer = threading.Thread(target=finish_write)
+            writer.start()
+            started = time.monotonic()
+            try:
+                _wait_for_complete_png(
+                    screenshot_path,
+                    timeout_seconds=2,
+                    poll_interval=0.02,
+                )
+            finally:
+                writer.join(timeout=2)
+
+            self.assertGreaterEqual(time.monotonic() - started, 0.1)
+            self.assertTrue(_is_complete_png(screenshot_path))
 
 
 if __name__ == "__main__":
