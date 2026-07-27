@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "max_rounds": 3,
+  "same_reviewer_required": true,
+  "allowed_severities": ["P0", "P1", "P2", "P3"],
+  "blocking_severities": ["P0", "P1", "P2"],
+  "required_validation_commands": [
+    "python -m unittest test_architecture.py -v"
+  ]
+}
