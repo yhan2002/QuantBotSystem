@@ -67,7 +67,29 @@ See Detail sends a ZIP for portfolio-accounted scans:
 
 The primary market benchmark is the exact `MIWD00000PUS` MSCI ACWI index
 level. It is never downloaded through Yahoo and is never added to a trading
-universe. Import a legally obtained CSV containing `Date` and `Close`:
+universe. Put a legally obtained `Date,Close` CSV at:
+
+```text
+QuantBotSystem_Portfolio_Beta/data/imports/msci_acwi.csv
+```
+
+Then choose `Admin -> Refresh Benchmark`. The refresh runs in the shared
+background queue and uses the same runtime lock as scans and scheduled market
+updates. Alternatively, configure one authorized source in the ignored
+private config shown on the Admin screen. When Portfolio Beta is launched by
+the root version selector, this is normally
+`QuantBotSystem_Beta/config.local.py`:
+
+```python
+MSCI_ACWI_SOURCE_PATH = r"C:\path\to\legally_obtained_msci_acwi.csv"
+# or
+MSCI_ACWI_SOURCE_URL = "https://your-authorized-endpoint.example/acwi.csv"
+MSCI_ACWI_SOURCE_HEADERS = {"Authorization": "Bearer YOUR_LOCAL_SECRET"}
+```
+
+The HTTPS endpoint must be an authorized CSV source. The bot does not scrape
+public MSCI web pages and does not substitute an ETF. Manual import remains
+available:
 
 ```powershell
 Set-Location .\QuantBotSystem_Portfolio_Beta
@@ -75,10 +97,11 @@ python .\import_market_benchmark_csv.py "C:\path\to\msci_acwi.csv"
 ```
 
 For ROI-only comparison, the file may contain only the valid closes needed at
-the IS/OOS boundaries. The importer validates the complete file before one
-atomic upsert into the existing shared `ohlcv` table. Stop the bot before a
-manual import. If the boundary levels are missing or stale, reports show
-`MSCI ACWI ROI: N/A` and target status `REVIEW`.
+the IS/OOS boundaries. The importer and Admin refresh validate the complete
+file before one atomic upsert into the existing shared `ohlcv` table. Stop the
+bot before a manual import; the Admin path is serialized automatically. If the
+boundary levels are missing or stale, reports show `MSCI ACWI ROI: N/A` and
+target status `REVIEW`.
 
 ## Validation only
 

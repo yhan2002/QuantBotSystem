@@ -150,6 +150,11 @@ Universe EW when exact ACWI data is absent; the report then shows `N/A` and the
 target status is `REVIEW`. ACWI MDD, Sharpe, and a daily curve are exposed only
 when complete daily index levels are available.
 
+`Admin -> Refresh Benchmark` feeds only validated `Date,Close` data for
+`MIWD00000PUS` into the shared market database. Its source is either a configured
+local CSV or an authorized HTTPS CSV; both use the background job queue,
+runtime serialization lock, and the existing atomic close-series upsert.
+
 The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
 with 252 trading days. Trade-level averages remain explicitly labelled
 ``avg trade`` in LONG/SHORT and quick diagnostics and are not treated as

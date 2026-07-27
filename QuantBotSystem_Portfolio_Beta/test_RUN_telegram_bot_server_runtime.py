@@ -73,6 +73,17 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
             emitted,
         )
 
+    def test_benchmark_stage_uses_shared_range_without_ticker_count(self):
+        emitted = []
+        adapter = RUN_telegram_bot_server._benchmark_progress_adapter(
+            lambda *args: emitted.append(args),
+            threading.Event(),
+        )
+
+        adapter(2, 4, "CSV 검증")
+
+        self.assertEqual([(50.0, "CSV 검증")], emitted)
+
     def test_progress_adapters_propagate_cooperative_cancellation(self):
         cancelled = threading.Event()
         cancelled.set()
@@ -86,6 +97,10 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
             cancelled,
             "다운로드",
         )
+        benchmark_adapter = RUN_telegram_bot_server._benchmark_progress_adapter(
+            lambda *args: None,
+            cancelled,
+        )
 
         with self.assertRaises(
             RUN_telegram_bot_server.app_scan_jobs.JobCancelled
@@ -95,6 +110,98 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
             RUN_telegram_bot_server.app_scan_jobs.JobCancelled
         ):
             download_adapter(1, 2, "AAA")
+        with self.assertRaises(
+            RUN_telegram_bot_server.app_scan_jobs.JobCancelled
+        ):
+            benchmark_adapter(1, 2, "CSV 읽기")
+
+    def test_benchmark_refresh_runs_under_runtime_lock_and_formats_result(self):
+        summary = {
+            "ticker": "MIWD00000PUS",
+            "updated": 2,
+            "first_date": "2026-01-01",
+            "latest_date": "2026-07-27",
+            "source_kind": "local_csv",
+            "source_display": "msci_acwi.csv",
+            "cached_rows": 2,
+            "cached_first_date": "2026-01-01",
+            "cached_latest_date": "2026-07-27",
+            "db_path": "market_data.sqlite",
+        }
+        captured = {}
+
+        def capture_submission(*args, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(created=True, progress=1)
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "submit_background_operation",
+            side_effect=capture_submission,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "serialized_runtime_call",
+            return_value=summary,
+        ) as serialized, patch.object(
+            RUN_telegram_bot_server.bot,
+            "edit_message_text",
+        ) as edit:
+            submission = (
+                RUN_telegram_bot_server.submit_benchmark_background_operation(
+                    "chat",
+                    123,
+                )
+            )
+            progress = []
+            result = captured["runner"](
+                lambda *args: progress.append(args),
+                threading.Event(),
+            )
+            captured["on_result"](result)
+
+        self.assertTrue(submission.created)
+        self.assertEqual(summary, result)
+        self.assertEqual((5, "벤치마크 소스 확인"), progress[0])
+        serialized.assert_called_once()
+        self.assertIs(
+            serialized.call_args.args[0],
+            RUN_telegram_bot_server.core_market_data_store.refresh_market_benchmark,
+        )
+        self.assertEqual("BENCHMARK_REFRESH", captured["task_type"])
+        self.assertIn("MSCI ACWI", edit.call_args.args[0])
+        self.assertNotIn("parse_mode", edit.call_args.kwargs)
+
+    def test_admin_benchmark_callback_routes_to_background_submission(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="admin_refresh_benchmark",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        submission = SimpleNamespace(created=True, progress=1)
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "submit_benchmark_background_operation",
+            return_value=submission,
+        ) as submit, patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        submit.assert_called_once_with("123", 456)
+        answer.assert_called_once_with(
+            "callback-id",
+            "Background benchmark refresh started.",
+            show_alert=False,
+        )
 
     def test_submit_does_not_apply_a_racy_post_submit_progress_edit(self):
         submission = SimpleNamespace(
