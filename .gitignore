@@ -25,3 +25,6 @@ Thumbs.db
 
 # Ephemeral local review evidence
 .agent-reviews/
+
+# Generated synthetic DOM and screenshot evidence
+.agent-artifacts/
