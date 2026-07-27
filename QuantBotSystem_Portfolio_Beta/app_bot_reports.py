@@ -1,5 +1,7 @@
 ﻿# File name: bot_reports.py
 # Generates strategy scan, quick-check, and box backtest reports.
+from dataclasses import dataclass
+
 import strategy_ma_cross
 import strategy_box_range
 import core_market_data_store
@@ -14,6 +16,51 @@ from app_bot_session import (
     get_or_create_session,
     store_backtest_report,
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ScanRequest:
+    """Immutable strategy settings captured when a scan is submitted."""
+
+    universe: tuple[str, ...]
+    strategy: str
+    neutralization: str
+    position_mode: str
+    custom_tickers: frozenset[str]
+
+
+def snapshot_scan_request(chat_id):
+    session = get_or_create_session(chat_id)
+    return ScanRequest(
+        universe=tuple(compile_selected_universe(session)),
+        strategy=session["strategy"],
+        neutralization=session.get("neutralization", "NONE"),
+        position_mode=session.get("position_mode", "LONG_SHORT_NEUTRAL"),
+        custom_tickers=frozenset(session.get("custom_tickers", [])),
+    )
+
+
+def _emit_scan_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker=None,
+    succeeded=True,
+):
+    """Keep presentation callback failures out of strategy calculations."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(
+            stage,
+            int(completed),
+            int(total),
+            ticker,
+            bool(succeeded),
+        )
+    except Exception:
+        pass
 
 
 def _wins_text(win_rate, count):
@@ -70,64 +117,95 @@ def _reversion_explanation(signal):
     return meanings.get(signal, "unclassified value reversion state.")
 
 
-def run_compiled_scan(chat_id, progress_callback=None, return_report_id=False):
+def run_compiled_scan(
+    chat_id,
+    progress_callback=None,
+    return_report_id=False,
+    request=None,
+):
     with app_runtime_lock.serialized_runtime_operation():
         return _run_compiled_scan(
             chat_id,
             progress_callback=progress_callback,
             return_report_id=return_report_id,
+            request=request,
         )
 
 
-def _run_compiled_scan(chat_id, progress_callback=None, return_report_id=False):
+def _run_compiled_scan(
+    chat_id,
+    progress_callback=None,
+    return_report_id=False,
+    request=None,
+):
     session = get_or_create_session(chat_id)
-    compiled_universe = compile_selected_universe(session)
+    request = request or snapshot_scan_request(chat_id)
+    compiled_universe = list(request.universe)
     if not compiled_universe:
         raise ValueError("No tickers selected. Set a universe first.")
 
-    selected_strategy = session["strategy"]
-    neutralization = session.get("neutralization", "NONE")
-    position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
+    selected_strategy = request.strategy
+    neutralization = request.neutralization
+    position_mode = request.position_mode
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
-    custom_tickers = set(session.get("custom_tickers", []))
+    custom_tickers = set(request.custom_tickers)
 
     missing_before_scan = core_market_data_store.get_missing_tickers(compiled_universe)
     missing_custom = [ticker for ticker in missing_before_scan if ticker in custom_tickers]
     if missing_custom:
-        if progress_callback:
-            progress_callback(
-                f"Downloading new Direct Input tickers ({len(missing_custom)})..."
-            )
-        core_market_data_store.ensure_price_data(missing_custom, min_period="1y")
-
-    if progress_callback:
-        progress_callback(
-            f"Running {strategy_label} scan on {len(compiled_universe)} tickers using local DB..."
+        _emit_scan_progress(
+            progress_callback,
+            "DATA_DOWNLOAD",
+            0,
+            len(missing_custom),
         )
+        core_market_data_store.ensure_price_data(
+            missing_custom,
+            min_period="1y",
+            progress_callback=lambda completed, total, ticker: _emit_scan_progress(
+                progress_callback,
+                "DATA_DOWNLOAD",
+                completed,
+                total,
+                ticker,
+                True,
+            ),
+        )
+
+    _emit_scan_progress(
+        progress_callback,
+        "PREPARING",
+        1,
+        1,
+        strategy_label,
+        True,
+    )
+    scan_kwargs = {
+        "neutralization": neutralization,
+        "position_mode": position_mode,
+    }
+    if progress_callback is not None:
+        scan_kwargs["progress_callback"] = progress_callback
 
     if selected_strategy == "MA_CROSS":
         report = strategy_ma_cross.scan_ma_cross(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     elif selected_strategy == "BOX_RANGE":
         report = strategy_box_range.scan_box_range(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     elif selected_strategy == "VALUE_REVERSION":
         report = strategy_price_liquidity_reversion.scan_value_reversion(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     elif selected_strategy == "RESIDUAL_STAT_ARB":
         report = strategy_residual_stat_arb_app.scan_residual_stat_arb(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
@@ -145,6 +223,14 @@ def _run_compiled_scan(chat_id, progress_callback=None, return_report_id=False):
             f"\nRun Admin -> Refresh Selected Universe. Missing sample: {shown}{suffix}"
         )
     report = f"{report}\n\n----------------------------------------\n{cache_line}"
+    _emit_scan_progress(
+        progress_callback,
+        "FINALIZING",
+        1,
+        1,
+        None,
+        True,
+    )
 
     if return_report_id:
         return report, report_id

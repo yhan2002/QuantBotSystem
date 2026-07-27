@@ -88,6 +88,21 @@
   버전명을 `Portfolio Beta`로 분리해 밑줄 문자가 메뉴 전송을 중단시키던 오류를
   수정했습니다.
 
+### Portfolio Beta 공통 진행률·백그라운드 작업
+
+- Momentum, Box Range, Reversion, Residual Stat-Arb 수동 스캔과 Admin의 최신 가격,
+  4년 backfill, 국가·섹터·산업 다운로드를 단일 FIFO 백그라운드 작업자로 전환했습니다.
+  Telegram은 단계, 종목 진행 수, 경과시간을 포함한 1~100% 로딩 메시지를 5% 단위로
+  갱신하며, 같은 채팅의 중복 실행은 차단합니다.
+- 대기 중 설정 변경이 실행 중 스캔에 섞이지 않도록 유니버스·전략·중립화·포지션 모드를
+  제출 시점의 불변 요청으로 고정했습니다.
+- Residual Stat-Arb의 피어 순위·상관관계와 residual regression feature에 작업 내
+  메모리 및 Portfolio Beta 전용 SQLite 캐시를 추가했습니다. 설정·cutoff·메타데이터·
+  Close 데이터 fingerprint가 달라지면 자동 무효화하고, 캐시 장애 시 정상 계산으로
+  fallback합니다. 오래된 fingerprint는 주기적으로 정리해 최신 약 4,000개만 유지합니다.
+- Portfolio Beta 표시 빌드를 `2026.07.27`로 갱신했습니다. 배포판과 Classic Beta는
+  변경하지 않았습니다.
+
 ## 2026-07-24
 
 ### Beta Box Range V2

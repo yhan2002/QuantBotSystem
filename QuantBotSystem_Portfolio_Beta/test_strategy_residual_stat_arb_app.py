@@ -1,5 +1,6 @@
 import unittest
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import ANY, patch
 
 import pandas as pd
 
@@ -255,9 +256,24 @@ class ResidualStatArbAppTests(unittest.TestCase):
             + core_universe_backtest.DETAIL_MARKER
             + "BACKTEST DETAIL"
         )
+        cache_context = SimpleNamespace(
+            stats={
+                "hits": 3,
+                "memory_hits": 2,
+                "disk_hits": 1,
+                "misses": 4,
+                "disk_writes": 4,
+                "errors": 0,
+            }
+        )
+        progress_events = []
 
         with patch.object(
             subject, "_load_local_inputs", return_value=(price_map, metadata)
+        ) as load_inputs, patch.object(
+            subject.engine,
+            "create_residual_cache_context",
+            return_value=cache_context,
         ), patch.object(
             subject.engine, "scan_residual_stat_arb", return_value=structured
         ) as scan, patch.object(
@@ -272,8 +288,13 @@ class ResidualStatArbAppTests(unittest.TestCase):
             report = subject.scan_residual_stat_arb(
                 ["AAA", "BBB", "JPN", "MISS"],
                 as_of="2026-01-05",
+                progress_callback=lambda *args: progress_events.append(args),
             )
 
+        load_inputs.assert_called_once_with(
+            ["AAA", "BBB", "JPN", "MISS"],
+            progress_callback=ANY,
+        )
         self.assertEqual(
             scan.call_args.kwargs["peer_selection_as_of"],
             core_backtest_periods.SELECTION_END,
@@ -281,6 +302,32 @@ class ResidualStatArbAppTests(unittest.TestCase):
         self.assertEqual(
             scan.call_args.kwargs["as_of"],
             pd.Timestamp("2026-01-05"),
+        )
+        self.assertIs(
+            scan.call_args.kwargs["cache_context"],
+            cache_context,
+        )
+        scan.call_args.kwargs["progress_callback"](1, 4, "AAA", True)
+        aggregate.call_args_list[0].kwargs["progress_callback"](
+            2, 4, "BBB", True
+        )
+        aggregate.call_args_list[1].kwargs["progress_callback"](
+            4, 4, "JPN", True
+        )
+        self.assertEqual(
+            [event[0] for event in progress_events],
+            ["CURRENT_SCAN", "IS_BACKTEST", "OOS_BACKTEST"],
+        )
+        runner = aggregate.call_args_list[0].args[1]
+        with patch.object(
+            subject.engine,
+            "run_residual_stat_arb_backtest",
+            return_value=(0.0, 0.0, 0, "N/A"),
+        ) as backtest:
+            runner("AAA")
+        self.assertIs(
+            backtest.call_args.kwargs["cache_context"],
+            cache_context,
         )
         self.assertEqual(
             aggregate.call_args_list[1].kwargs["evaluation_end"],
@@ -300,6 +347,11 @@ class ResidualStatArbAppTests(unittest.TestCase):
         self.assertNotIn("BBB", report)
         self.assertIn("1 missing-next-open leg events", report)
         self.assertIn("1 evaluation-end marks", report)
+        self.assertIn(
+            "Residual cache: 3 hits (memory 2, disk 1) | "
+            "4 misses | 4 disk writes | 0 errors",
+            report,
+        )
 
 
 if __name__ == "__main__":

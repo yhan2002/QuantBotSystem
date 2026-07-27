@@ -6,6 +6,31 @@ import core_universe_backtest
 
 
 class BotReportTests(unittest.TestCase):
+    @patch("app_bot_reports.compile_selected_universe", return_value=["AAA"])
+    @patch("app_bot_reports.get_or_create_session")
+    def test_scan_request_is_an_immutable_settings_snapshot(
+        self,
+        get_session,
+        _compile,
+    ):
+        session = {
+            "strategy": "BOX_RANGE",
+            "custom_tickers": ["AAA"],
+            "neutralization": "COUNTRY",
+            "position_mode": "LONG_ONLY",
+        }
+        get_session.return_value = session
+
+        request = app_bot_reports.snapshot_scan_request("any-chat")
+        session["strategy"] = "MA_CROSS"
+        session["custom_tickers"].append("BBB")
+
+        self.assertEqual("BOX_RANGE", request.strategy)
+        self.assertEqual(("AAA",), request.universe)
+        self.assertEqual(frozenset({"AAA"}), request.custom_tickers)
+        self.assertEqual("COUNTRY", request.neutralization)
+        self.assertEqual("LONG_ONLY", request.position_mode)
+
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
     @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
     @patch("app_bot_reports.strategy_ma_cross.scan_ma_cross")
@@ -93,6 +118,58 @@ class BotReportTests(unittest.TestCase):
             session["backtest_reports"][second_id]["detail"],
             "detail two",
         )
+
+    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
+    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
+    @patch("app_bot_reports.strategy_ma_cross.scan_ma_cross")
+    @patch("app_bot_reports.get_or_create_session")
+    def test_background_scan_uses_snapshot_and_forwards_progress(
+        self,
+        get_session,
+        scan,
+        _missing,
+        _freshness,
+    ):
+        session = {
+            "strategy": "BOX_RANGE",
+            "custom_tickers": [],
+        }
+        get_session.return_value = session
+        request = app_bot_reports.ScanRequest(
+            universe=("AAA", "BBB"),
+            strategy="MA_CROSS",
+            neutralization="MARKET",
+            position_mode="SHORT_ONLY",
+            custom_tickers=frozenset(),
+        )
+        progress_events = []
+
+        def fake_scan(universe, **kwargs):
+            kwargs["progress_callback"](
+                "CURRENT_SCAN",
+                1,
+                len(universe),
+                "AAA",
+                True,
+            )
+            return "summary"
+
+        scan.side_effect = fake_scan
+        report = app_bot_reports.run_compiled_scan(
+            "any-chat",
+            request=request,
+            progress_callback=lambda *args: progress_events.append(args),
+        )
+
+        self.assertIn("summary", report)
+        self.assertEqual(
+            [event[0] for event in progress_events],
+            ["PREPARING", "CURRENT_SCAN", "FINALIZING"],
+        )
+        scan.assert_called_once()
+        self.assertEqual(["AAA", "BBB"], scan.call_args.args[0])
+        self.assertEqual("MARKET", scan.call_args.kwargs["neutralization"])
+        self.assertEqual("SHORT_ONLY", scan.call_args.kwargs["position_mode"])
 
 
 if __name__ == "__main__":

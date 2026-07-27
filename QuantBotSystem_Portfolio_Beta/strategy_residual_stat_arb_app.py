@@ -19,12 +19,46 @@ STRATEGY_LABEL = "Residual Stat-Arb"
 DEFAULT_MAX_STALE_CALENDAR_DAYS = 7
 
 
-def _load_local_inputs(universe_list):
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker=None,
+    succeeded=True,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(
+            stage,
+            int(completed),
+            int(total),
+            ticker,
+            bool(succeeded),
+        )
+    except Exception:
+        pass
+
+
+def _load_local_inputs(universe_list, progress_callback=None):
     price_map = {}
-    for ticker in universe_list:
+    universe_list = list(universe_list)
+    total = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
         prices = core_market_data_store.get_price_data(ticker)
         if prices is not None and not prices.empty:
             price_map[ticker] = prices
+            succeeded = True
+        _notify_progress(
+            progress_callback,
+            "DATA_LOAD",
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
     metadata = core_market_data_store.get_security_metadata(price_map)
     return engine.normalize_price_map(price_map), metadata
 
@@ -220,12 +254,20 @@ def _candidate_line(index, row):
     )
 
 
-def _runner(price_map, metadata, ticker, include_trades=False, **kwargs):
+def _runner(
+    price_map,
+    metadata,
+    cache_context,
+    ticker,
+    include_trades=False,
+    **kwargs,
+):
     return engine.run_residual_stat_arb_backtest(
         ticker,
         price_map,
         metadata,
         include_trades=include_trades,
+        cache_context=cache_context,
         **kwargs,
     )
 
@@ -237,6 +279,7 @@ def scan_residual_stat_arb(
     config=None,
     as_of=None,
     max_stale_calendar_days=DEFAULT_MAX_STALE_CALENDAR_DAYS,
+    progress_callback=None,
 ):
     """Scan and backtest the fourth strategy entirely from the local cache."""
     neutralization = core_cross_sectional_neutralization.normalize_mode(
@@ -244,7 +287,11 @@ def scan_residual_stat_arb(
     )
     position_mode = core_position_mode.normalize_mode(position_mode)
     scan_as_of = _normalize_as_of(as_of)
-    price_map, metadata = _load_local_inputs(universe_list)
+    price_map, metadata = _load_local_inputs(
+        universe_list,
+        progress_callback=progress_callback,
+    )
+    cache_context = engine.create_residual_cache_context(price_map, metadata)
     structured = engine.scan_residual_stat_arb(
         universe_list,
         price_map,
@@ -253,6 +300,17 @@ def scan_residual_stat_arb(
         peer_selection_as_of=core_backtest_periods.SELECTION_END,
         config=config,
         limit_per_side=None,
+        cache_context=cache_context,
+        progress_callback=lambda completed, total, ticker, succeeded: (
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total,
+                ticker,
+                succeeded,
+            )
+        ),
     )
     (
         structured,
@@ -325,7 +383,7 @@ def scan_residual_stat_arb(
     else:
         report += "No SHORT candidates."
 
-    runner = partial(_runner, price_map, metadata)
+    runner = partial(_runner, price_map, metadata, cache_context)
     # Position mode controls the alpha-leg direction. Both hedge directions
     # remain available because an unhedged residual trade is not stat-arb.
     hedge_policy = PortfolioPolicy(position_mode="LONG_SHORT_NEUTRAL")
@@ -338,6 +396,16 @@ def scan_residual_stat_arb(
         portfolio_policy=hedge_policy,
         side=core_position_mode.side_filter(position_mode),
         config=config,
+        progress_callback=lambda completed, total, ticker, succeeded: (
+            _notify_progress(
+                progress_callback,
+                "IS_BACKTEST",
+                completed,
+                total,
+                ticker,
+                succeeded,
+            )
+        ),
         **_window_through_as_of(
             core_backtest_periods.selection_window(),
             scan_as_of,
@@ -352,6 +420,16 @@ def scan_residual_stat_arb(
         portfolio_policy=hedge_policy,
         side=core_position_mode.side_filter(position_mode),
         config=config,
+        progress_callback=lambda completed, total, ticker, succeeded: (
+            _notify_progress(
+                progress_callback,
+                "OOS_BACKTEST",
+                completed,
+                total,
+                ticker,
+                succeeded,
+            )
+        ),
         **_window_through_as_of(
             core_backtest_periods.oos_window(),
             scan_as_of,
@@ -394,6 +472,23 @@ def scan_residual_stat_arb(
         )
     else:
         backtest_payload += execution_line
+    cache_stats = cache_context.stats
+    cache_line = (
+        "\nResidual cache: "
+        f"{cache_stats['hits']} hits "
+        f"(memory {cache_stats['memory_hits']}, disk {cache_stats['disk_hits']}) | "
+        f"{cache_stats['misses']} misses | "
+        f"{cache_stats['disk_writes']} disk writes | "
+        f"{cache_stats['errors']} errors\n"
+    )
+    if core_universe_backtest.DETAIL_MARKER in backtest_payload:
+        backtest_payload = backtest_payload.replace(
+            core_universe_backtest.DETAIL_MARKER,
+            cache_line + core_universe_backtest.DETAIL_MARKER,
+            1,
+        )
+    else:
+        backtest_payload += cache_line
     report += backtest_payload
     report += (
         "\n"

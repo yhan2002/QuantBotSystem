@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -27,6 +28,61 @@ def _long_reversion_frame():
 
 
 class ValueReversionEngineTests(unittest.TestCase):
+    @patch.object(
+        strategy_price_liquidity_reversion.core_universe_backtest,
+        "format_fixed_is_oos_backtest",
+        return_value="\nSUMMARY",
+    )
+    @patch.object(
+        strategy_price_liquidity_reversion.core_universe_backtest,
+        "aggregate_universe_backtest",
+    )
+    @patch.object(
+        strategy_price_liquidity_reversion,
+        "analyze_value_reversion",
+    )
+    def test_scan_reports_current_is_and_oos_progress_safely(
+        self,
+        analyze,
+        aggregate,
+        _format,
+    ):
+        analyze.side_effect = [
+            {"status": "NO_SIGNAL"},
+            {"status": "DATA_INSUFFICIENT"},
+        ]
+        events = []
+
+        def progress(stage, completed, total, ticker, succeeded):
+            events.append((stage, completed, total, ticker, succeeded))
+            raise RuntimeError("Telegram edit failed")
+
+        def aggregate_result(*_args, **kwargs):
+            callback = kwargs["progress_callback"]
+            callback(1, 2, "AAA", True)
+            callback(2, 2, "BBB", False)
+            return {}
+
+        aggregate.side_effect = aggregate_result
+
+        report = strategy_price_liquidity_reversion.scan_value_reversion(
+            ["AAA", "BBB"],
+            progress_callback=progress,
+        )
+
+        self.assertIn("Reversion Scan Report", report)
+        self.assertEqual(
+            events,
+            [
+                ("CURRENT_SCAN", 1, 2, "AAA", True),
+                ("CURRENT_SCAN", 2, 2, "BBB", False),
+                ("IS_BACKTEST", 1, 2, "AAA", True),
+                ("IS_BACKTEST", 2, 2, "BBB", False),
+                ("OOS_BACKTEST", 1, 2, "AAA", True),
+                ("OOS_BACKTEST", 2, 2, "BBB", False),
+            ],
+        )
+
     def test_confirmed_shock_generates_next_open_long_signal(self):
         result = strategy_price_liquidity_reversion.analyze_value_reversion(
             "TEST", df=_long_reversion_frame().iloc[:67]

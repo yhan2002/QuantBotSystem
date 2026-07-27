@@ -46,6 +46,13 @@ Admin data mutations through one re-entrant operation lock. Each completed
 manual scan stores an immutable report id, so an older See Detail button
 cannot be redirected to a newer scan.
 
+Interactive scans for Momentum, Box Range, Reversion, and Residual Stat-Arb,
+plus Admin price/backfill/metadata downloads, run through one process-local
+FIFO background worker. The Telegram callback returns immediately and edits
+one loading message in monotonic 5% steps. A frozen request snapshot keeps the
+strategy, universe, neutralization, and position mode unchanged while a job is
+queued. The existing operation lock remains the database consistency boundary.
+
 ## Common signal contract
 
 Strategy-specific analyzers are adapted into `Signal` records:
@@ -135,6 +142,15 @@ Regression coefficients used for a close signal are estimated no later than
 the preceding close. A non-positive executable hedge beta is rejected rather
 than converted with an absolute value. Entry and any signal-driven exit
 execute at the following open.
+
+Residual peer rankings and residual-regression features use a job-local memory
+cache backed by a Portfolio-Beta-only SQLite cache. Keys include the engine
+version, configuration, cutoff, universe/metadata snapshot, and relevant Close
+history, so a changed input becomes a cache miss. IS/OOS cutoffs remain
+separate, cache failures fall back to calculation, and no cache file is shared
+with the deployment or Classic Beta code. The persistent store retains roughly
+the newest 4,000 entries so daily input fingerprints cannot grow it without
+bound.
 
 ## Reporting
 

@@ -10,6 +10,11 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+try:
+    from strategy_residual_stat_arb_cache import ResidualCacheContext
+except ImportError:  # pragma: no cover - package-style import fallback
+    from .strategy_residual_stat_arb_cache import ResidualCacheContext
+
 
 STRATEGY_KEY = "residual_stat_arb"
 NEXT_OPEN = "NEXT_OPEN"
@@ -85,6 +90,47 @@ def _config_or_default(config):
     if not isinstance(config, ResidualStatArbConfig):
         raise TypeError("config must be a ResidualStatArbConfig")
     return config
+
+
+def create_residual_cache_context(
+    price_map,
+    metadata_by_ticker,
+    **kwargs,
+):
+    """Create one reusable cache context for a scan/backtest job."""
+
+    return ResidualCacheContext(
+        normalize_price_map(price_map),
+        metadata_by_ticker,
+        **kwargs,
+    )
+
+
+def _cache_key(cache_context, method_name, *args):
+    if cache_context is None:
+        return None
+    try:
+        return getattr(cache_context, method_name)(*args)
+    except Exception:
+        return None
+
+
+def _cache_get(cache_context, namespace, cache_key):
+    if cache_context is None or cache_key is None:
+        return None
+    try:
+        return cache_context.get(namespace, cache_key)
+    except Exception:
+        return None
+
+
+def _cache_put(cache_context, namespace, cache_key, value):
+    if cache_context is None or cache_key is None:
+        return
+    try:
+        cache_context.put(namespace, cache_key, value)
+    except Exception:
+        return
 
 
 def normalize_ohlcv(prices):
@@ -200,6 +246,7 @@ def rank_peer_candidates(
     metadata_by_ticker,
     as_of=None,
     config=None,
+    cache_context=None,
 ):
     """Rank same-country and same-sector peers using returns strictly before as_of."""
 
@@ -211,6 +258,16 @@ def rank_peer_candidates(
     signal_date = _resolve_as_of(target, as_of)
     if signal_date is None:
         return []
+    cache_key = _cache_key(
+        cache_context,
+        "peer_ranking_key",
+        ticker,
+        signal_date,
+        config,
+    )
+    cached = _cache_get(cache_context, "peer_ranking", cache_key)
+    if isinstance(cached, list):
+        return cached
 
     target_returns = _cached_returns(normalized, ticker)
     target_returns = target_returns[target_returns.index < signal_date]
@@ -240,7 +297,11 @@ def rank_peer_candidates(
                 "correlation_end": aligned.index[-1].date().isoformat(),
             }
         )
-    return sorted(ranked, key=lambda row: (-row["correlation"], row["ticker"]))
+    ranked = sorted(
+        ranked, key=lambda row: (-row["correlation"], row["ticker"])
+    )
+    _cache_put(cache_context, "peer_ranking", cache_key, ranked)
+    return ranked
 
 
 def select_residual_peers(
@@ -249,6 +310,7 @@ def select_residual_peers(
     metadata_by_ticker,
     as_of=None,
     config=None,
+    cache_context=None,
 ):
     """Select at most five trailing-correlation peers by default."""
 
@@ -261,6 +323,7 @@ def select_residual_peers(
             metadata_by_ticker,
             as_of=as_of,
             config=config,
+            cache_context=cache_context,
         )[: config.max_peers]
     ]
 
@@ -272,6 +335,7 @@ def build_factor_returns(
     peers=None,
     as_of=None,
     config=None,
+    cache_context=None,
 ):
     """Build target, equal-weight country-market, and peer-excess returns."""
 
@@ -292,6 +356,7 @@ def build_factor_returns(
             metadata_by_ticker,
             as_of=signal_date,
             config=config,
+            cache_context=cache_context,
         )
     peers = tuple(
         candidate
@@ -358,6 +423,7 @@ def build_residual_features(
     peers=None,
     as_of=None,
     config=None,
+    cache_context=None,
 ):
     """Estimate lagged rolling betas and close-known residual signals.
 
@@ -366,13 +432,49 @@ def build_residual_features(
     """
 
     config = _config_or_default(config)
+    normalized = normalize_price_map(price_map)
+    target = normalized.get(ticker)
+    signal_date = (
+        _resolve_as_of(target, as_of) if target is not None else None
+    )
+    if target is not None and signal_date is None:
+        return pd.DataFrame()
+    if peers is None:
+        peers = select_residual_peers(
+            ticker,
+            normalized,
+            metadata_by_ticker,
+            as_of=signal_date if signal_date is not None else as_of,
+            config=config,
+            cache_context=cache_context,
+        )
+    peers = tuple(
+        candidate
+        for candidate in peers
+        if candidate in normalized
+        and candidate != ticker
+        and _same_peer_group(ticker, candidate, metadata_by_ticker)
+    )
+    cache_key = _cache_key(
+        cache_context,
+        "residual_features_key",
+        ticker,
+        signal_date if signal_date is not None else as_of,
+        config,
+        peers,
+    )
+    cached = _cache_get(cache_context, "residual_features", cache_key)
+    if isinstance(cached, pd.DataFrame):
+        return cached
+
     factors = build_factor_returns(
         ticker,
-        price_map,
+        normalized,
         metadata_by_ticker,
         peers=peers,
-        as_of=as_of,
+        as_of=signal_date if signal_date is not None else as_of,
         config=config,
+        cache_context=cache_context,
     )
     if factors.empty:
         return factors
@@ -490,6 +592,12 @@ def build_residual_features(
             -features["PREVIOUS_RESIDUAL_Z"].abs(),
             0.0,
         ),
+    )
+    _cache_put(
+        cache_context,
+        "residual_features",
+        cache_key,
+        features,
     )
     return features
 
@@ -660,6 +768,7 @@ def analyze_residual_stat_arb(
     as_of=None,
     peer_selection_as_of=None,
     config=None,
+    cache_context=None,
 ):
     """Analyze one ticker from supplied local data without any I/O."""
 
@@ -712,6 +821,7 @@ def analyze_residual_stat_arb(
         metadata_by_ticker,
         as_of=peer_selection_date,
         config=config,
+        cache_context=cache_context,
     )
     if not ranked:
         return {
@@ -730,6 +840,7 @@ def analyze_residual_stat_arb(
         peers=peers,
         as_of=signal_date,
         config=config,
+        cache_context=cache_context,
     )
     if features.empty:
         return {
@@ -757,22 +868,41 @@ def scan_residual_stat_arb(
     peer_selection_as_of=None,
     config=None,
     limit_per_side=3,
+    cache_context=None,
+    progress_callback=None,
 ):
     """Return structured long/short candidates; perform no downloads."""
 
     config = _config_or_default(config)
     normalized = normalize_price_map(price_map)
-    results = [
-        analyze_residual_stat_arb(
-            ticker,
-            normalized,
-            metadata_by_ticker,
-            as_of=as_of,
-            peer_selection_as_of=peer_selection_as_of,
-            config=config,
-        )
-        for ticker in universe_list
-    ]
+    universe_list = list(universe_list)
+    total = len(universe_list)
+    results = []
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
+        try:
+            row = analyze_residual_stat_arb(
+                ticker,
+                normalized,
+                metadata_by_ticker,
+                as_of=as_of,
+                peer_selection_as_of=peer_selection_as_of,
+                config=config,
+                cache_context=cache_context,
+            )
+            results.append(row)
+            succeeded = row.get("status") in {"OK", "NO_SIGNAL"}
+        finally:
+            if progress_callback is not None:
+                try:
+                    progress_callback(
+                        completed,
+                        total,
+                        ticker,
+                        succeeded,
+                    )
+                except Exception:
+                    pass
     signals = [row for row in results if row["status"] == "OK"]
     longs = sorted(
         (row for row in signals if row["side"] == "LONG"),
@@ -968,6 +1098,7 @@ def backtest_residual_stat_arb(
     evaluation_start=None,
     evaluation_end=None,
     config=None,
+    cache_context=None,
 ):
     """Backtest actual target-plus-peer legs with next-open execution."""
 
@@ -1050,6 +1181,7 @@ def backtest_residual_stat_arb(
         metadata_by_ticker,
         as_of=peer_selection_date,
         config=config,
+        cache_context=cache_context,
     )
     selected_peers = [
         row["ticker"] for row in ranked_peers[: config.max_peers]
@@ -1069,6 +1201,7 @@ def backtest_residual_stat_arb(
         peers=selected_peers,
         as_of=dates[-1],
         config=config,
+        cache_context=cache_context,
     )
     if features.empty:
         return {
