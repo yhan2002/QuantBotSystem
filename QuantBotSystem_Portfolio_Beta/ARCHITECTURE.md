@@ -163,5 +163,7 @@ Portfolio reports expose:
 - Box FLAT/TREND attribution;
 - portfolio ROI, CAGR, MDD, Sharpe, and benchmark comparison.
 
-Trade-level average return remains diagnostic and is not treated as portfolio
-ROI.
+The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
+with 252 trading days. Trade-level averages remain explicitly labelled
+``avg trade`` in LONG/SHORT and quick diagnostics and are not treated as
+portfolio returns.

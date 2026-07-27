@@ -103,6 +103,14 @@
 - Portfolio Beta 표시 빌드를 `2026.07.27`로 갱신했습니다. 배포판과 Classic Beta는
   변경하지 않았습니다.
 
+### Portfolio Beta CAGR 중심 요약
+
+- IS/OOS 스캔 요약의 `ALL avg`를 실제 점수 비중·현금·동시 포지션을 반영한 일별
+  포트폴리오 NAV 기반 CAGR로 교체했습니다. CAGR은 252거래일 기준으로 연환산합니다.
+- LONG/SHORT 및 Quick Check의 동일거래 가중 평균은 포트폴리오 수익률과 혼동하지
+  않도록 `avg trade`로 명시했습니다. 개발자 PASS/FAIL의 1차 ROI 기준은 변경하지
+  않았습니다.
+
 ## 2026-07-24
 
 ### Beta Box Range V2

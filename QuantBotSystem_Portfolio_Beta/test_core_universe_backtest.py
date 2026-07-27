@@ -133,6 +133,90 @@ class UniverseBacktestTests(unittest.TestCase):
         self.assertIn("Fixed OOS (2026-01 ~ 2026-07-31):", summary)
         self.assertIn("Closed trades: 1", detail)
 
+    def test_portfolio_summary_uses_cagr_while_side_detail_says_avg_trade(self):
+        stats = {
+            "count": 2,
+            "avg": 0.5,
+            "median": 0.5,
+            "win_rate": 50.0,
+            "wins": 1,
+        }
+        long_stats = {
+            "count": 1,
+            "avg": 2.0,
+            "median": 2.0,
+            "win_rate": 100.0,
+            "wins": 1,
+        }
+        short_stats = {
+            "count": 1,
+            "avg": -1.0,
+            "median": -1.0,
+            "win_rate": 0.0,
+            "wins": 0,
+        }
+        result = {
+            "period": "2026-01-01 to 2026-07-31",
+            "universe_count": 10,
+            "eligible_tickers": 9,
+            "traded_tickers": 2,
+            "trades": [],
+            "all": stats,
+            "long": long_stats,
+            "short": short_stats,
+            "box_attribution": {},
+            "portfolio_performance": {
+                "strategy": {
+                    "roi_pct": 6.0,
+                    "cagr_pct": 12.34,
+                    "mdd_pct": -2.5,
+                    "sharpe": None,
+                },
+                "benchmark": {"roi_pct": 3.0},
+                "daily": pd.DataFrame(
+                    {"gross_exposure_pct": [10.0, 20.0]}
+                ),
+                "ledger": {
+                    "filled_trades": 2,
+                    "skipped_trades": 0,
+                    "policy": {
+                        "max_gross": 1.0,
+                        "max_name_weight": 0.05,
+                        "long_cap": 0.5,
+                        "short_cap": 0.5,
+                    },
+                },
+            },
+        }
+
+        summary, detail = core_universe_backtest.split_summary_detail(
+            core_universe_backtest.format_fixed_is_oos_backtest(
+                result,
+                result,
+                "entry rule",
+                "exit rule",
+            )
+        )
+
+        self.assertIn(
+            "ALL: trades 2 | portfolio CAGR +12.34% | "
+            "trade win 50.0% (1/2)",
+            summary,
+        )
+        self.assertNotIn("avg trade", summary)
+        self.assertIn(
+            "LONG: trades 1 | avg trade +2.00%",
+            detail,
+        )
+        self.assertIn(
+            "Portfolio: ROI +6.00% | CAGR +12.34% | MDD -2.50%",
+            detail,
+        )
+        self.assertIn(
+            "CAGR: annualized from daily portfolio NAV using 252 trading days.",
+            summary,
+        )
+
     def test_trade_event_csv_keeps_partial_exits_and_is_oos_windows(self):
         selection = {
             "period": "2024-01-01 to 2025-12-31",
