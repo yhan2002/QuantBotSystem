@@ -2,8 +2,12 @@
 # Manages user sessions, universe selection, and config synchronization.
 import os
 import importlib
+import copy
+import pickle
 import re
+import time
 import uuid
+import zlib
 
 import config
 from core_position_mode import POSITION_MODE_LABELS
@@ -40,6 +44,8 @@ NEUTRALIZATION_LABELS = {
 
 USER_SESSIONS = {}
 MAX_BACKTEST_REPORTS_PER_CHAT = 8
+MAX_BACKTEST_REPORT_BYTES_PER_CHAT = 32 * 1024 * 1024
+BACKTEST_REPORT_TTL_SECONDS = 24 * 60 * 60
 
 MARKET_SUFFIXES = {
     "US": "",
@@ -129,6 +135,8 @@ def get_or_create_session(chat_id):
             "awaiting": None,
             "last_backtest_detail": None,
             "last_backtest_csv_path": None,
+            "last_backtest_export_spec": None,
+            "last_backtest_export_blob": None,
             "last_backtest_report_id": None,
             "backtest_reports": {},
         }
@@ -138,11 +146,78 @@ def get_or_create_session(chat_id):
     return session
 
 
-def store_backtest_report(session, detail, export_path):
-    """Store one immutable See Detail payload and return its callback-safe id."""
+def _freeze_export_spec(export_spec):
+    if export_spec is None:
+        return None
+    return zlib.compress(
+        pickle.dumps(export_spec, protocol=pickle.HIGHEST_PROTOCOL),
+        level=3,
+    )
+
+
+def _thaw_export_spec(export_blob):
+    if export_blob is None:
+        return None
+    return pickle.loads(zlib.decompress(export_blob))
+
+
+def _report_payload_size(payload):
+    return (
+        len((payload.get("detail") or "").encode("utf-8"))
+        + len((payload.get("export_path") or "").encode("utf-8"))
+        + len(payload.get("_export_blob") or b"")
+    )
+
+
+def _prune_backtest_reports(session, now=None):
+    reports = session.get("backtest_reports") or {}
+    now = time.time() if now is None else float(now)
+    expired_ids = [
+        report_id
+        for report_id, payload in reports.items()
+        if now - float(payload.get("_created_at", now))
+        > BACKTEST_REPORT_TTL_SECONDS
+    ]
+    for report_id in expired_ids:
+        reports.pop(report_id, None)
+
+    while len(reports) > MAX_BACKTEST_REPORTS_PER_CHAT:
+        reports.pop(next(iter(reports)))
+    while (
+        len(reports) > 1
+        and sum(_report_payload_size(payload) for payload in reports.values())
+        > MAX_BACKTEST_REPORT_BYTES_PER_CHAT
+    ):
+        reports.pop(next(iter(reports)))
+
+
+def _public_backtest_report(payload):
+    if not payload:
+        return None
+    if "_export_blob" in payload:
+        export_spec = _thaw_export_spec(payload.get("_export_blob"))
+    else:
+        export_spec = copy.deepcopy(payload.get("export_spec"))
+    return {
+        "detail": payload.get("detail"),
+        "export_path": payload.get("export_path"),
+        "export_spec": export_spec,
+    }
+
+
+def store_backtest_report(
+    session,
+    detail,
+    export_path=None,
+    export_spec=None,
+):
+    """Store one immutable result payload and return its callback-safe id."""
+    export_blob = _freeze_export_spec(export_spec)
     session["last_backtest_detail"] = detail
     session["last_backtest_csv_path"] = export_path
-    if not detail:
+    session["last_backtest_export_spec"] = None
+    session["last_backtest_export_blob"] = export_blob
+    if not detail and not export_path and export_spec is None:
         session["last_backtest_report_id"] = None
         return None
 
@@ -153,27 +228,37 @@ def store_backtest_report(session, detail, export_path):
     reports[report_id] = {
         "detail": detail,
         "export_path": export_path,
+        "_export_blob": export_blob,
+        "_created_at": time.time(),
     }
     session["last_backtest_report_id"] = report_id
-    while len(reports) > MAX_BACKTEST_REPORTS_PER_CHAT:
-        reports.pop(next(iter(reports)))
+    _prune_backtest_reports(session)
     return report_id
 
 
 def get_backtest_report(session, report_id=None):
     """Return the payload tied to one result message, not another scan."""
+    _prune_backtest_reports(session)
     reports = session.get("backtest_reports") or {}
     if report_id:
-        return reports.get(report_id)
+        return _public_backtest_report(reports.get(report_id))
     latest_id = session.get("last_backtest_report_id")
     if latest_id and latest_id in reports:
-        return reports[latest_id]
+        return _public_backtest_report(reports[latest_id])
     detail = session.get("last_backtest_detail")
-    if not detail:
+    export_path = session.get("last_backtest_csv_path")
+    export_blob = session.get("last_backtest_export_blob")
+    export_spec = (
+        _thaw_export_spec(export_blob)
+        if export_blob is not None
+        else copy.deepcopy(session.get("last_backtest_export_spec"))
+    )
+    if not detail and not export_path and export_spec is None:
         return None
     return {
         "detail": detail,
-        "export_path": session.get("last_backtest_csv_path"),
+        "export_path": export_path,
+        "export_spec": export_spec,
     }
 
 

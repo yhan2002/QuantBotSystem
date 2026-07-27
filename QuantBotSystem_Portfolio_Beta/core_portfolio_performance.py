@@ -12,16 +12,17 @@ from core_portfolio_ledger import simulate_portfolio
 TRADING_DAYS_PER_YEAR = 252
 MARKET_BENCHMARK_TICKER = "ACWI"
 MARKET_BENCHMARK_LABEL = "ACWI"
+BENCHMARK_BEAT_MULTIPLE = 1.0
 
 
 def evaluate_return_target(
     strategy_return_pct,
     benchmark_return_pct,
     win_rate_pct,
-    benchmark_multiple=2.0,
+    benchmark_multiple=BENCHMARK_BEAT_MULTIPLE,
     win_rate_goal_pct=58.0,
 ):
-    """Evaluate the ROI-first developer target; win rate is diagnostic only."""
+    """Evaluate the ROI-first target; the strategy must strictly beat it."""
     has_returns = (
         strategy_return_pct is not None
         and benchmark_return_pct is not None
@@ -35,7 +36,7 @@ def evaluate_return_target(
         else None
     )
     passes_return = (
-        float(strategy_return_pct) >= required_return
+        float(strategy_return_pct) > required_return
         if target_applicable
         else None
     )
@@ -50,6 +51,9 @@ def evaluate_return_target(
         "win_rate_goal_pct": float(win_rate_goal_pct),
         "return_target_applicable": target_applicable,
         "required_return_pct": required_return,
+        "comparison_operator": ">",
+        "passes_benchmark_roi": passes_return,
+        # Backward-compatible generic alias.
         "passes_return_target": passes_return,
         "meets_win_rate_goal": meets_win_rate_goal,
         "win_rate_is_hard_gate": False,
@@ -166,7 +170,7 @@ def _trade_daily_returns(trade, calendar, close_frame):
         )
         returns[date] = value / previous_value - 1.0
         previous_value = value
-    if remaining > 1e-8:
+    if remaining > 1e-8 and final_date <= calendar[-1]:
         raise ValueError(f"Trade is not fully exited: {ticker} {trade['entry_date']}")
     return returns
 
@@ -393,6 +397,29 @@ def _market_benchmark(
     }
 
 
+def _align_calendar_to_market_end(
+    calendar,
+    close_frame,
+    price_loader,
+    ticker,
+    max_stale_calendar_days,
+):
+    """Limit strategy metrics to the latest date shared with the benchmark."""
+    market = _market_benchmark(
+        calendar,
+        price_loader,
+        ticker,
+        max_stale_calendar_days,
+    )
+    if not market["available"] or not market.get("end_level_date"):
+        return calendar, close_frame
+    common_end = pd.Timestamp(market["end_level_date"]).normalize()
+    common_calendar = calendar[calendar <= common_end]
+    if common_calendar.empty or len(common_calendar) == len(calendar):
+        return calendar, close_frame
+    return common_calendar, close_frame.reindex(common_calendar)
+
+
 def _benchmark_payload(
     calendar,
     close_frame,
@@ -519,6 +546,14 @@ def calculate_equal_weight_performance(
         price_loader,
         max_stale_calendar_days,
     )
+    benchmark_loader = market_benchmark_loader or price_loader
+    calendar, close_frame = _align_calendar_to_market_end(
+        calendar,
+        close_frame,
+        benchmark_loader,
+        market_benchmark_ticker,
+        max_stale_calendar_days,
+    )
     contributions = {date: [] for date in calendar}
     for trade in trades:
         for date, value in _trade_daily_returns(trade, calendar, close_frame).items():
@@ -544,7 +579,7 @@ def calculate_equal_weight_performance(
     benchmarks = _benchmark_payload(
         calendar,
         close_frame,
-        market_benchmark_loader or price_loader,
+        benchmark_loader,
         market_benchmark_ticker,
         market_benchmark_label,
         max_stale_calendar_days,
@@ -585,6 +620,14 @@ def calculate_score_weighted_performance(
         price_loader,
         max_stale_calendar_days,
     )
+    benchmark_loader = market_benchmark_loader or price_loader
+    calendar, close_frame = _align_calendar_to_market_end(
+        calendar,
+        close_frame,
+        benchmark_loader,
+        market_benchmark_ticker,
+        max_stale_calendar_days,
+    )
     if policy is None:
         policy = PortfolioPolicy(position_mode=position_mode)
     ledger = simulate_portfolio(
@@ -609,7 +652,7 @@ def calculate_score_weighted_performance(
     benchmarks = _benchmark_payload(
         calendar,
         close_frame,
-        market_benchmark_loader or price_loader,
+        benchmark_loader,
         market_benchmark_ticker,
         market_benchmark_label,
         max_stale_calendar_days,
@@ -645,7 +688,7 @@ def calculate_universe_performance(
     universe_result,
     universe_list,
     price_loader=core_market_data_store.get_price_data,
-    benchmark_multiple=2.0,
+    benchmark_multiple=BENCHMARK_BEAT_MULTIPLE,
     minimum_win_rate_pct=58.0,
     max_stale_calendar_days=core_backtest_periods.BENCHMARK_MAX_STALE_CALENDAR_DAYS,
     position_mode="LONG_SHORT_NEUTRAL",
@@ -712,6 +755,9 @@ def calculate_universe_performance(
                 "benchmark_label": result["market_benchmark_label"],
                 "benchmark_ticker": result["market_benchmark_ticker"],
                 "required_roi_pct": target["required_return_pct"],
+                "comparison_operator": target["comparison_operator"],
+                "passes_benchmark_roi": target["passes_benchmark_roi"],
+                "passes_acwi_roi": target["passes_benchmark_roi"],
                 "passes_roi": target["passes_return_target"],
                 "passes_primary_return_target": target["passes_return_target"],
                 "required_cagr_pct": None,

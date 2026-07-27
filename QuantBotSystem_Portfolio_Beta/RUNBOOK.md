@@ -48,14 +48,18 @@ menu is restored after completion.
 
 - Credentials: existing ignored `QuantBotSystem_Beta/config.local.py`
 - Market data: existing `QuantBotSystem_Beta/data/market_data.sqlite`
-- Portfolio exports: `QuantBotSystem_Portfolio_Beta/data/backtest_exports`
+- Manual/research exports: `QuantBotSystem_Portfolio_Beta/data/backtest_exports`
 - Runtime/state: `QuantBotSystem_Portfolio_Beta/data/runtime` and `data/state`
 
 The Portfolio version does not migrate the shared market-data schema.
 
 ## Backtest exports
 
-See Detail sends a ZIP for portfolio-accounted scans:
+`See Detail` displays text only. `Download Export` creates the selected scan's
+ZIP in the background, sends it, and removes the temporary files afterward.
+Export snapshots are compressed and immutable; a chat retains at most eight
+snapshots for 24 hours with a 32 MB soft memory cap.
+Portfolio-accounted ZIPs contain:
 
 - trade events;
 - actual per-leg entry/exit ledger;
@@ -79,8 +83,11 @@ only when adjusted prices are unavailable. ACWI is excluded from trading
 universes and security metadata refreshes. No CSV or private benchmark source
 configuration is required.
 
-If valid ACWI boundary prices are missing or stale, reports show
-`ACWI ROI: N/A` and target status `REVIEW`.
+The developer target is `Strategy ROI > ACWI ROI` when same-window ACWI ROI is
+positive. Strategy, Universe EW, and ACWI metrics stop at the latest common
+ACWI trading date; equality is `FAIL`. If valid ACWI boundary prices are missing or
+stale, or ACWI ROI is nonpositive, target status is `REVIEW`. Win rate, CAGR,
+MDD, and Sharpe remain diagnostics.
 
 ## Validation only
 

@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import app_bot_session
 
@@ -28,6 +29,8 @@ class BotSessionTests(unittest.TestCase):
         )
 
         self.assertNotEqual(first, second)
+        self.assertEqual(len(first), 12)
+        self.assertEqual(len(second), 12)
         self.assertEqual(
             app_bot_session.get_backtest_report(session, first)["detail"],
             "first detail",
@@ -38,6 +41,120 @@ class BotSessionTests(unittest.TestCase):
         )
         self.assertIsNone(
             app_bot_session.get_backtest_report(session, "expired")
+        )
+
+    def test_report_keeps_positional_export_path_and_lazy_export_spec(self):
+        session = {}
+        export_spec = {"version": 1, "selection_result": {"AAA": "BUY"}}
+
+        report_id = app_bot_session.store_backtest_report(
+            session,
+            "detail",
+            "legacy.zip",
+            export_spec=export_spec,
+        )
+
+        self.assertEqual(
+            app_bot_session.get_backtest_report(session, report_id),
+            {
+                "detail": "detail",
+                "export_path": "legacy.zip",
+                "export_spec": export_spec,
+            },
+        )
+
+    def test_export_only_report_gets_an_id_and_fallback_keeps_spec(self):
+        export_spec = {"version": 1}
+        session = {}
+
+        report_id = app_bot_session.store_backtest_report(
+            session,
+            None,
+            export_spec=export_spec,
+        )
+
+        self.assertEqual(len(report_id), 12)
+        self.assertEqual(
+            app_bot_session.get_backtest_report(session),
+            {
+                "detail": None,
+                "export_path": None,
+                "export_spec": export_spec,
+            },
+        )
+
+        legacy_session = {
+            "last_backtest_detail": "legacy detail",
+            "last_backtest_csv_path": "legacy.zip",
+            "last_backtest_export_spec": export_spec,
+        }
+        self.assertEqual(
+            app_bot_session.get_backtest_report(legacy_session)["export_spec"],
+            export_spec,
+        )
+
+    def test_export_spec_is_frozen_and_getter_returns_a_fresh_copy(self):
+        session = {}
+        export_spec = {"version": 1, "trades": [{"ticker": "AAA"}]}
+        report_id = app_bot_session.store_backtest_report(
+            session,
+            "detail",
+            export_spec=export_spec,
+        )
+
+        export_spec["trades"][0]["ticker"] = "MUTATED"
+        first_read = app_bot_session.get_backtest_report(session, report_id)
+        first_read["export_spec"]["trades"][0]["ticker"] = "CHANGED_AGAIN"
+        second_read = app_bot_session.get_backtest_report(session, report_id)
+
+        self.assertEqual(
+            second_read["export_spec"]["trades"][0]["ticker"],
+            "AAA",
+        )
+        self.assertIn("_export_blob", session["backtest_reports"][report_id])
+        self.assertNotIn("export_spec", session["backtest_reports"][report_id])
+
+    def test_expired_report_is_pruned(self):
+        session = {}
+        with mock.patch.object(app_bot_session.time, "time", return_value=100.0):
+            report_id = app_bot_session.store_backtest_report(
+                session,
+                "detail",
+                export_spec={"version": 1},
+            )
+
+        with mock.patch.object(
+            app_bot_session.time,
+            "time",
+            return_value=100.0 + app_bot_session.BACKTEST_REPORT_TTL_SECONDS + 1,
+        ):
+            self.assertIsNone(
+                app_bot_session.get_backtest_report(session, report_id)
+            )
+
+    def test_only_eight_report_payloads_are_retained(self):
+        session = {}
+        report_ids = [
+            app_bot_session.store_backtest_report(
+                session,
+                f"detail {index}",
+                export_spec={"index": index},
+            )
+            for index in range(app_bot_session.MAX_BACKTEST_REPORTS_PER_CHAT + 1)
+        ]
+
+        self.assertEqual(
+            len(session["backtest_reports"]),
+            app_bot_session.MAX_BACKTEST_REPORTS_PER_CHAT,
+        )
+        self.assertIsNone(
+            app_bot_session.get_backtest_report(session, report_ids[0])
+        )
+        self.assertEqual(
+            app_bot_session.get_backtest_report(session, report_ids[-1])[
+                "export_spec"
+            ],
+            {"index": app_bot_session.MAX_BACKTEST_REPORTS_PER_CHAT},
         )
 
     def test_derived_universe_config_is_not_reported_as_synced(self):

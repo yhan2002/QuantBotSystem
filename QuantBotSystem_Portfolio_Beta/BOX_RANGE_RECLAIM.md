@@ -103,7 +103,9 @@ and above the setup-specific first target. Otherwise the signal is cancelled.
 
 - Keep the deployment engine as the comparison baseline.
 - Compare every structure/setup/direction combination separately.
-- Primary evaluation is cumulative portfolio ROI against twice the positive
-  same-universe benchmark ROI. Win rate is a secondary diagnostic.
+- Primary evaluation requires cumulative portfolio ROI to strictly exceed the
+  positive same-window iShares `ACWI` ETF adjusted-price ROI. Equality is
+  `FAIL`; missing or nonpositive ACWI ROI is `REVIEW`. Universe EW, win rate,
+  CAGR, MDD, and Sharpe are secondary diagnostics.
 - Review target, time-exit, -7% stop, and -10% stop contributions separately.
 - Do not tune thresholds from the fixed OOS result.

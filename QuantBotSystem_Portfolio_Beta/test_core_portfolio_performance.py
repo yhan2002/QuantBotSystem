@@ -305,6 +305,51 @@ class PortfolioPerformanceTests(unittest.TestCase):
             1.21,
         )
 
+    def test_strategy_and_acwi_roi_share_the_same_latest_date(self):
+        frames = {
+            "AAA": _frame(
+                [100.0, 105.0, 110.0, 200.0],
+                dates=[
+                    "2024-12-31",
+                    "2025-01-02",
+                    "2025-01-03",
+                    "2025-01-06",
+                ],
+            ),
+            "ACWI": _frame(
+                [100.0, 101.0, 102.0],
+                dates=["2024-12-31", "2025-01-02", "2025-01-03"],
+            ),
+        }
+        trades = [{
+            "ticker": "AAA",
+            "side": "LONG",
+            "entry_date": "2025-01-02",
+            "entry_price": 100.0,
+            "exit_date": "2025-01-06",
+            "exit_price": 200.0,
+        }]
+
+        result = core_portfolio_performance.calculate_equal_weight_performance(
+            trades,
+            ["AAA"],
+            "2025-01-02",
+            "2025-01-06",
+            price_loader=_loader(frames),
+        )
+
+        self.assertEqual(result["period"], "2025-01-02 to 2025-01-03")
+        self.assertEqual(
+            result["market_benchmark_end_level_date"],
+            "2025-01-03",
+        )
+        self.assertEqual(
+            result["daily"].index[-1],
+            pd.Timestamp("2025-01-03"),
+        )
+        self.assertAlmostEqual(result["strategy"]["roi_pct"], 10.0)
+        self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 2.0)
+
     def test_universe_result_adds_trade_stats_and_target_decision(self):
         universe_result = {
             "period": "2025-01-02 to 2025-01-03",
@@ -326,9 +371,13 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertEqual(result["win_rate_pct"], 50.0)
         self.assertFalse(result["target"]["passes_win_rate"])
         # A 21% trade return on a capped 5% position contributes 1.05% to NAV.
-        # It beats twice the +0.4% ACWI move even though it trails Universe EW.
+        # It beats the +0.4% ACWI move even though it trails Universe EW.
         self.assertAlmostEqual(result["strategy"]["roi_pct"], 1.05)
         self.assertTrue(result["target"]["passes_all"])
+        self.assertTrue(result["target"]["passes_acwi_roi"])
+        self.assertTrue(result["target"]["passes_benchmark_roi"])
+        self.assertEqual(result["target"]["benchmark_multiple"], 1.0)
+        self.assertEqual(result["target"]["comparison_operator"], ">")
         self.assertAlmostEqual(result["market_benchmark"]["roi_pct"], 0.4, places=2)
         self.assertGreater(result["universe_ew_benchmark"]["roi_pct"], 10.0)
         self.assertEqual(result["target"]["benchmark_ticker"], "ACWI")
@@ -336,13 +385,17 @@ class PortfolioPerformanceTests(unittest.TestCase):
         self.assertFalse(result["target"]["win_rate_is_hard_gate"])
         self.assertIn("passes_all", result["target"])
 
-    def test_return_target_uses_roi_and_win_rate_is_secondary(self):
-        passed = core_portfolio_performance.evaluate_return_target(22.0, 10.0, 50.0)
+    def test_return_target_strictly_beats_positive_roi_and_win_rate_is_secondary(self):
+        passed = core_portfolio_performance.evaluate_return_target(10.01, 10.0, 50.0)
         self.assertEqual(passed["status"], "PASS")
+        self.assertEqual(passed["benchmark_multiple"], 1.0)
+        self.assertEqual(passed["required_return_pct"], 10.0)
+        self.assertEqual(passed["comparison_operator"], ">")
+        self.assertTrue(passed["passes_benchmark_roi"])
         self.assertTrue(passed["passes_return_target"])
         self.assertFalse(passed["meets_win_rate_goal"])
 
-        failed = core_portfolio_performance.evaluate_return_target(19.0, 10.0, 70.0)
+        failed = core_portfolio_performance.evaluate_return_target(10.0, 10.0, 70.0)
         self.assertEqual(failed["status"], "FAIL")
         self.assertFalse(failed["passes_return_target"])
         self.assertTrue(failed["meets_win_rate_goal"])
@@ -350,6 +403,12 @@ class PortfolioPerformanceTests(unittest.TestCase):
         review = core_portfolio_performance.evaluate_return_target(5.0, -2.0, 70.0)
         self.assertEqual(review["status"], "REVIEW")
         self.assertIsNone(review["passes_return_target"])
+
+        zero_benchmark = core_portfolio_performance.evaluate_return_target(
+            5.0, 0.0, 70.0
+        )
+        self.assertEqual(zero_benchmark["status"], "REVIEW")
+        self.assertIsNone(zero_benchmark["passes_benchmark_roi"])
 
 
 if __name__ == "__main__":

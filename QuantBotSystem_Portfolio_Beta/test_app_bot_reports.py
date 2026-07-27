@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import app_bot_reports
+import app_bot_session
 import core_universe_backtest
 
 
@@ -55,10 +56,49 @@ class BotReportTests(unittest.TestCase):
             session["last_backtest_report_id"],
             session["backtest_reports"],
         )
-        scan.assert_called_once_with(
-            ["AAA"],
-            neutralization="NONE",
-            position_mode="LONG_SHORT_NEUTRAL",
+        scan.assert_called_once()
+        self.assertEqual(["AAA"], scan.call_args.args[0])
+        self.assertEqual("NONE", scan.call_args.kwargs["neutralization"])
+        self.assertEqual(
+            "LONG_SHORT_NEUTRAL",
+            scan.call_args.kwargs["position_mode"],
+        )
+        self.assertEqual({}, scan.call_args.kwargs["report_artifacts"])
+
+    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
+    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
+    @patch("app_bot_reports.strategy_ma_cross.scan_ma_cross")
+    @patch("app_bot_reports.compile_selected_universe", return_value=["AAA"])
+    @patch("app_bot_reports.get_or_create_session")
+    def test_scan_stores_lazy_export_spec_with_its_report(
+        self, get_session, _compile, scan, _missing, _freshness
+    ):
+        session = {"strategy": "MA_CROSS", "custom_tickers": []}
+        get_session.return_value = session
+        export_spec = {"version": 1, "strategy_key": "ma_momentum"}
+
+        def fake_scan(_universe, **kwargs):
+            kwargs["report_artifacts"]["backtest_export"] = export_spec
+            return (
+                "summary"
+                + core_universe_backtest.DETAIL_MARKER
+                + "developer detail"
+            )
+
+        scan.side_effect = fake_scan
+
+        _, report_id = app_bot_reports.run_compiled_scan(
+            "any-chat",
+            return_report_id=True,
+        )
+
+        stored = app_bot_session.get_backtest_report(session, report_id)
+        self.assertEqual(
+            export_spec,
+            stored["export_spec"],
+        )
+        self.assertIsNone(
+            stored["export_path"]
         )
 
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")

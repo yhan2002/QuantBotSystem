@@ -45,7 +45,7 @@ STRATEGIES = DIRECTIONAL_STRATEGIES
 WINDOW_ORDER = ("IS", "OOS")
 ACWI_TICKER = core_portfolio_performance.MARKET_BENCHMARK_TICKER
 ACWI_LABEL = core_portfolio_performance.MARKET_BENCHMARK_LABEL
-SCHEMA_VERSION = "2.0"
+SCHEMA_VERSION = "2.2"
 SUMMARY_COLUMNS = [
     "strategy", "universe", "mode", "window", "evaluation_start", "evaluation_end",
     "universe_count", "eligible_tickers", "failed_ticker_count", "data_coverage_pct",
@@ -72,7 +72,7 @@ SUMMARY_COLUMNS = [
     "box_flat_win_rate_pct", "box_flat_nav_contribution_pct",
     "box_trend_trade_count", "box_trend_win_rate_pct",
     "box_trend_nav_contribution_pct", "roi_target_applicable", "required_roi_pct",
-    "passes_2x_benchmark_roi", "passes_2x_acwi_roi",
+    "passes_benchmark_roi", "passes_acwi_roi",
     "passes_58pct_win_rate", "passes_min_30_trades",
     "status", "error",
 ]
@@ -189,28 +189,16 @@ def target_status(
     minimum_trades=30,
     universe_ew_roi_pct=None,
 ):
-    """Evaluate ACWI for status while retaining the legacy Universe EW flag."""
+    """Evaluate the strict ACWI beat target."""
     sample_pass = trade_count >= minimum_trades
     acwi_target = core_portfolio_performance.evaluate_return_target(
         strategy_roi_pct,
         benchmark_roi_pct,
         win_rate_pct,
-        benchmark_multiple=2.0,
+        benchmark_multiple=core_portfolio_performance.BENCHMARK_BEAT_MULTIPLE,
         win_rate_goal_pct=58.0,
     )
-    legacy_benchmark_roi = (
-        benchmark_roi_pct
-        if universe_ew_roi_pct is None
-        else universe_ew_roi_pct
-    )
-    universe_target = core_portfolio_performance.evaluate_return_target(
-        strategy_roi_pct,
-        legacy_benchmark_roi,
-        win_rate_pct,
-        benchmark_multiple=2.0,
-        win_rate_goal_pct=58.0,
-    )
-    if not _finite_number(benchmark_roi_pct):
+    if acwi_target["status"] == "REVIEW":
         status = "REVIEW"
     elif not sample_pass:
         status = "INSUFFICIENT_TRADES"
@@ -219,9 +207,8 @@ def target_status(
     return {
         "roi_target_applicable": acwi_target["return_target_applicable"],
         "required_roi_pct": acwi_target["required_return_pct"],
-        # Deprecated flag retains the historical Universe EW meaning.
-        "passes_2x_benchmark_roi": universe_target["passes_return_target"],
-        "passes_2x_acwi_roi": acwi_target["passes_return_target"],
+        "passes_benchmark_roi": acwi_target["passes_benchmark_roi"],
+        "passes_acwi_roi": acwi_target["passes_benchmark_roi"],
         "passes_58pct_win_rate": acwi_target["meets_win_rate_goal"],
         "passes_min_30_trades": sample_pass,
         "status": status,
@@ -667,7 +654,10 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
             "stock_selection_diagnostic": "daily equal-weight raw-close universe",
             "minimum_trades": minimum_trades,
             "minimum_win_rate_pct": 58.0,
-            "primary_target": "2x same-window ACWI ROI when ACWI ROI is positive",
+            "primary_target": (
+                "strategy ROI strictly greater than same-window ACWI ROI "
+                "when ACWI ROI is positive"
+            ),
             "win_rate_target": "58% secondary diagnostic; does not determine PASS/FAIL",
             "ls_definition": "50% long / 50% short entry-side caps; cash is allowed",
             "max_stale_calendar_days": max_stale_days,

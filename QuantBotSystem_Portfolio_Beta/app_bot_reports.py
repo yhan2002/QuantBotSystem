@@ -183,6 +183,8 @@ def _run_compiled_scan(
         "neutralization": neutralization,
         "position_mode": position_mode,
     }
+    report_artifacts = {}
+    scan_kwargs["report_artifacts"] = report_artifacts
     if progress_callback is not None:
         scan_kwargs["progress_callback"] = progress_callback
 
@@ -205,7 +207,12 @@ def _run_compiled_scan(
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
     report, detail, csv_path = core_universe_backtest.split_report_payload(report)
-    report_id = store_backtest_report(session, detail, csv_path)
+    report_id = store_backtest_report(
+        session,
+        detail,
+        csv_path,
+        export_spec=report_artifacts.get("backtest_export"),
+    )
 
     cache_line = core_market_data_store.freshness_summary(compiled_universe)
     missing = core_market_data_store.get_missing_tickers(compiled_universe)
