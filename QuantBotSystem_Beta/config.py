@@ -92,6 +92,14 @@ universe_groups["US_LARGE_CAP_100_20260630_PROXY"] = [
     "PGR", "SPGI", "COF", "FTNT", "PH", "SBUX", "VRTX", "SYK", "LMT", "MO",
 ]
 
+# Nasdaq-listed market-cap ranking snapshot captured 2026-07-31 for repeatable scans.
+# Source: https://stockanalysis.com/list/nasdaq-stocks/
+universe_groups["NASDAQ_TOP_30_20260731"] = [
+    "AAPL", "NVDA", "GOOG", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
+    "MU", "WMT", "SKHY", "AMD", "ASML", "INTC", "CSCO", "COST", "AMAT", "LRCX",
+    "NFLX", "PLTR", "PANW", "ARM", "TXN", "KLAC", "LIN", "AMGN", "STX", "PEP",
+]
+
 
 def normalize_ticker(ticker):
     ticker = str(ticker).strip().upper()
