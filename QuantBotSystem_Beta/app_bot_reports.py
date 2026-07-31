@@ -38,13 +38,16 @@ def _momentum_explanation(signal):
 
 def _box_explanation(status):
     meanings = {
-        "LONG_RECLAIM": "intraday lower-boundary break recovered by the close; LONG at next open.",
-        "SHORT_RECLAIM": "intraday upper-boundary break recovered by the close; SHORT at next open.",
-        "BOX_QUALIFIED": "11%~20% box is valid; waiting for a false-break reclaim.",
-        "VOLUME_VETO": "box setup exists but turnover surge is too large, so entry is blocked.",
-        "NORMAL": "no valid 11%~20% box setup.",
-        "DATA_INSUFFICIENT": "not enough local price data for box signal.",
-        "ERROR": "box calculation failed.",
+        "LONG_RANGE_RECLAIM": "flat-channel lower false break recovered by the close; LONG at next open.",
+        "LONG_TREND_PULLBACK": "rising-channel support rebound confirmed at the close; LONG at next open.",
+        "SHORT_RANGE_RECLAIM": "flat-channel upper false break rejected by the close; SHORT at next open.",
+        "SHORT_TREND_RALLY": "falling-channel resistance rejection confirmed at the close; SHORT at next open.",
+        "CHANNEL_QUALIFIED": "channel quality passed; waiting for a directional close signal.",
+        "CHANNEL_UNQUALIFIED": "channel containment, width, or boundary touches did not qualify.",
+        "TRANSITION_NO_TRADE": "channel direction is transitional, so entry is blocked.",
+        "VOLUME_VETO": "channel setup exists but turnover surge is too large, so entry is blocked.",
+        "DATA_INSUFFICIENT": "not enough local price data for channel signal.",
+        "ERROR": "channel calculation failed.",
     }
     return meanings.get(status, "unclassified box state.")
 
@@ -139,15 +142,17 @@ def quick_report(ticker):
     else:
         reversion_signal = reversion_status
 
-    if ma_signal == "LONG_ENTRY" and box_status == "LONG_RECLAIM":
+    long_box_statuses = {"LONG_RANGE_RECLAIM", "LONG_TREND_PULLBACK"}
+    short_box_statuses = {"SHORT_RANGE_RECLAIM", "SHORT_TREND_RALLY"}
+    if ma_signal == "LONG_ENTRY" and box_status in long_box_statuses:
         view = "Strong long watch: MA uptrend plus lower false-break reclaim."
-    elif ma_signal == "SHORT_ENTRY" and box_status == "SHORT_RECLAIM":
+    elif ma_signal == "SHORT_ENTRY" and box_status in short_box_statuses:
         view = "Strong short watch: MA downtrend plus upper false-break reclaim."
-    elif reversion_signal == "LONG_BIAS" and box_status == "LONG_RECLAIM":
+    elif reversion_signal == "LONG_BIAS" and box_status in long_box_statuses:
         view = "Reversion long bias with lower false-break reclaim."
-    elif reversion_signal == "SHORT_BIAS" and box_status == "SHORT_RECLAIM":
+    elif reversion_signal == "SHORT_BIAS" and box_status in short_box_statuses:
         view = "Reversion short bias with upper false-break reclaim."
-    elif box_status in ["LONG_RECLAIM", "SHORT_RECLAIM"]:
+    elif box_status in long_box_statuses | short_box_statuses:
         view = "Box reclaim signal is active for next-open entry."
     elif ma_signal in ["LONG_ENTRY", "SHORT_ENTRY"]:
         view = "Trend signal active. Box signal is not the main driver."
@@ -167,10 +172,10 @@ def quick_report(ticker):
 
     box_side = None
     box_side_label = "LONG+SHORT"
-    if box_status == "LONG_RECLAIM":
+    if box_status in long_box_statuses:
         box_side = "LONG"
         box_side_label = "LONG"
-    elif box_status == "SHORT_RECLAIM":
+    elif box_status in short_box_statuses:
         box_side = "SHORT"
         box_side_label = "SHORT"
 
@@ -204,7 +209,7 @@ def quick_report(ticker):
     report += "  Benchmark: strength above 0 supports LONG, below 0 supports SHORT; stronger magnitude means stronger slope.\n"
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
-    report += "  Benchmark: prior 20d box width 11%~20%, 2+ same-side bounces, close reclaim, and turnover below 2x its 20d average.\n"
+    report += "  Benchmark: prior 40 completed bars, channel containment >=85%, width 4~12 ATR, 2+ spaced same-side touches, directional close signal, and turnover below 2x.\n"
     report += f"- Reversion: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"

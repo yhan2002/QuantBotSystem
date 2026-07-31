@@ -21,6 +21,11 @@
       "tone": "neutral"
     },
     {
+      "label": "Universe menu",
+      "value": "Nasdaq Top 30",
+      "tone": "neutral"
+    },
+    {
       "label": "External calls",
       "value": "BLOCKED",
       "tone": "blocked"
