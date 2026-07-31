@@ -9,7 +9,7 @@ import core_universe_backtest
 class BotReportTests(unittest.TestCase):
     def test_nasdaq_top_30_snapshot_membership(self):
         expected = {
-            "AAPL", "NVDA", "GOOG", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
+            "AAPL", "NVDA", "SNDK", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
             "MU", "WMT", "SKHY", "AMD", "ASML", "INTC", "CSCO", "COST", "AMAT", "LRCX",
             "NFLX", "PLTR", "PANW", "ARM", "TXN", "KLAC", "LIN", "AMGN", "STX", "PEP",
         }
