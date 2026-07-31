@@ -93,9 +93,10 @@ universe_groups["US_LARGE_CAP_100_20260630_PROXY"] = [
 ]
 
 # Nasdaq-listed market-cap ranking snapshot captured 2026-07-31 for repeatable scans.
+# Keep one Alphabet class (GOOGL); rank 31 SNDK replaces duplicate-class GOOG.
 # Source: https://stockanalysis.com/list/nasdaq-stocks/
 universe_groups["NASDAQ_TOP_30_20260731"] = [
-    "AAPL", "NVDA", "GOOG", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
+    "AAPL", "NVDA", "SNDK", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
     "MU", "WMT", "SKHY", "AMD", "ASML", "INTC", "CSCO", "COST", "AMAT", "LRCX",
     "NFLX", "PLTR", "PANW", "ARM", "TXN", "KLAC", "LIN", "AMGN", "STX", "PEP",
 ]
