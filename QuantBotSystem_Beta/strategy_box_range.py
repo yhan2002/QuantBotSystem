@@ -2,8 +2,7 @@
 """Directional range/channel strategy.
 
 Signals use only completed bars through the signal-day close and enter no
-earlier than the next open. The prior fixed 20-day two-sided reclaim engine
-remains available in the deployment folder; Beta intentionally uses this V2.
+earlier than the next open. Classic Beta and deployment share this V2 engine.
 """
 
 import numpy as np
