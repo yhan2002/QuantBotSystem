@@ -7,6 +7,31 @@
 - Classic Beta에서 검증한 40개 완료 봉 기반 Box Range V2를 배포판에 승격했습니다. 채널 품질·방향 판정, 종가 신호와 다음 시가 진입, 고정 투영 목표 및 보수적 stop-first 체결 규칙을 동일하게 적용합니다.
 - 2026-07-31 나스닥 상장 시가총액 스냅샷에서 Alphabet은 `GOOGL`만 유지하고 중복 클래스 `GOOG` 대신 31위 `SNDK`를 포함한 30개 티커를 `NASDAQ_TOP_30_20260731` 그룹으로 Classic Beta와 배포판에 연결했습니다.
 
+## 주간 요약: 2026-07-27 ~ 2026-08-03
+
+### 배포판 변경
+
+- Classic Beta에서 검증한 Box Range V2를 `QuantBotSystem/`에 승격해 40개 완료 봉 기반의 횡보·상승·하락 채널별 reclaim/pullback 규칙을 배포판에 반영했습니다.
+- 배포판과 Classic Beta에 `Nasdaq Top 30` 선택 유니버스를 추가하고 스캔·백테스트·세션 경로에서 동일하게 사용할 수 있게 했습니다.
+- Nasdaq 유니버스의 Alphabet 중복 노출을 피하기 위해 `GOOG`를 제거하고 `GOOGL` 한 종목만 유지했습니다. Portfolio RL 연구 기능은 배포판에 연결하지 않았습니다.
+
+### 베타판 변경
+
+- Classic Beta의 Box Range V2와 Nasdaq Top 30 구성을 배포판과 동기화하고 관련 세션·리포트 테스트를 보강했습니다.
+- Portfolio Beta의 1차 성과 기준을 양의 동일구간 iShares `ACWI` ETF 조정가격 ROI 초과로 단순화하고, 평가 종료일·잔여 포지션 MTM을 공통 ACWI 거래일에 맞췄습니다.
+- Portfolio Beta의 내보내기는 `See Detail` 조회와 분리해 요청 시에만 ZIP/CSV를 백그라운드 생성하고 보관 시간·개수·용량 한도를 적용했습니다.
+- Box 신호 기반 model-free 연속 비중 RL 연구 오버레이를 추가해 방향별 gross와 5% 종목 한도를 유지하면서 같은 방향 후보 사이의 자본 재배분을 비교할 수 있게 했습니다.
+- RL 비교에 `CSQ_UNIV ∪ US Top 100` 결합 유니버스와 LONG/SHORT 50% side cap을 추가하고 미배분 자본을 실제 진입 신호에 재분배하도록 수정했습니다.
+- Residual Stat-Arb는 비용 0 가정에서도 IS·OOS 성과가 부진해 코드·메뉴·분석 경로에서 제거했으며 Telegram 운영과 배포판에는 연결하지 않았습니다.
+
+### GitHub 커밋 요약
+
+- `7aeff90`: Portfolio Beta 독립 개발선과 Box Range V2·관리 기능을 포함한 주간 소스 게시
+- `6ce7ebe` 및 `a332210`~`f5abfa9`: 실패한 Residual Stat-Arb 제거와 ACWI 벤치마크·평가 종료일 정비
+- `3716460`, `5439f25`, `d58a2f0`: 포트폴리오 RL 비중 연구, 결합 유니버스, 진입 신호 자본 재분배 추가
+- `727e9c1`~`046fb6e`: 아키텍처 계약, 독립 리뷰 게이트, 에이전트 가독성 스냅샷과 캡처 안정화
+- `6efb38d`, `333bfc2`: Box Range V2·Nasdaq Top 30 배포 승격과 Alphabet 단일 클래스 정리
+
 ## 주간 요약: 2026-07-20 ~ 2026-07-27
 
 ### 배포판 변경
