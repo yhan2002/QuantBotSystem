@@ -9,9 +9,9 @@ import core_universe_backtest
 class BotReportTests(unittest.TestCase):
     def test_nasdaq_top_30_snapshot_membership(self):
         expected = {
-            "AAPL", "NVDA", "SNDK", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
-            "MU", "WMT", "SKHY", "AMD", "ASML", "INTC", "CSCO", "COST", "AMAT", "LRCX",
-            "NFLX", "PLTR", "PANW", "ARM", "TXN", "KLAC", "LIN", "AMGN", "STX", "PEP",
+            "NVDA", "GOOGL", "AAPL", "MSFT", "AMZN", "AVGO", "META", "TSLA", "WMT", "MU",
+            "AMD", "ASML", "INTC", "COST", "AMAT", "LRCX", "CSCO", "NFLX", "PLTR", "AZN",
+            "ARM", "LIN", "TXN", "AMGN", "PEP", "WDC", "STX", "TMUS", "ADI", "PANW",
         }
         self.assertEqual(expected, set(config.universe_groups["NASDAQ_TOP_30_20260731"]))
 
