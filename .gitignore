@@ -3,6 +3,7 @@
 **/local_settings.py
 **/config_backup.py
 *.env
+.venv-hmm/
 
 # Runtime data and generated outputs
 **/data/

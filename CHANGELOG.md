@@ -2,6 +2,12 @@
 
 프로젝트의 주간 변경사항을 배포판과 베타판으로 구분해 기록합니다.
 
+## 2026-08-04
+
+- Portfolio Beta에 시장 국면별 전략 자본 배분을 연구하는 2-state Gaussian HMM overlay를 추가했습니다. ACWI 수익률·실현변동성·추세 강도와 유니버스 breadth·dispersion을 종가 시점 정보만으로 계산하고, expanding walk-forward 재학습으로 `TREND / NON_TREND` 확률을 산출합니다.
+- Momentum과 Box Range·Reversion의 같은 방향 진입 cohort 안에서 기존 요청 gross를 보존하며 확률적으로 비중을 재배분합니다. 기존 신호·청산·보유수량과 name/side/gross cap은 변경하지 않으며, 데이터가 부족한 날짜는 baseline 비중을 그대로 사용합니다.
+- 개발자 전용 비교 명령은 로컬 캐시만 읽고 `BASELINE / RULE / HMM`을 동일 IS/OOS 조건에서 비교합니다. Telegram·예약 스캔·Classic Beta·배포판에는 연결하지 않았고 장시간 비교는 명시적인 `--confirm-long-run` 없이는 실행되지 않습니다.
+
 ## 2026-07-31
 
 - Classic Beta에서 검증한 40개 완료 봉 기반 Box Range V2를 배포판에 승격했습니다. 채널 품질·방향 판정, 종가 신호와 다음 시가 진입, 고정 투영 목표 및 보수적 stop-first 체결 규칙을 동일하게 적용합니다.

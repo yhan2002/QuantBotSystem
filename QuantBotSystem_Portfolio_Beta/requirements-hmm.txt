@@ -1,0 +1,4 @@
+hmmlearn==0.3.3
+numpy<2.5
+pandas>=2.0
+yfinance>=0.2
