@@ -108,3 +108,21 @@ The independent portfolio-aware RL sizing experiment is also never started by
 the bot or scheduler. Its point-in-time contract, risk objective, limitations,
 and pilot/full commands are documented in
 `QuantBotSystem_Portfolio_Beta/PORTFOLIO_RL_OVERLAY.md`.
+
+The HMM regime router uses a separate Python 3.12 environment because the
+current `hmmlearn` wheel is not published for Python 3.14. Prepare it once:
+
+```powershell
+py -3.12 -m venv .venv-hmm
+.\.venv-hmm\Scripts\python.exe -m pip install -r .\QuantBotSystem_Portfolio_Beta\requirements-hmm.txt
+```
+
+Inspect the local-only workload before authorizing the comparison:
+
+```powershell
+Set-Location .\QuantBotSystem_Portfolio_Beta
+..\.venv-hmm\Scripts\python.exe .\experiment_portfolio_hmm_overlay.py --estimate-only
+```
+
+The full `BASELINE / RULE / HMM` comparison requires the explicit
+`--confirm-long-run` flag. It is never invoked by Telegram or the scheduler.

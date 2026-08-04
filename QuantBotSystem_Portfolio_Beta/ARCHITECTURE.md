@@ -171,7 +171,7 @@ portfolio returns.
 The portfolio ledger has an optional developer-only hook immediately before a
 new entry cohort is allocated. It receives an allowlisted copy of signal-time
 fields plus the prior-close portfolio state and may return only a cohort gross
-scale and one `0..1` multiplier per exact trade id. Default `None` preserves
+scale and one non-negative multiplier per exact trade id. Default `None` preserves
 the production calculation. Existing quantities, exits, signal direction, and
 all gross/side/name hard caps remain outside the hook.
 
@@ -179,3 +179,14 @@ all gross/side/name hard caps remain outside the hook.
 policy trained against exact daily portfolio NAV and ACWI-relative return with
 a baseline-CVaR constraint. It is research infrastructure only and has no
 Telegram, scheduled-scan, or deployment path.
+
+`portfolio_hmm_overlay.py` uses the same boundary with `hmmlearn`'s two-state
+Gaussian HMM. It builds close-known ACWI and universe features, fits only on
+earlier observations, and returns filtered `TREND / NON_TREND` probabilities.
+Momentum receives the trend preference while Box Range and Reversion receive
+the non-trend preference. The policy preserves each side's requested entry
+gross while redistributing it among eligible strategies; missing probabilities
+pass through at `1.0`. `experiment_portfolio_hmm_overlay.py` compares the
+combined three-strategy portfolio under `BASELINE`, a past-only rule, and HMM.
+It reads the local cache only, requires an explicit long-run confirmation, and
+is not imported by Telegram, scheduled scans, Classic Beta, or deployment.
