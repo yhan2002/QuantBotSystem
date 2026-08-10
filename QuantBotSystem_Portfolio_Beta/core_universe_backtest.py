@@ -461,6 +461,7 @@ def _portfolio_lines(result):
             f"Exposure: avg gross {average_gross:.1f}% | max gross {max_gross:.1f}% | "
             f"entry caps gross {policy['max_gross'] * 100:.0f}%, "
             f"name {policy['max_name_weight'] * 100:.0f}%, "
+            f"positions {policy.get('max_positions', 30)}, "
             f"long {policy['long_cap'] * 100:.0f}%, "
             f"short {policy['short_cap'] * 100:.0f}%"
         ),

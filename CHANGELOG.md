@@ -4,6 +4,14 @@
 
 ## 2026-08-10
 
+### Reversion BRAIN score-weighted engine
+
+- Portfolio Beta Reversion의 기본 점수를 BRAIN unit-safe 국가별 잔차로
+  교체하고, 기존 score-weighted allocator가 종목별 진입 비중을 결정하도록
+  연결했습니다.
+- 기존 충격 진입·next-open·청산 규칙과 5% 종목 한도는 유지하고, 전체
+  포트폴리오의 동시 활성 포지션을 최대 30개로 제한했습니다.
+
 ### Unified Beta runtime
 
 - Classic Beta 전용 실행 소스가 없고 Portfolio Beta가 공통 전략의 상위집합임을

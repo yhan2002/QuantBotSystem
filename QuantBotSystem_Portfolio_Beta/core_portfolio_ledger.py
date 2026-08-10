@@ -477,7 +477,6 @@ def simulate_portfolio(
             prior_close_state,
         )
         prepared = []
-        requested_legs = []
         for trade in cohort:
             requested_weight = min(
                 policy.max_name_weight,
@@ -503,7 +502,6 @@ def simulate_portfolio(
                         "direction": direction,
                     }
                     legs.append(prepared_leg)
-                requested_legs.extend(legs)
                 prepared.append((trade, desired_base, legs))
             except ValueError as exc:
                 allocation_by_id[trade["trade_id"]] = {
@@ -511,6 +509,24 @@ def simulate_portfolio(
                     "allocated_base_notional": 0.0,
                     "reason": str(exc),
                 }
+
+        active_positions = len({lot["trade_id"] for lot in open_lots})
+        available_positions = max(0, policy.max_positions - active_positions)
+        prepared.sort(
+            key=lambda item: (
+                -float(item[0].get("requested_weight", 0.0)),
+                str(item[0].get("strategy") or ""),
+                str(item[0].get("ticker") or ""),
+                str(item[0].get("trade_id") or ""),
+            )
+        )
+        for trade, _, _ in prepared[available_positions:]:
+            allocation_by_id[trade["trade_id"]] = {
+                "allocation_status": "SKIPPED_POSITION_LIMIT",
+                "allocated_base_notional": 0.0,
+            }
+        prepared = prepared[:available_positions]
+        requested_legs = [leg for _, _, legs in prepared for leg in legs]
 
         scale = cohort_capacity_scale(
             requested_legs,

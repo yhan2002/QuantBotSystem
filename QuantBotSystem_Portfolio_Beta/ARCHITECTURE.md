@@ -89,6 +89,7 @@ Default limits:
 - initial NAV: 100;
 - maximum total gross at new-entry sizing: 100% of NAV;
 - maximum security gross: 5% of NAV;
+- maximum simultaneous positions: 30;
 - Long Only: long 100%, short 0%;
 - Short Only: long 0%, short 100%;
 - Long/Short: long 50%, short 50%.
@@ -122,7 +123,9 @@ last available close, rather than omitted from end-of-window NAV.
   - `TREND / RISING_PULLBACK`;
   - `TREND / FALLING_RALLY`;
   - `TRANSITION` remains non-tradable.
-- Reversion remains unchanged as a raw-price mean-reversion strategy.
+- Reversion keeps its shock entry and exit lifecycle, but its production
+  candidate score is the country-cohort BRAIN unit-safe residual. The normal
+  score-weighted allocator converts that score to entry size.
 
 ## Reporting
 
@@ -191,22 +194,26 @@ combined three-strategy portfolio under `BASELINE`, a past-only rule, and HMM.
 It reads the local cache only, requires an explicit long-run confirmation, and
 is not imported by Telegram, scheduled scans, Classic Beta, or deployment.
 
-## Experimental Reversion BRAIN alpha filters
+## Reversion BRAIN score weighting
 
-Reversion exposes an opt-in signal-score filter before entry-date
-neutralization and ranking. `OFF` is the default and bypasses the hook, so the
-existing shock, close confirmation, next-open entry, exits, allocator, and
-ledger remain unchanged. The research variants are:
+Reversion applies the unit-safe BRAIN residual before entry-date neutralization
+and ranking. The existing shock, close confirmation, next-open entry, exits,
+allocator, and ledger remain unchanged. The residual replaces the baseline
+shock magnitude for score-proportional sizing; missing, zero, or
+direction-inconsistent residuals do not enter. The compatibility variants are:
 
 - `APAC_UNIT_SAFE_FILTER`: CH/JP/KR country cohorts use the signed residual of
   long-window return z-score against short-window return z-score;
 - `APAC_EXACT_FILTER`: CH/JP/KR country cohorts reproduce the price-rank versus
   price-volatility vector projection and retain its known price-unit warning.
 
-US always passes through the baseline. Each factor uses only raw `Close`
+The production score-weighted policy covers US/CH/JP/KR in separate country
+cohorts. The older APAC filter variants keep US passthrough for research
+compatibility. Each factor uses only raw `Close`
 observations through the signal date, requires 252 observations and at least
-20 eligible securities in the same listing-country cohort, and falls back to
-baseline when history or the cross-sectional regression is insufficient.
+20 eligible securities in the same listing-country cohort. Compatibility
+filters fall back to baseline when the cohort is insufficient; the production
+score-weighted policy skips that entry.
 Finite alpha must agree with the existing Reversion side; zero or opposite
 alpha rejects the candidate. The experiment uses the configured static group
 intersected with securities that have a valid signal-date close. Historical

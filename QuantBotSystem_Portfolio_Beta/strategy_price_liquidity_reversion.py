@@ -33,6 +33,7 @@ REVERSION_STOP_ATR = 1.50
 BRAIN_ALPHA_OFF = "OFF"
 BRAIN_ALPHA_APAC_EXACT = "APAC_EXACT_FILTER"
 BRAIN_ALPHA_APAC_UNIT_SAFE = "APAC_UNIT_SAFE_FILTER"
+BRAIN_ALPHA_SCORE_WEIGHTED = "SCORE_WEIGHTED"
 BRAIN_ALPHA_LOOKBACK = 252
 BRAIN_ALPHA_HISTORY_DAYS = 1460
 BRAIN_ALPHA_MIN_COHORT = 20
@@ -49,6 +50,12 @@ BRAIN_ALPHA_COUNTRY_POLICY = {
         "JP": "UNIT_SAFE",
         "KR": "UNIT_SAFE",
     },
+    BRAIN_ALPHA_SCORE_WEIGHTED: {
+        "US": "UNIT_SAFE",
+        "CH": "UNIT_SAFE",
+        "JP": "UNIT_SAFE",
+        "KR": "UNIT_SAFE",
+    },
 }
 
 
@@ -57,6 +64,15 @@ def normalize_brain_alpha_policy(policy):
     if normalized not in BRAIN_ALPHA_COUNTRY_POLICY:
         raise ValueError(f"Unknown BRAIN alpha policy: {policy}")
     return normalized
+
+
+def _brain_sizing_report_line(policy):
+    policy = normalize_brain_alpha_policy(policy)
+    if policy == BRAIN_ALPHA_SCORE_WEIGHTED:
+        return "Sizing: BRAIN unit-safe cross-sectional score; max 30 open positions."
+    if policy == BRAIN_ALPHA_OFF:
+        return "Sizing: baseline shock score; max 30 open positions."
+    return f"Sizing: baseline shock score with {policy}; max 30 open positions."
 
 
 def brain_alpha_variant_for_country(policy, listing_country):
@@ -222,6 +238,33 @@ def filter_reversion_candidates(rows, alpha_scores, metadata_by_ticker, policy):
         country = (metadata_by_ticker.get(ticker) or {}).get("listing_country")
         variant = brain_alpha_variant_for_country(policy, country)
         alpha_score = alpha_scores.get(ticker)
+        if policy == BRAIN_ALPHA_SCORE_WEIGHTED:
+            if variant is None or alpha_score is None:
+                continue
+            side_matches = (
+                row["side"] == "LONG" and alpha_score > BRAIN_ALPHA_EPSILON
+            ) or (
+                row["side"] == "SHORT" and alpha_score < -BRAIN_ALPHA_EPSILON
+            )
+            if side_matches:
+                selected.append(
+                    {
+                        **row,
+                        **(
+                            {"score": float(alpha_score)}
+                            if "score" in row
+                            else {}
+                        ),
+                        **(
+                            {"signal_score": float(alpha_score)}
+                            if "signal_score" in row
+                            else {}
+                        ),
+                        "brain_alpha_policy": policy,
+                        "brain_alpha_score": float(alpha_score),
+                    }
+                )
+            continue
         if variant is None or alpha_score is None:
             selected.append(row)
             continue
@@ -712,7 +755,7 @@ def scan_value_reversion(
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
     report_artifacts=None,
-    brain_alpha_policy=BRAIN_ALPHA_OFF,
+    brain_alpha_policy=BRAIN_ALPHA_SCORE_WEIGHTED,
 ):
     brain_alpha_policy = normalize_brain_alpha_policy(brain_alpha_policy)
     brain_alpha_overlay = build_brain_alpha_trade_overlay(brain_alpha_policy)
@@ -745,10 +788,8 @@ def scan_value_reversion(
 
     if brain_alpha_overlay is not None:
         scored = brain_alpha_overlay(scored, universe_list)
-        selected_tickers = {row["ticker"] for row in scored}
-        for ticker in raw_scores:
-            if raw_scores[ticker] and ticker not in selected_tickers:
-                raw_scores[ticker] = 0.0
+        raw_scores = {ticker: 0.0 for ticker in raw_scores}
+        raw_scores.update({row["ticker"]: row["score"] for row in scored})
 
     neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
         raw_scores, neutralization
@@ -844,6 +885,7 @@ def scan_value_reversion(
         "=============================\n\n"
         f"{core_cross_sectional_neutralization.report_line(neutralization, raw_scores)}\n"
         f"{core_position_mode.report_line(position_mode)}\n"
+        f"{_brain_sizing_report_line(brain_alpha_policy)}\n"
         "Scope: today's candidates and entry-date IS/OOS cross-sections; current metadata labels.\n\n"
         "**LONG Candidates**\n"
         "Rule: 5d downside shock <= -1.40σ within 3d, near-flat/up MA60, positive rebound close, turnover <2.0x.\n"

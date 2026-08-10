@@ -15,6 +15,7 @@ class PortfolioPolicy:
     long_cap: float | None = None
     short_cap: float | None = None
     position_mode: str = core_position_mode.LONG_SHORT_NEUTRAL
+    max_positions: int = 30
 
     def __post_init__(self):
         try:
@@ -47,6 +48,19 @@ class PortfolioPolicy:
             if not math.isfinite(value):
                 raise ValueError(f"{name} must be finite")
             object.__setattr__(self, name, value)
+
+        try:
+            max_positions = int(self.max_positions)
+            raw_max_positions = float(self.max_positions)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("max_positions must be a positive integer") from exc
+        if (
+            not math.isfinite(raw_max_positions)
+            or raw_max_positions != max_positions
+            or max_positions <= 0
+        ):
+            raise ValueError("max_positions must be a positive integer")
+        object.__setattr__(self, "max_positions", max_positions)
 
         mode = core_position_mode.normalize_mode(self.position_mode)
         object.__setattr__(self, "position_mode", mode)
