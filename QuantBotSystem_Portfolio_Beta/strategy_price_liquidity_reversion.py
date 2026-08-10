@@ -30,6 +30,318 @@ REVERSION_NO_PROGRESS_DAYS = 3
 REVERSION_MAX_HOLDING_DAYS = 10
 REVERSION_STOP_ATR = 1.50
 
+BRAIN_ALPHA_OFF = "OFF"
+BRAIN_ALPHA_APAC_EXACT = "APAC_EXACT_FILTER"
+BRAIN_ALPHA_APAC_UNIT_SAFE = "APAC_UNIT_SAFE_FILTER"
+BRAIN_ALPHA_LOOKBACK = 252
+BRAIN_ALPHA_HISTORY_DAYS = 1460
+BRAIN_ALPHA_MIN_COHORT = 20
+BRAIN_ALPHA_EPSILON = 1e-12
+BRAIN_ALPHA_COUNTRY_POLICY = {
+    BRAIN_ALPHA_OFF: {},
+    BRAIN_ALPHA_APAC_EXACT: {
+        "CH": "EXACT",
+        "JP": "EXACT",
+        "KR": "EXACT",
+    },
+    BRAIN_ALPHA_APAC_UNIT_SAFE: {
+        "CH": "UNIT_SAFE",
+        "JP": "UNIT_SAFE",
+        "KR": "UNIT_SAFE",
+    },
+}
+
+
+def normalize_brain_alpha_policy(policy):
+    normalized = str(policy or BRAIN_ALPHA_OFF).strip().upper()
+    if normalized not in BRAIN_ALPHA_COUNTRY_POLICY:
+        raise ValueError(f"Unknown BRAIN alpha policy: {policy}")
+    return normalized
+
+
+def brain_alpha_variant_for_country(policy, listing_country):
+    policy = normalize_brain_alpha_policy(policy)
+    return BRAIN_ALPHA_COUNTRY_POLICY[policy].get(
+        str(listing_country or "").strip().upper()
+    )
+
+
+def _close_asof(frame, signal_date):
+    if frame is None or frame.empty or "Close" not in frame.columns:
+        return pd.Series(dtype=float)
+    close = pd.to_numeric(frame["Close"], errors="coerce").copy()
+    close.index = pd.to_datetime(close.index, errors="coerce")
+    close = close[~close.index.isna()].sort_index()
+    close = close[~close.index.duplicated(keep="last")]
+    cutoff = pd.Timestamp(signal_date)
+    if cutoff.tzinfo is not None:
+        cutoff = cutoff.tz_localize(None)
+    if close.index.tz is not None:
+        close.index = close.index.tz_localize(None)
+    return close.loc[:cutoff]
+
+
+def _backfilled_tail(series):
+    values = pd.to_numeric(series, errors="coerce").ffill(limit=BRAIN_ALPHA_LOOKBACK)
+    values = values.tail(BRAIN_ALPHA_LOOKBACK)
+    if len(values) < BRAIN_ALPHA_LOOKBACK or values.isna().any():
+        return pd.Series(dtype=float)
+    return values.astype(float)
+
+
+def _ts_rank_last(series, window):
+    values = list(series.tail(window))
+    if len(values) < window:
+        return None
+    last = values[-1]
+    lower = sum(value < last for value in values)
+    equal = sum(value == last for value in values)
+    average_zero_based_rank = lower + (equal - 1.0) / 2.0
+    return average_zero_based_rank / (len(values) - 1.0)
+
+
+def _ts_zscore_last(series, window):
+    values = series.tail(window)
+    if len(values) < window:
+        return None
+    deviation = float(values.std(ddof=0))
+    if not math.isfinite(deviation) or deviation <= 0.0:
+        return None
+    return (float(values.iloc[-1]) - float(values.mean())) / deviation
+
+
+def _brain_alpha_inputs(frame, signal_date, variant):
+    close = _close_asof(frame, signal_date)
+    cutoff = pd.Timestamp(signal_date)
+    if cutoff.tzinfo is not None:
+        cutoff = cutoff.tz_localize(None)
+    if close.empty or close.index[-1].normalize() != cutoff.normalize():
+        return None
+    if variant == "EXACT":
+        values = _backfilled_tail(close)
+        if values.empty:
+            return None
+        rank = _ts_rank_last(values, 5)
+        deviation = float(values.tail(126).std(ddof=0))
+        if rank is None or not math.isfinite(deviation) or deviation <= 0.0:
+            return None
+        return -rank, -deviation
+    if variant == "UNIT_SAFE":
+        returns = _backfilled_tail(close.pct_change(fill_method=None))
+        if returns.empty:
+            return None
+        slow = _ts_zscore_last(returns, 126)
+        fast = _ts_zscore_last(returns, 5)
+        if slow is None or fast is None:
+            return None
+        return -slow, -fast
+    raise ValueError(f"Unknown BRAIN alpha variant: {variant}")
+
+
+def _cross_sectional_residuals(
+    inputs,
+    *,
+    intercept,
+    min_cohort=BRAIN_ALPHA_MIN_COHORT,
+    epsilon=BRAIN_ALPHA_EPSILON,
+):
+    if len(inputs) < min_cohort:
+        return {}
+    tickers = sorted(inputs)
+    x_values = [inputs[ticker][0] for ticker in tickers]
+    y_values = [inputs[ticker][1] for ticker in tickers]
+    if intercept:
+        x_mean = sum(x_values) / len(x_values)
+        y_mean = sum(y_values) / len(y_values)
+        denominator = sum((value - y_mean) ** 2 for value in y_values)
+        if denominator <= epsilon:
+            return {}
+        beta = sum(
+            (x_value - x_mean) * (y_value - y_mean)
+            for x_value, y_value in zip(x_values, y_values)
+        ) / denominator
+        alpha = x_mean - beta * y_mean
+    else:
+        denominator = sum(value * value for value in y_values)
+        if denominator <= epsilon:
+            return {}
+        beta = sum(
+            x_value * y_value
+            for x_value, y_value in zip(x_values, y_values)
+        ) / denominator
+        alpha = 0.0
+    return {
+        ticker: x_value - (alpha + beta * y_value)
+        for ticker, x_value, y_value in zip(tickers, x_values, y_values)
+    }
+
+
+def brain_alpha_scores(
+    prices_by_ticker,
+    metadata_by_ticker,
+    signal_date,
+    policy,
+    *,
+    min_cohort=BRAIN_ALPHA_MIN_COHORT,
+):
+    policy = normalize_brain_alpha_policy(policy)
+    if policy == BRAIN_ALPHA_OFF:
+        return {}
+    grouped = {}
+    for ticker in sorted(prices_by_ticker):
+        frame = prices_by_ticker[ticker]
+        country = str(
+            (metadata_by_ticker.get(ticker) or {}).get("listing_country") or ""
+        ).strip().upper()
+        variant = brain_alpha_variant_for_country(policy, country)
+        if variant is None:
+            continue
+        inputs = _brain_alpha_inputs(frame, signal_date, variant)
+        if inputs is not None:
+            grouped.setdefault((country, variant), {})[ticker] = inputs
+    scores = {}
+    for country, variant in sorted(grouped):
+        inputs = grouped[(country, variant)]
+        scores.update(
+            _cross_sectional_residuals(
+                inputs,
+                intercept=variant == "UNIT_SAFE",
+                min_cohort=min_cohort,
+            )
+        )
+    return scores
+
+
+def filter_reversion_candidates(rows, alpha_scores, metadata_by_ticker, policy):
+    policy = normalize_brain_alpha_policy(policy)
+    if policy == BRAIN_ALPHA_OFF:
+        return rows
+    selected = []
+    for row in rows:
+        ticker = row["ticker"]
+        country = (metadata_by_ticker.get(ticker) or {}).get("listing_country")
+        variant = brain_alpha_variant_for_country(policy, country)
+        alpha_score = alpha_scores.get(ticker)
+        if variant is None or alpha_score is None:
+            selected.append(row)
+            continue
+        side_matches = (
+            row["side"] == "LONG" and alpha_score > BRAIN_ALPHA_EPSILON
+        ) or (
+            row["side"] == "SHORT" and alpha_score < -BRAIN_ALPHA_EPSILON
+        )
+        if side_matches:
+            selected.append(
+                {
+                    **row,
+                    "brain_alpha_policy": policy,
+                    "brain_alpha_score": float(alpha_score),
+                }
+            )
+    return selected
+
+
+def apply_brain_alpha_policy(
+    rows,
+    prices_by_ticker,
+    metadata_by_ticker,
+    policy,
+    *,
+    date_key="signal_date",
+):
+    policy = normalize_brain_alpha_policy(policy)
+    if policy == BRAIN_ALPHA_OFF:
+        return rows
+    cohorts = {}
+    for row in rows:
+        cohorts.setdefault(row.get(date_key), []).append(row)
+    selected = []
+    for signal_date, cohort in cohorts.items():
+        scores = brain_alpha_scores(
+            prices_by_ticker,
+            metadata_by_ticker,
+            signal_date,
+            policy,
+        )
+        selected.extend(
+            filter_reversion_candidates(
+                cohort,
+                scores,
+                metadata_by_ticker,
+                policy,
+            )
+        )
+    return selected
+
+
+def build_brain_alpha_trade_overlay(
+    policy,
+    *,
+    price_loader=None,
+    metadata_loader=None,
+):
+    policy = normalize_brain_alpha_policy(policy)
+    if policy == BRAIN_ALPHA_OFF:
+        return None
+    price_loader = price_loader or core_market_data_store.get_price_data
+    metadata_loader = metadata_loader or core_market_data_store.get_security_metadata
+    prices_by_ticker = {}
+    metadata_by_ticker = {}
+
+    def overlay(rows, eligible_tickers):
+        if not rows:
+            return rows
+        tickers = list(dict.fromkeys(eligible_tickers))
+        missing_metadata = [ticker for ticker in tickers if ticker not in metadata_by_ticker]
+        if missing_metadata:
+            loaded = metadata_loader(missing_metadata)
+            for ticker in missing_metadata:
+                metadata = dict(loaded.get(ticker) or {})
+                metadata["listing_country"] = metadata.get(
+                    "listing_country"
+                ) or core_market_data_store._infer_listing_country(ticker)
+                metadata_by_ticker[ticker] = metadata
+        for ticker in tickers:
+            if ticker not in prices_by_ticker:
+                try:
+                    prices_by_ticker[ticker] = price_loader(
+                        ticker,
+                        period_days=BRAIN_ALPHA_HISTORY_DAYS,
+                    )
+                except TypeError:
+                    prices_by_ticker[ticker] = price_loader(ticker)
+        date_key = "signal_date"
+        prepared_rows = rows
+        if rows and all(not row.get("signal_date") for row in rows):
+            date_key = "_brain_signal_date"
+            prepared_rows = []
+            for row in rows:
+                frame = prices_by_ticker.get(row["ticker"])
+                if frame is None or frame.empty:
+                    prepared_rows.append(row)
+                    continue
+                prepared_rows.append(
+                    {
+                        **row,
+                        date_key: pd.Timestamp(frame.index[-1]).date().isoformat(),
+                    }
+                )
+        selected = apply_brain_alpha_policy(
+            prepared_rows,
+            prices_by_ticker,
+            metadata_by_ticker,
+            policy,
+            date_key=date_key,
+        )
+        if date_key == "_brain_signal_date":
+            return [
+                {key: value for key, value in row.items() if key != date_key}
+                for row in selected
+            ]
+        return selected
+
+    return overlay
+
 
 def _normalize_ohlcv(prices):
     if prices is None or prices.empty:
@@ -400,7 +712,10 @@ def scan_value_reversion(
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
     report_artifacts=None,
+    brain_alpha_policy=BRAIN_ALPHA_OFF,
 ):
+    brain_alpha_policy = normalize_brain_alpha_policy(brain_alpha_policy)
+    brain_alpha_overlay = build_brain_alpha_trade_overlay(brain_alpha_policy)
     scored, failed = [], []
     raw_scores = {}
     total_tickers = len(universe_list)
@@ -427,6 +742,13 @@ def scan_value_reversion(
                 ticker,
                 succeeded,
             )
+
+    if brain_alpha_overlay is not None:
+        scored = brain_alpha_overlay(scored, universe_list)
+        selected_tickers = {row["ticker"] for row in scored}
+        for ticker in raw_scores:
+            if raw_scores[ticker] and ticker not in selected_tickers:
+                raw_scores[ticker] = 0.0
 
     neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
         raw_scores, neutralization
@@ -456,6 +778,11 @@ def scan_value_reversion(
                 signal_date="LATEST_CLOSE",
                 raw_score=row["score"],
                 status=row["status"],
+                metadata={
+                    key: row[key]
+                    for key in ("brain_alpha_policy", "brain_alpha_score")
+                    if key in row
+                },
                 entry_execution="NEXT_OPEN",
             ),
             row["neutralized_score"],
@@ -491,6 +818,7 @@ def scan_value_reversion(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        signal_score_overlay=brain_alpha_overlay,
         progress_callback=_stage_progress_callback(
             progress_callback, "IS_BACKTEST"
         ),
@@ -504,6 +832,7 @@ def scan_value_reversion(
         neutralization=neutralization,
         position_mode=position_mode,
         portfolio_accounting=True,
+        signal_score_overlay=brain_alpha_overlay,
         progress_callback=_stage_progress_callback(
             progress_callback, "OOS_BACKTEST"
         ),

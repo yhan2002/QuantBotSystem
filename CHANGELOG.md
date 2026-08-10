@@ -2,6 +2,20 @@
 
 프로젝트의 주간 변경사항을 배포판과 베타판으로 구분해 기록합니다.
 
+## 2026-08-10
+
+### Portfolio Beta Reversion BRAIN alpha A/B
+
+- 기존 Reversion의 충격·종가확인·next-open·부분청산·손절·시간청산을 유지한 채,
+  공통 signal-score 경계에 기본 OFF인 국가별 BRAIN alpha filter를 추가했습니다.
+- CH/JP/KR은 국가별 20종목 이상 신호일 cohort에서 원식 재현형
+  `APAC_EXACT_FILTER`와 수익률 단위 안전형 `APAC_UNIT_SAFE_FILTER`를 분리했습니다.
+  US는 기존 Reversion을 그대로 사용하며 252일 이력·회귀 조건 부족 시 baseline으로
+  통과합니다.
+- 로컬 캐시 전용 `BASELINE / APAC_EXACT_FILTER / APAC_UNIT_SAFE_FILTER` 비교 명령을
+  추가했습니다. 전체 유니버스 A/B, 데이터 다운로드, Telegram 실행은 수행하지
+  않았습니다.
+
 ## 2026-08-04
 
 - Portfolio Beta에 시장 국면별 전략 자본 배분을 연구하는 2-state Gaussian HMM overlay를 추가했습니다. ACWI 수익률·실현변동성·추세 강도와 유니버스 breadth·dispersion을 종가 시점 정보만으로 계산하고, expanding walk-forward 재학습으로 `TREND / NON_TREND` 확률을 산출합니다.

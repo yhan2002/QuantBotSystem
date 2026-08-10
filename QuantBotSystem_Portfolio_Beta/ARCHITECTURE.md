@@ -190,3 +190,25 @@ pass through at `1.0`. `experiment_portfolio_hmm_overlay.py` compares the
 combined three-strategy portfolio under `BASELINE`, a past-only rule, and HMM.
 It reads the local cache only, requires an explicit long-run confirmation, and
 is not imported by Telegram, scheduled scans, Classic Beta, or deployment.
+
+## Experimental Reversion BRAIN alpha filters
+
+Reversion exposes an opt-in signal-score filter before entry-date
+neutralization and ranking. `OFF` is the default and bypasses the hook, so the
+existing shock, close confirmation, next-open entry, exits, allocator, and
+ledger remain unchanged. The research variants are:
+
+- `APAC_UNIT_SAFE_FILTER`: CH/JP/KR country cohorts use the signed residual of
+  long-window return z-score against short-window return z-score;
+- `APAC_EXACT_FILTER`: CH/JP/KR country cohorts reproduce the price-rank versus
+  price-volatility vector projection and retain its known price-unit warning.
+
+US always passes through the baseline. Each factor uses only raw `Close`
+observations through the signal date, requires 252 observations and at least
+20 eligible securities in the same listing-country cohort, and falls back to
+baseline when history or the cross-sectional regression is insufficient.
+Finite alpha must agree with the existing Reversion side; zero or opposite
+alpha rejects the candidate. The experiment uses the configured static group
+intersected with securities that have a valid signal-date close. Historical
+universe-membership snapshots are not stored, so results must not be described
+as point-in-time constituent membership beyond that static-group contract.

@@ -208,6 +208,7 @@ def aggregate_universe_backtest(
     position_mode="LONG_SHORT_NEUTRAL",
     portfolio_accounting=False,
     portfolio_policy=None,
+    signal_score_overlay=None,
     price_availability_loader=None,
     market_benchmark_loader=None,
     progress_callback=None,
@@ -273,6 +274,9 @@ def aggregate_universe_backtest(
                 ticker,
                 succeeded,
             )
+
+    if signal_score_overlay is not None:
+        all_trades = signal_score_overlay(all_trades, eligible_names)
 
     all_trades = _neutralize_trade_entries(
         all_trades,

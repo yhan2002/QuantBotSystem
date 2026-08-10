@@ -126,3 +126,23 @@ Set-Location .\QuantBotSystem_Portfolio_Beta
 
 The full `BASELINE / RULE / HMM` comparison requires the explicit
 `--confirm-long-run` flag. It is never invoked by Telegram or the scheduler.
+
+Inspect the local-only Reversion BRAIN alpha comparison before authorizing it:
+
+```powershell
+Set-Location .\QuantBotSystem_Portfolio_Beta
+python .\experiment_reversion_brain_alpha.py --group CSQ_UNIV --estimate-only
+```
+
+The guarded full comparison is never called by Telegram or the scheduler:
+
+```powershell
+python .\experiment_reversion_brain_alpha.py `
+  --group CSQ_UNIV `
+  --confirm-long-run `
+  --output .\data\backtest_exports\reversion_brain_alpha.json
+```
+
+It reads only the existing local cache and compares `BASELINE`,
+`APAC_EXACT_FILTER`, and `APAC_UNIT_SAFE_FILTER`. The exact filter retains the
+BRAIN price-unit warning; both filters remain research-only and default OFF.
