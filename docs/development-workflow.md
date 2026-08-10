@@ -9,8 +9,8 @@
 
 ## 대상 선택
 
-- Classic 전략·UI·공통 런타임 실험: `QuantBotSystem_Beta/`
-- 점수 비중·포트폴리오 원장·Portfolio UI: `QuantBotSystem_Portfolio_Beta/`
+- 전략·UI·점수 비중·포트폴리오 원장: `QuantBotSystem_Portfolio_Beta/`
+- `QuantBotSystem_Beta/`: 기존 비밀 설정·시장 DB 호환 전용, 신규 실행 변경 금지
 - 버전 선택·잠금·프로세스 수명: 저장소 루트 selector
 - 배포 반영: Beta 검증 후 명시적으로 승인된 파일만 `QuantBotSystem/`
 

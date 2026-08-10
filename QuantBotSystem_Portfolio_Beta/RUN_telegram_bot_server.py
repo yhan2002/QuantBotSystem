@@ -1050,7 +1050,7 @@ def handle_add_ticker(message):
             config.universe.remove(new_ticker)
             bot.reply_to(
                 message,
-                "Persistent /add is unavailable in Portfolio Beta. "
+                "Persistent /add is unavailable in QuantBot Beta. "
                 "Use /menu -> Settings -> Universe -> Set Direct Input.",
             )
     except Exception as e:
@@ -1084,7 +1084,7 @@ def handle_del_ticker(message):
             config.universe.sort()
             bot.reply_to(
                 message,
-                "Persistent /del is unavailable in Portfolio Beta. "
+                "Persistent /del is unavailable in QuantBot Beta. "
                 "Use /menu -> Settings -> Universe -> Set Direct Input.",
             )
     except Exception as e:

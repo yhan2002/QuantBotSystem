@@ -4,6 +4,14 @@
 
 ## 2026-08-10
 
+### Unified Beta runtime
+
+- Classic Beta 전용 실행 소스가 없고 Portfolio Beta가 공통 전략의 상위집합임을
+  확인해 `QuantBotSystem_Portfolio_Beta`를 단일 Beta 실행선으로 통합했습니다.
+- selector의 새 표준 이름은 `BETA`이며 기존 `CLASSIC_BETA`와 `PORTFOLIO_BETA`는
+  저장된 명령·예약 작업 호환을 위해 모두 같은 통합 런타임으로 연결됩니다.
+- 비밀 설정과 기존 시장 DB는 이동하지 않고 레거시 Classic 경로를 재사용합니다.
+
 ### Portfolio Beta Reversion BRAIN alpha A/B
 
 - 기존 Reversion의 충격·종가확인·next-open·부분청산·손절·시간청산을 유지한 채,

@@ -10,11 +10,11 @@ import RUN_quantbot_version_switch as selector
 
 
 class ActiveVersionTests(unittest.TestCase):
-    def test_missing_file_defaults_to_classic_beta(self):
+    def test_missing_file_defaults_to_unified_beta(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "active_version.local.json"
             self.assertEqual(
-                selector.CLASSIC_BETA,
+                selector.BETA,
                 selector.read_selected_version(path),
             )
 
@@ -22,32 +22,40 @@ class ActiveVersionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "active_version.local.json"
             selected = selector.save_selected_version(
-                selector.PORTFOLIO_BETA, path
+                selector.BETA, path
             )
 
-            self.assertEqual(selector.PORTFOLIO_BETA, selected)
+            self.assertEqual(selector.BETA, selected)
             self.assertEqual(
-                selector.PORTFOLIO_BETA,
+                selector.BETA,
                 selector.read_selected_version(path),
             )
             self.assertEqual(
-                selector.PORTFOLIO_BETA,
+                selector.BETA,
                 json.loads(path.read_text(encoding="utf-8"))["active_version"],
             )
+
+    def test_legacy_beta_names_resolve_to_unified_beta(self):
+        self.assertEqual(selector.BETA, selector.normalize_version("CLASSIC_BETA"))
+        self.assertEqual(selector.BETA, selector.normalize_version("PORTFOLIO_BETA"))
+        args = selector.build_parser().parse_args(["run", "CLASSIC_BETA"])
+        self.assertEqual(selector.BETA, args.version)
 
     def test_invalid_selected_version_is_rejected(self):
         with self.assertRaises(selector.SelectorError):
             selector.normalize_version("experimental")
+        with self.assertRaisesRegex(selector.argparse.ArgumentTypeError, "BETA"):
+            selector.parse_version("experimental")
 
 
 class ChildEnvironmentTests(unittest.TestCase):
     def test_portfolio_reuses_beta_private_config_and_market_database(self):
         environment = selector.build_child_environment(
-            selector.PORTFOLIO_BETA, {"PATH": "test-path"}
+            selector.BETA, {"PATH": "test-path"}
         )
 
-        classic_dir = selector.VERSION_SPECS[selector.CLASSIC_BETA].directory
-        portfolio_dir = selector.VERSION_SPECS[selector.PORTFOLIO_BETA].directory
+        classic_dir = selector.CLASSIC_DATA_DIR
+        portfolio_dir = selector.VERSION_SPECS[selector.BETA].directory
         self.assertEqual(
             str((classic_dir / "config.local.py").resolve()),
             environment["QUANTBOT_CONFIG_PATH"],
@@ -64,9 +72,9 @@ class ChildEnvironmentTests(unittest.TestCase):
             str((portfolio_dir / "data" / "state").resolve()),
             environment["QUANTBOT_STATE_DIR"],
         )
-        self.assertEqual("2026.07.27", environment["QUANTBOT_BUILD"])
+        self.assertEqual("2026.08.10", environment["QUANTBOT_BUILD"])
 
-    def test_classic_clears_inherited_portfolio_paths(self):
+    def test_legacy_classic_alias_uses_unified_environment(self):
         inherited = {"PATH": "test-path"}
         for key in selector.PORTFOLIO_PATH_ENV_KEYS:
             inherited[key] = "should-not-leak"
@@ -77,9 +85,9 @@ class ChildEnvironmentTests(unittest.TestCase):
         )
 
         for key in selector.PORTFOLIO_PATH_ENV_KEYS:
-            self.assertNotIn(key, environment)
-        self.assertNotIn("QUANTBOT_BUILD", environment)
-        self.assertEqual(selector.CLASSIC_BETA, environment["QUANTBOT_VERSION"])
+            self.assertIn(key, environment)
+        self.assertEqual("2026.08.10", environment["QUANTBOT_BUILD"])
+        self.assertEqual(selector.BETA, environment["QUANTBOT_VERSION"])
 
 
 class PollerLockTests(unittest.TestCase):

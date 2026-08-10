@@ -26,8 +26,8 @@
 ## 필수 규칙
 
 - `QuantBotSystem/`은 배포선이다. 명시적 승인 없이 직접 수정하지 않는다.
-- Classic 변경은 `QuantBotSystem_Beta/`, 포트폴리오·원장 변경은
-  `QuantBotSystem_Portfolio_Beta/`에서 먼저 검증한다.
+- Beta 변경은 단일 통합선 `QuantBotSystem_Portfolio_Beta/`에서 검증한다.
+  `QuantBotSystem_Beta/`는 기존 비밀 설정·시장 DB 호환을 위해 보존한다.
 - 사용자 변경을 보존하고 버전 폴더 사이를 무조건 덮어쓰지 않는다.
 - 모듈 계층이나 새 파일 접두사를 추가하면 `tools/check_architecture.py`의
   분류 계약도 함께 갱신한다.

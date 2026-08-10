@@ -5,13 +5,14 @@
 | 위치 | 역할 | 수정 원칙 |
 | --- | --- | --- |
 | `QuantBotSystem/` | 검증된 배포선 | 명시적 승인과 Beta 검증 없이 직접 수정하지 않는다 |
-| `QuantBotSystem_Beta/` | Classic Beta 개발·롤백선 | 기존 전략·UI의 실험과 회귀 검증 |
-| `QuantBotSystem_Portfolio_Beta/` | 포트폴리오 개발선 | 점수·비중·원장·비동기 스캔·Portfolio 보고 |
-| `RUN_quantbot_version_switch.py` | Beta 선택·프로세스 잠금 | 두 poller 동시 실행을 막는 루트 경계 |
+| `QuantBotSystem_Beta/` | 레거시 소스·비밀 설정·공유 시장 DB 보존선 | 신규 실행 금지, 기존 로컬 데이터 호환만 유지 |
+| `QuantBotSystem_Portfolio_Beta/` | 단일 통합 Beta 실행선 | Classic 전략과 포트폴리오 원장·비동기 스캔·연구 overlay 포함 |
+| `RUN_quantbot_version_switch.py` | 통합 Beta 실행·프로세스 잠금 | `BETA`를 Portfolio 폴더에 연결하고 기존 이름은 alias로 처리 |
 
-버전 폴더는 코드 복제본이지만 자동 동기화 대상이 아니다. 변경 목적과
-테스트 근거를 확인한 뒤 필요한 파일만 승격한다. 로컬 설정과 데이터는
-복사·승격하지 않는다.
+`QuantBotSystem_Portfolio_Beta/`가 유일한 Beta 런타임이다. 기존
+`CLASSIC_BETA`와 `PORTFOLIO_BETA` 실행 인자는 저장된 작업 호환을 위해 모두
+`BETA`로 정규화한다. 로컬 비밀 설정과 기존 시장 DB는 복사하지 않고 레거시
+폴더의 기존 경로를 계속 사용한다.
 
 Portfolio Beta의 상세 불변식과 저장 경계는
 [`ARCHITECTURE.md`](../QuantBotSystem_Portfolio_Beta/ARCHITECTURE.md),
