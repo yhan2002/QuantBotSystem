@@ -10,6 +10,32 @@ import core_universe_backtest
 
 
 class UniverseBacktestTests(unittest.TestCase):
+    def test_signal_score_overlay_runs_before_cohort_scoring(self):
+        seen = []
+
+        def runner(ticker, include_trades=False, **_kwargs):
+            return 1.0, 100.0, 1, "2025-01-01 to 2025-01-31", [{
+                "side": "LONG",
+                "signal_date": "2025-01-02",
+                "entry_date": "2025-01-03",
+                "exit_date": "2025-01-10",
+                "signal_score": 1.0,
+                "return": 1.0,
+            }]
+
+        def overlay(trades, eligible_tickers):
+            seen.append((len(trades), list(eligible_tickers)))
+            return [trade for trade in trades if trade["ticker"] == "AAA"]
+
+        result = core_universe_backtest.aggregate_universe_backtest(
+            ["AAA", "BBB"],
+            runner,
+            signal_score_overlay=overlay,
+        )
+
+        self.assertEqual(seen, [(2, ["AAA", "BBB"])])
+        self.assertEqual([trade["ticker"] for trade in result["trades"]], ["AAA"])
+
     def test_portfolio_runner_is_capped_to_latest_usable_acwi_date(self):
         seen_ends = []
 
