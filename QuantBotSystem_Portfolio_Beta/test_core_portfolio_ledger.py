@@ -70,6 +70,98 @@ class PortfolioLedgerTests(unittest.TestCase):
             result["trades"][0]["entry_weight_pct"], 5.0
         )
 
+    def test_position_limit_keeps_strongest_entry_scores(self):
+        trades = [
+            {
+                "ticker": ticker,
+                "side": "LONG",
+                "entry_date": "2026-01-02",
+                "signal_score": score,
+                "exit_events": [
+                    {"date": "2026-01-05", "weight": 1.0, "price": 110}
+                ],
+            }
+            for ticker, score in (("AAA", 3.0), ("BBB", 2.0), ("CCC", 1.0))
+        ]
+        frames = {
+            ticker: _prices(
+                [("2026-01-02", 100, 100), ("2026-01-05", 110, 110)]
+            )
+            for ticker in ("AAA", "BBB", "CCC")
+        }
+        result = simulate_portfolio(
+            trades,
+            "2026-01-02",
+            "2026-01-05",
+            price_loader=frames.__getitem__,
+            policy=PortfolioPolicy(
+                max_positions=2,
+                position_mode="LONG_ONLY",
+            ),
+        )
+        status_by_ticker = {
+            trade["ticker"]: trade["allocation_status"]
+            for trade in result["trades"]
+        }
+        self.assertEqual(status_by_ticker["AAA"], "FILLED")
+        self.assertEqual(status_by_ticker["BBB"], "FILLED")
+        self.assertEqual(
+            status_by_ticker["CCC"], "SKIPPED_POSITION_LIMIT"
+        )
+        self.assertLessEqual(result["daily"]["active_positions"].max(), 2)
+
+    def test_missing_open_does_not_consume_position_slot(self):
+        frames = {
+            "AAA": _prices(
+                [("2026-01-02", 100, 100), ("2026-01-05", 110, 110)]
+            ),
+            "BBB": _prices(
+                [("2026-01-02", 50, 50), ("2026-01-05", 50, 50)]
+            ),
+            "CCC": _prices([("2026-01-05", 25, 25)]),
+        }
+        trades = [
+            {
+                "ticker": "BBB",
+                "side": "LONG",
+                "entry_date": "2026-01-02",
+                "signal_score": 2.0,
+                "legs": [
+                    {"ticker": "BBB", "signed_ratio": 1.0},
+                    {"ticker": "CCC", "signed_ratio": -1.0},
+                ],
+                "exit_events": [
+                    {"date": "2026-01-05", "weight": 1.0, "price": 50}
+                ],
+            },
+            {
+                "ticker": "AAA",
+                "side": "LONG",
+                "entry_date": "2026-01-02",
+                "signal_score": 1.0,
+                "exit_events": [
+                    {"date": "2026-01-05", "weight": 1.0, "price": 110}
+                ],
+            },
+        ]
+        result = simulate_portfolio(
+            trades,
+            "2026-01-02",
+            "2026-01-05",
+            price_loader=frames.__getitem__,
+            policy=PortfolioPolicy(
+                max_positions=1,
+                position_mode="LONG_ONLY",
+            ),
+        )
+        status_by_ticker = {
+            trade["ticker"]: trade["allocation_status"]
+            for trade in result["trades"]
+        }
+        self.assertEqual(status_by_ticker["AAA"], "FILLED")
+        self.assertEqual(status_by_ticker["BBB"], "SKIPPED_MISSING_OPEN")
+        self.assertLessEqual(result["daily"]["active_positions"].max(), 1)
+
     def test_partial_exits_reduce_original_quantity_without_reinvestment(self):
         trade = {
             "ticker": "AAA",

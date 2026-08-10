@@ -803,6 +803,7 @@ def calculate_score_weighted_performance(
             "initial_nav": policy.initial_nav,
             "max_gross": policy.max_gross,
             "max_name_weight": policy.max_name_weight,
+            "max_positions": policy.max_positions,
             "long_cap": policy.side_caps[0],
             "short_cap": policy.side_caps[1],
             "position_mode": policy.position_mode,

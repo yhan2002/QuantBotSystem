@@ -37,6 +37,14 @@ class PortfolioPolicyTests(unittest.TestCase):
         ):
             self.assertIsInstance(getattr(policy, field), float)
             self.assertTrue(math.isfinite(getattr(policy, field)))
+        self.assertEqual(policy.max_positions, 30)
+
+    def test_max_positions_must_be_a_positive_integer(self):
+        for invalid in (0, -1, 1.5, float("nan"), float("inf")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaises(ValueError):
+                    PortfolioPolicy(max_positions=invalid)
+        self.assertEqual(PortfolioPolicy(max_positions="30").max_positions, 30)
 
 
 class CohortCapacityTests(unittest.TestCase):

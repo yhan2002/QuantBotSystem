@@ -97,6 +97,43 @@ class ValueReversionEngineTests(unittest.TestCase):
         )
         self.assertIs(result, rows)
 
+    def test_sizing_report_matches_policy(self):
+        subject = strategy_price_liquidity_reversion
+        self.assertIn(
+            "BRAIN unit-safe",
+            subject._brain_sizing_report_line(subject.BRAIN_ALPHA_SCORE_WEIGHTED),
+        )
+        self.assertIn(
+            "baseline shock score",
+            subject._brain_sizing_report_line(subject.BRAIN_ALPHA_OFF),
+        )
+        self.assertIn(
+            subject.BRAIN_ALPHA_APAC_EXACT,
+            subject._brain_sizing_report_line(subject.BRAIN_ALPHA_APAC_EXACT),
+        )
+
+    def test_score_weighted_policy_replaces_baseline_score_and_has_no_fallback(self):
+        policy = strategy_price_liquidity_reversion.BRAIN_ALPHA_SCORE_WEIGHTED
+        rows = [
+            {"ticker": "LONG", "side": "LONG", "score": 9.0},
+            {"ticker": "SHORT", "side": "SHORT", "signal_score": -8.0},
+            {"ticker": "WRONG", "side": "LONG", "score": 7.0},
+            {"ticker": "MISSING", "side": "SHORT", "score": -6.0},
+        ]
+        metadata = {
+            ticker: {"listing_country": "US"}
+            for ticker in ("LONG", "SHORT", "WRONG", "MISSING")
+        }
+        result = strategy_price_liquidity_reversion.filter_reversion_candidates(
+            rows,
+            {"LONG": 0.2, "SHORT": -0.4, "WRONG": -0.1},
+            metadata,
+            policy,
+        )
+        self.assertEqual([row["ticker"] for row in result], ["LONG", "SHORT"])
+        self.assertEqual(result[0]["score"], 0.2)
+        self.assertEqual(result[1]["signal_score"], -0.4)
+
     def test_time_series_rank_uses_zero_to_one_average_ties(self):
         rank = strategy_price_liquidity_reversion._ts_rank_last(
             pd.Series([1.0, 2.0, 3.0, 2.0, 2.0]),
