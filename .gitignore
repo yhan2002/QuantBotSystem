@@ -18,9 +18,11 @@
 /.quantbot_selector.lock.*.tmp
 **/catalyst_overlay_results*.json
 **/catalyst_overlay_tuning*.csv
+DAILY_REPORT_*.md
 
 # Editor and OS files
 .vscode/*.log
+graphify-out/
 .DS_Store
 Thumbs.db
 
