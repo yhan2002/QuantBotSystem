@@ -1,4 +1,4 @@
-"""Tracked runtime settings for the Portfolio Beta process.
+"""Tracked runtime settings for the unified QuantBot Beta process.
 
 Private values stay in ``config.local.py``.  The selector points this module at
 the existing Classic Beta file through ``QUANTBOT_CONFIG_PATH`` so credentials
@@ -15,9 +15,9 @@ from types import ModuleType
 import config
 
 
-VERSION = "PORTFOLIO_BETA"
-BUILD = "2026.07.27"
-VERSION_DISPLAY_NAME = "Portfolio Beta"
+VERSION = "BETA"
+BUILD = "2026.08.10"
+VERSION_DISPLAY_NAME = "QuantBot Beta"
 VERSION_LABEL = f"{VERSION_DISPLAY_NAME} (build {BUILD})"
 
 BASE_DIR = Path(__file__).resolve().parent

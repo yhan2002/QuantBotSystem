@@ -1,8 +1,8 @@
-"""Select and launch one QuantBot Beta line as an isolated subprocess.
+"""Launch the unified QuantBot Beta as an isolated subprocess.
 
 Examples:
     python RUN_quantbot_version_switch.py status
-    python RUN_quantbot_version_switch.py select PORTFOLIO_BETA
+    python RUN_quantbot_version_switch.py select BETA
     python RUN_quantbot_version_switch.py run
     python RUN_quantbot_version_switch.py stop
 
@@ -29,9 +29,15 @@ from pathlib import Path
 from typing import Mapping
 
 
-CLASSIC_BETA = "CLASSIC_BETA"
-PORTFOLIO_BETA = "PORTFOLIO_BETA"
-VALID_VERSIONS = (CLASSIC_BETA, PORTFOLIO_BETA)
+BETA = "BETA"
+CLASSIC_BETA = "CLASSIC_BETA"  # Legacy command alias.
+PORTFOLIO_BETA = "PORTFOLIO_BETA"  # Legacy command alias.
+VALID_VERSIONS = (BETA,)
+VERSION_ALIASES = {
+    BETA: BETA,
+    CLASSIC_BETA: BETA,
+    PORTFOLIO_BETA: BETA,
+}
 
 ROOT_DIR = Path(__file__).resolve().parent
 ACTIVE_VERSION_PATH = ROOT_DIR / "active_version.local.json"
@@ -81,21 +87,16 @@ class VersionSpec:
     build: str | None = None
 
 
+CLASSIC_DATA_DIR = ROOT_DIR / "QuantBotSystem_Beta"
+
 VERSION_SPECS = {
-    CLASSIC_BETA: VersionSpec(
-        name=CLASSIC_BETA,
-        directory=ROOT_DIR / "QuantBotSystem_Beta",
-        entrypoint=ROOT_DIR
-        / "QuantBotSystem_Beta"
-        / "RUN_telegram_bot_server.py",
-    ),
-    PORTFOLIO_BETA: VersionSpec(
-        name=PORTFOLIO_BETA,
+    BETA: VersionSpec(
+        name=BETA,
         directory=ROOT_DIR / "QuantBotSystem_Portfolio_Beta",
         entrypoint=ROOT_DIR
         / "QuantBotSystem_Portfolio_Beta"
         / "RUN_telegram_bot_server.py",
-        build="2026.07.27",
+        build="2026.08.10",
     ),
 }
 
@@ -111,10 +112,17 @@ PORTFOLIO_PATH_ENV_KEYS = (
 
 def normalize_version(value: str) -> str:
     version = str(value).strip().upper()
-    if version not in VALID_VERSIONS:
+    if version not in VERSION_ALIASES:
         choices = ", ".join(VALID_VERSIONS)
         raise SelectorError(f"Unknown version {value!r}. Choose one of: {choices}")
-    return version
+    return VERSION_ALIASES[version]
+
+
+def parse_version(value: str) -> str:
+    try:
+        return normalize_version(value)
+    except SelectorError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
@@ -136,7 +144,7 @@ def _atomic_write_json(path: Path, payload: Mapping[str, object]) -> None:
 def read_selected_version(path: Path | None = None) -> str:
     target = ACTIVE_VERSION_PATH if path is None else Path(path)
     if not target.exists():
-        return CLASSIC_BETA
+        return BETA
     try:
         payload = json.loads(target.read_text(encoding="utf-8"))
         return normalize_version(payload["active_version"])
@@ -510,36 +518,27 @@ def build_child_environment(
     environment["PYTHONUNBUFFERED"] = "1"
     environment["QUANTBOT_VERSION"] = selected
 
-    if selected == PORTFOLIO_BETA:
-        classic_dir = VERSION_SPECS[CLASSIC_BETA].directory
-        data_dir = spec.directory / "data"
-        environment.update(
-            {
-                "QUANTBOT_BUILD": spec.build or "",
-                "QUANTBOT_CONFIG_PATH": str(
-                    (classic_dir / "config.local.py").resolve()
-                ),
-                "QUANTBOT_DATA_DIR": str(data_dir.resolve()),
-                "QUANTBOT_MARKET_DB_PATH": str(
-                    (classic_dir / "data" / "market_data.sqlite").resolve()
-                ),
-                "QUANTBOT_RUNTIME_DIR": str((data_dir / "runtime").resolve()),
-                "QUANTBOT_EXPORT_DIR": str(
-                    (data_dir / "backtest_exports").resolve()
-                ),
-                "QUANTBOT_STATE_DIR": str((data_dir / "state").resolve()),
-            }
-        )
-    else:
-        environment.pop("QUANTBOT_BUILD", None)
-        for key in PORTFOLIO_PATH_ENV_KEYS:
-            environment.pop(key, None)
+    data_dir = spec.directory / "data"
+    environment.update(
+        {
+            "QUANTBOT_BUILD": spec.build or "",
+            "QUANTBOT_CONFIG_PATH": str(
+                (CLASSIC_DATA_DIR / "config.local.py").resolve()
+            ),
+            "QUANTBOT_DATA_DIR": str(data_dir.resolve()),
+            "QUANTBOT_MARKET_DB_PATH": str(
+                (CLASSIC_DATA_DIR / "data" / "market_data.sqlite").resolve()
+            ),
+            "QUANTBOT_RUNTIME_DIR": str((data_dir / "runtime").resolve()),
+            "QUANTBOT_EXPORT_DIR": str((data_dir / "backtest_exports").resolve()),
+            "QUANTBOT_STATE_DIR": str((data_dir / "state").resolve()),
+        }
+    )
     return environment
 
 
 def _prepare_runtime_directories(version: str, environment: Mapping[str, str]) -> None:
-    if normalize_version(version) != PORTFOLIO_BETA:
-        return
+    normalize_version(version)
     for key in (
         "QUANTBOT_DATA_DIR",
         "QUANTBOT_RUNTIME_DIR",
@@ -744,7 +743,7 @@ def print_status() -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Select and launch the Classic or Portfolio QuantBot Beta."
+        description="Select and launch the unified QuantBot Beta."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("status", help="Show selected and running versions.")
@@ -752,7 +751,9 @@ def build_parser() -> argparse.ArgumentParser:
     select_parser = subparsers.add_parser(
         "select", help="Persist the version used by the next run command."
     )
-    select_parser.add_argument("version", choices=VALID_VERSIONS)
+    select_parser.add_argument(
+        "version", type=parse_version, choices=VALID_VERSIONS
+    )
 
     run_parser = subparsers.add_parser(
         "run", help="Launch the selected bot in a foreground subprocess."
@@ -760,6 +761,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "version",
         nargs="?",
+        type=parse_version,
         choices=VALID_VERSIONS,
         help="Optionally select this version before launching it.",
     )

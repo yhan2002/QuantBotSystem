@@ -5,7 +5,8 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 ## 코드 라인
 
 - `QuantBotSystem/`: 배포 버전. 안정화된 원본으로 취급합니다.
-- `QuantBotSystem_Beta/`: 업데이트·실험 버전. 새 전략과 검증은 여기서 진행합니다.
+- `QuantBotSystem_Portfolio_Beta/`: Classic 전략과 포트폴리오 기능을 합친 단일 Beta 실행선입니다.
+- `QuantBotSystem_Beta/`: 기존 로컬 설정·시장 DB와 롤백 호환을 위한 레거시 보존선입니다.
 
 ## 현재 전략
 
@@ -21,9 +22,11 @@ Beta의 기존 촉매 점수 직접 가산 실험은 제거했습니다. 현재 
 각 코드 라인은 자기 폴더의 로컬 설정과 데이터 캐시를 사용합니다. 새 기능은 Beta에서 검증하고, 승격 시 런타임 소스만 배포 버전에 동기화합니다.
 
 ```powershell
-cd ".\QuantBot\QuantBotSystem_Beta"
-Copy-Item .\config.local.example.py .\config.local.py
+cd ".\QuantBot\QuantBotSystem_Portfolio_Beta"
 ```
+
+통합 Beta selector는 기존 `..\QuantBotSystem_Beta\config.local.py`와 시장 DB를
+그대로 재사용하므로 비밀 설정을 복사하지 않습니다.
 
 API 키, Telegram 설정 등 비밀값은 `config.local.py`, `local_settings.py`, 환경변수에만 보관하고 Git에 추가하지 않습니다.
 
@@ -41,14 +44,14 @@ cd ".\QuantBot\QuantBotSystem"
 python .\RUN_telegram_bot_server.py
 ```
 
-다음 업데이트를 개발할 때는 `QuantBotSystem_Beta/`만 수정합니다. 기존 `telegram_bot_server.py` 실행명도 배포 호환용으로 유지하지만, 새 표준 진입점은 `RUN_telegram_bot_server.py`입니다.
+다음 업데이트는 `QuantBotSystem_Portfolio_Beta/`에서 검증합니다. 기존 `telegram_bot_server.py` 실행명도 배포 호환용으로 유지하지만, 새 표준 진입점은 `RUN_telegram_bot_server.py`입니다.
 
 ## 거래대금 alpha A/B 백테스트
 
 스캘핑 데이터가 아니라 가격·거래대금 기반 보조 alpha를 기존 Momentum과 비교합니다.
 
 ```powershell
-cd ".\QuantBot\QuantBotSystem_Beta"
+cd ".\QuantBot\QuantBotSystem_Portfolio_Beta"
 python .\test_experiment_momentum_volume_alpha_ab.py
 ```
 
@@ -69,7 +72,7 @@ python .\test_experiment_momentum_volume_alpha_ab.py `
 ## 테스트
 
 ```powershell
-cd ".\QuantBot\QuantBotSystem_Beta"
+cd ".\QuantBot\QuantBotSystem_Portfolio_Beta"
 python -m unittest test_core_market_data_store.py
 python -m unittest discover -s . -p "test_*.py"
 python -m py_compile RUN_telegram_bot_server.py strategy_ma_cross.py core_market_data_store.py

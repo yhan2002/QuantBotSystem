@@ -76,10 +76,10 @@ class BotUiTests(unittest.TestCase):
         self.assertIn("Refresh Benchmark", texts)
         self.assertIn("admin_refresh_benchmark", callbacks)
         self.assertNotIn("Preload 4Y Market Data", texts)
-        self.assertIn("Portfolio Beta", app_bot_ui.admin_text())
+        self.assertIn("QuantBot Beta", app_bot_ui.admin_text())
         self.assertIn("Private config:", app_bot_ui.admin_text())
         self.assertIn("dividend-adjusted benchmark prices", app_bot_ui.admin_text())
-        self.assertIn("Portfolio Beta", app_bot_ui.home_text("test-chat"))
+        self.assertIn("QuantBot Beta", app_bot_ui.home_text("test-chat"))
         self.assertNotIn("PORTFOLIO_BETA", app_bot_ui.home_text("test-chat"))
 
     def test_admin_full_backfill_requires_explicit_confirmation(self):

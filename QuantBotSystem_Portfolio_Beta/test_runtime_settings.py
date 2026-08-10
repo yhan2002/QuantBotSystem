@@ -80,11 +80,11 @@ class RuntimeSettingsTests(unittest.TestCase):
                     runtime_settings.resolve_config_path()
 
     def test_version_constants_are_explicit(self):
-        self.assertEqual("PORTFOLIO_BETA", runtime_settings.VERSION)
-        self.assertEqual("2026.07.27", runtime_settings.BUILD)
-        self.assertEqual("Portfolio Beta", runtime_settings.VERSION_DISPLAY_NAME)
+        self.assertEqual("BETA", runtime_settings.VERSION)
+        self.assertEqual("2026.08.10", runtime_settings.BUILD)
+        self.assertEqual("QuantBot Beta", runtime_settings.VERSION_DISPLAY_NAME)
         self.assertEqual(
-            "Portfolio Beta (build 2026.07.27)",
+            "QuantBot Beta (build 2026.08.10)",
             runtime_settings.VERSION_LABEL,
         )
 

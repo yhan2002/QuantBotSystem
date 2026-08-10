@@ -6,7 +6,7 @@ Run all commands from the repository root.
 
 ```powershell
 python .\RUN_quantbot_version_switch.py status
-python .\RUN_quantbot_version_switch.py select PORTFOLIO_BETA
+python .\RUN_quantbot_version_switch.py select BETA
 ```
 
 ## Start the selected version
@@ -21,15 +21,14 @@ The launcher stays in the foreground and owns the child process. Stop it with
 ## Switch with one command
 
 ```powershell
-python .\RUN_quantbot_version_switch.py run CLASSIC_BETA --replace
-python .\RUN_quantbot_version_switch.py run PORTFOLIO_BETA --replace
+python .\RUN_quantbot_version_switch.py run BETA --replace
 ```
 
 `--replace` only manages processes previously started through this selector.
 If a Beta server was started directly from VSCode, stop that console first.
 
-Never run Classic Beta and Portfolio Beta with the same Telegram token at the
-same time.
+Classic Beta and Portfolio Beta now resolve to this same unified runtime.
+The legacy names remain accepted only for saved command compatibility.
 
 Within Portfolio Beta, manual scans, Quick Check, scheduled scans, refreshes,
 and Admin data updates are serialized. A second operation waits for the first
