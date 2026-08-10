@@ -92,13 +92,14 @@ universe_groups["US_LARGE_CAP_100_20260630_PROXY"] = [
     "PGR", "SPGI", "COF", "FTNT", "PH", "SBUX", "VRTX", "SYK", "LMT", "MO",
 ]
 
-# Nasdaq-listed market-cap ranking snapshot captured 2026-07-31 for repeatable scans.
-# Keep one Alphabet class (GOOGL); rank 31 SNDK replaces duplicate-class GOOG.
-# Source: https://stockanalysis.com/list/nasdaq-stocks/
+# Nasdaq-listed companies ranked by USD market cap as viewed on 2026-08-03.
+# Alphabet's GOOGL and GOOG share classes are combined and represented by GOOGL.
+# The legacy 20260731 key is retained for saved-session compatibility.
+# Source: https://marketcap.company/stock-exchanges/nasdaq-nasdaq-exchange-market-capitalization/
 universe_groups["NASDAQ_TOP_30_20260731"] = [
-    "AAPL", "NVDA", "SNDK", "GOOGL", "MSFT", "AMZN", "AVGO", "SPCX", "META", "TSLA",
-    "MU", "WMT", "SKHY", "AMD", "ASML", "INTC", "CSCO", "COST", "AMAT", "LRCX",
-    "NFLX", "PLTR", "PANW", "ARM", "TXN", "KLAC", "LIN", "AMGN", "STX", "PEP",
+    "NVDA", "GOOGL", "AAPL", "MSFT", "AMZN", "AVGO", "META", "TSLA", "WMT", "MU",
+    "AMD", "ASML", "INTC", "COST", "AMAT", "LRCX", "CSCO", "NFLX", "PLTR", "AZN",
+    "ARM", "LIN", "TXN", "AMGN", "PEP", "WDC", "STX", "TMUS", "ADI", "PANW",
 ]
 
 
