@@ -9,6 +9,9 @@
 - 균일 보유기간의 사전계산 팩터 패널을 `max_loss=0`으로 검증하는 Alphalens
   Reloaded adapter와, 기존 순비용 일별 포트폴리오 수익률·로컬 ACWI를 사용하는
   QuantStats 리포트 adapter를 추가했습니다.
+- 기존 Momentum 계산과 로컬 가격 캐시를 재사용해 close 시점 연속 팩터와
+  next-open부터 고정 exit-close까지의 raw 수익률 패널을 만드는 opt-in 명령을
+  추가했습니다.
 - 두 라이브러리는 연구 명령에서만 지연 import되며 Telegram·스케줄러·전략·원장
   경로에는 연결하지 않았습니다. 데이터 다운로드와 장기 백테스트는 실행하지
   않았습니다.

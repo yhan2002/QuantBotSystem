@@ -11,6 +11,43 @@ import analyze_research_analytics as subject
 
 
 class ResearchAnalyticsTests(unittest.TestCase):
+    def test_momentum_panel_uses_signal_close_and_next_open_to_fixed_close(self):
+        dates = pd.bdate_range("2025-01-02", periods=260)
+        close = pd.Series([100.0 + index for index in range(260)], index=dates)
+        prices = pd.DataFrame(
+            {
+                "Open": close + 0.5,
+                "Close": close,
+                "Volume": 1_000_000.0,
+            },
+            index=dates,
+        )
+        start = dates[252]
+        end = dates[254]
+
+        panel = subject.build_momentum_factor_panel(
+            {"aaa": prices}, holding_days=2, start=start, end=end
+        )
+
+        self.assertEqual(len(panel), 1)
+        self.assertEqual(panel.loc[0, "date"], start)
+        self.assertEqual(panel.loc[0, "asset"], "AAA")
+        self.assertEqual(panel.loc[0, "group"], "CSQ_UNIV")
+        self.assertAlmostEqual(
+            panel.loc[0, "forward_return"],
+            prices["Close"].iloc[254] / prices["Open"].iloc[253] - 1.0,
+        )
+
+        changed = prices.copy()
+        changed.iloc[254, changed.columns.get_loc("Close")] *= 1.5
+        changed_panel = subject.build_momentum_factor_panel(
+            {"aaa": changed}, holding_days=2, start=start, end=end
+        )
+        self.assertEqual(changed_panel.loc[0, "factor"], panel.loc[0, "factor"])
+        self.assertNotEqual(
+            changed_panel.loc[0, "forward_return"], panel.loc[0, "forward_return"]
+        )
+
     def test_alphalens_uses_precomputed_panel_and_zero_max_loss(self):
         panel = pd.DataFrame(
             {
