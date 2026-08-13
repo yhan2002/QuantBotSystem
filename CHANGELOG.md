@@ -2,6 +2,17 @@
 
 프로젝트의 주간 변경사항을 배포판과 베타판으로 구분해 기록합니다.
 
+## 2026-08-13
+
+### Portfolio Beta 연구 분석 sidecar
+
+- 균일 보유기간의 사전계산 팩터 패널을 `max_loss=0`으로 검증하는 Alphalens
+  Reloaded adapter와, 기존 순비용 일별 포트폴리오 수익률·로컬 ACWI를 사용하는
+  QuantStats 리포트 adapter를 추가했습니다.
+- 두 라이브러리는 연구 명령에서만 지연 import되며 Telegram·스케줄러·전략·원장
+  경로에는 연결하지 않았습니다. 데이터 다운로드와 장기 백테스트는 실행하지
+  않았습니다.
+
 ## 2026-08-10
 
 ### Reversion BRAIN score-weighted engine
