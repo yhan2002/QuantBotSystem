@@ -7,7 +7,9 @@ QuantStats are imported only when their functions are called.
 Install the pinned optional packages in a separate environment:
 
 ```powershell
-python -m pip install -r .\QuantBotSystem_Portfolio_Beta\requirements-research.txt
+py -3.12 -m venv "$env:LOCALAPPDATA\QuantBot\research-venv"
+& "$env:LOCALAPPDATA\QuantBot\research-venv\Scripts\python.exe" -m pip install `
+  -r .\QuantBotSystem_Portfolio_Beta\requirements-research.txt
 ```
 
 ## Alphalens Reloaded
@@ -30,6 +32,28 @@ python .\analyze_research_analytics.py factor .\data\backtest_exports\factor_pan
 
 Library callers can use `factor_panel_from_scored_signals(...)` followed by
 `clean_alphalens_factor(...)`.
+
+The first concrete pilot reuses Momentum's deployed moving-average calculation
+and the local SQLite cache. It records every eligible close-time
+`SIGNAL_STRENGTH`, then measures the raw asset return from the next session's
+open to the fixed exit close. It does not filter to executed trades or download
+prices.
+
+```powershell
+Set-Location .\QuantBotSystem_Portfolio_Beta
+python .\analyze_research_analytics.py momentum-panel --group CSQ_UNIV `
+  --holding-days 20 --start 2026-01-01 --end 2026-07-31 `
+  --output .\data\backtest_exports\momentum_panel_20d.csv
+& "$env:LOCALAPPDATA\QuantBot\research-venv\Scripts\python.exe" `
+  .\analyze_research_analytics.py factor `
+  .\data\backtest_exports\momentum_panel_20d.csv --period 20D --quantiles 5 `
+  --output .\data\backtest_exports\momentum_factor_data_20d.csv
+```
+
+`20D` is an Alphalens label for the strategy's 20 trading-row horizon; its
+calendar span varies around holidays. `CSQ_UNIV` is today's static universe, so
+this pilot has survivorship bias and is diagnostic rather than an investable
+backtest.
 
 ## QuantStats
 

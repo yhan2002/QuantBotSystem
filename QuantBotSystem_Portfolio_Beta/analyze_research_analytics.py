@@ -60,6 +60,81 @@ def factor_panel_from_scored_signals(
     return pd.DataFrame(rows, columns=FACTOR_COLUMNS)
 
 
+def build_momentum_factor_panel(
+    price_by_asset: Mapping[object, pd.DataFrame],
+    *,
+    group: str = "CSQ_UNIV",
+    holding_days: int | None = None,
+    start: str | pd.Timestamp | None = None,
+    end: str | pd.Timestamp | None = None,
+) -> pd.DataFrame:
+    """Build a dense, precomputed Momentum panel from cached OHLCV frames."""
+
+    import strategy_ma_cross
+
+    if not isinstance(price_by_asset, Mapping) or not price_by_asset:
+        raise ValueError("price_by_asset cannot be empty")
+    group = str(group).strip()
+    if not group:
+        raise ValueError("group cannot be blank")
+    horizon = (
+        strategy_ma_cross.MOMENTUM_HOLDING_DAYS
+        if holding_days is None
+        else holding_days
+    )
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or horizon <= 0:
+        raise ValueError("holding_days must be a positive integer")
+    start_at = pd.Timestamp(start).normalize() if start is not None else None
+    end_at = pd.Timestamp(end).normalize() if end is not None else None
+    if start_at is not None and end_at is not None and start_at > end_at:
+        raise ValueError("start cannot be after end")
+
+    windows = strategy_ma_cross.MOMENTUM_MA_WINDOWS
+    warmup = max(max(windows), strategy_ma_cross.TURNOVER_LOOKBACK_DAYS)
+    rows = []
+    for raw_asset, raw_prices in price_by_asset.items():
+        asset = str(raw_asset).strip().upper()
+        if not asset:
+            raise ValueError("asset cannot be blank")
+        prices = strategy_ma_cross._normalize_ohlcv(raw_prices)
+        if prices.empty:
+            continue
+        prices.index = pd.to_datetime(prices.index, errors="raise").normalize()
+        if prices.index.has_duplicates:
+            raise ValueError(f"{asset} price dates must be unique")
+        prices = strategy_ma_cross._add_ma_signal_columns(prices.sort_index())
+        for signal_idx in range(warmup, len(prices) - horizon):
+            entry_idx = signal_idx + 1
+            exit_idx = signal_idx + horizon
+            signal_date = prices.index[signal_idx]
+            exit_date = prices.index[exit_idx]
+            if start_at is not None and signal_date < start_at:
+                continue
+            if end_at is not None and exit_date > end_at:
+                continue
+            factor = float(prices["SIGNAL_STRENGTH"].iloc[signal_idx])
+            entry = float(prices["Open"].iloc[entry_idx])
+            exit_price = float(prices["Close"].iloc[exit_idx])
+            if not all(math.isfinite(value) for value in (factor, entry, exit_price)):
+                raise ValueError(f"{asset} contains non-finite factor or execution prices")
+            if entry <= 0 or exit_price < 0:
+                raise ValueError(f"{asset} contains invalid execution prices")
+            rows.append(
+                {
+                    "date": signal_date,
+                    "asset": asset,
+                    "factor": factor,
+                    "forward_return": exit_price / entry - 1.0,
+                    "group": group,
+                }
+            )
+
+    panel = pd.DataFrame(rows, columns=(*FACTOR_COLUMNS, "group"))
+    if panel.empty:
+        raise ValueError("no complete Momentum factor observations")
+    return panel.sort_values(["date", "asset"], ignore_index=True)
+
+
 def clean_alphalens_factor(
     panel: pd.DataFrame,
     *,
@@ -246,6 +321,15 @@ def main(argv: list[str] | None = None) -> int:
     factor_parser.add_argument("--binning-by-group", action="store_true")
     factor_parser.add_argument("--output")
 
+    momentum_parser = subparsers.add_parser(
+        "momentum-panel", help="build a dense Momentum panel from the local cache"
+    )
+    momentum_parser.add_argument("--group", default="CSQ_UNIV")
+    momentum_parser.add_argument("--holding-days", type=int)
+    momentum_parser.add_argument("--start")
+    momentum_parser.add_argument("--end")
+    momentum_parser.add_argument("--output", required=True)
+
     performance_parser = subparsers.add_parser(
         "performance", help="print local portfolio/ACWI metrics"
     )
@@ -255,6 +339,28 @@ def main(argv: list[str] | None = None) -> int:
     performance_parser.add_argument("--html")
 
     args = parser.parse_args(argv)
+    if args.command == "momentum-panel":
+        import config
+        import core_market_data_store
+
+        if args.group not in config.universe_groups:
+            raise ValueError(f"unknown universe group: {args.group}")
+        panel = build_momentum_factor_panel(
+            {
+                ticker: core_market_data_store.get_price_data(ticker)
+                for ticker in dict.fromkeys(config.universe_groups[args.group])
+            },
+            group=args.group,
+            holding_days=args.holding_days,
+            start=args.start,
+            end=args.end,
+        )
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        panel.to_csv(output, index=False, encoding="utf-8-sig")
+        print(f"Wrote {len(panel)} rows to {output}")
+        return 0
+
     if args.command == "factor":
         cleaned = clean_alphalens_factor(
             pd.read_csv(args.panel_csv, encoding="utf-8-sig"),
