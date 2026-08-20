@@ -4,8 +4,8 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 
 ## 코드 라인
 
-- `QuantBotSystem/`: 배포 버전. 안정화된 원본으로 취급합니다.
-- `QuantBotSystem_Portfolio_Beta/`: Classic 전략과 포트폴리오 기능을 합친 단일 Beta 실행선입니다.
+- `QuantBotSystem/`: 안정화된 배포·롤백 기준선입니다.
+- `QuantBotSystem_Portfolio_Beta/`: 최신 전략 관찰선이며 Classic 전략과 포트폴리오 기능을 합친 단일 Beta 실행선입니다.
 - `QuantBotSystem_Beta/`: 기존 로컬 설정·시장 DB와 롤백 호환을 위한 레거시 보존선입니다.
 
 ## 현재 전략

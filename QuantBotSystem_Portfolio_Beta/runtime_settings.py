@@ -16,7 +16,7 @@ import config
 
 
 VERSION = "BETA"
-BUILD = "2026.08.10"
+BUILD = "2026.08.20"
 VERSION_DISPLAY_NAME = "QuantBot Beta"
 VERSION_LABEL = f"{VERSION_DISPLAY_NAME} (build {BUILD})"
 

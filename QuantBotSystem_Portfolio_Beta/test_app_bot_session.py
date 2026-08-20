@@ -10,6 +10,26 @@ class BotSessionTests(unittest.TestCase):
     def tearDown(self):
         app_bot_session.USER_SESSIONS.clear()
 
+    def test_nasdaq_top_30_matches_deployment_snapshot(self):
+        group_code = "NASDAQ_TOP_30_20260731"
+        expected = [
+            "NVDA", "GOOGL", "AAPL", "MSFT", "AMZN", "AVGO", "META", "TSLA", "WMT", "MU",
+            "AMD", "ASML", "INTC", "COST", "AMAT", "LRCX", "CSCO", "NFLX", "PLTR", "AZN",
+            "ARM", "LIN", "TXN", "AMGN", "PEP", "WDC", "STX", "TMUS", "ADI", "PANW",
+        ]
+
+        self.assertIn((group_code, "Nasdaq Top 30"), app_bot_session.UNIVERSE_MENUS)
+        self.assertEqual(30, len(app_bot_session.config.universe_groups[group_code]))
+        self.assertEqual(set(expected), set(app_bot_session.config.universe_groups[group_code]))
+        self.assertEqual(
+            set(expected),
+            set(
+                app_bot_session.compile_selected_universe(
+                    {"selected_groups": {group_code}}
+                )
+            ),
+        )
+
     def test_removed_strategy_falls_back_to_momentum(self):
         app_bot_session.USER_SESSIONS["legacy-chat"] = {
             "strategy": "REMOVED_STRATEGY",

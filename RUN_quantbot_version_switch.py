@@ -96,7 +96,7 @@ VERSION_SPECS = {
         entrypoint=ROOT_DIR
         / "QuantBotSystem_Portfolio_Beta"
         / "RUN_telegram_bot_server.py",
-        build="2026.08.10",
+        build="2026.08.20",
     ),
 }
 
