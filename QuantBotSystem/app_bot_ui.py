@@ -1,6 +1,7 @@
 ﻿# File name: bot_ui.py
 # Builds Telegram button menus and screen text.
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import runtime_settings
 
 from app_bot_session import (
     CUSTOM_GROUP_CODE,
@@ -25,11 +26,19 @@ def build_home_markup():
 
 def build_admin_markup():
     markup = InlineKeyboardMarkup()
-    markup.row(InlineKeyboardButton("Preload 4Y Market Data", callback_data="admin_preload_all"))
     markup.row(
         InlineKeyboardButton(
-            "Refresh Selected Universe", callback_data="admin_refresh_selected"
-        )
+            "Update Selected (Latest)", callback_data="admin_refresh_selected"
+        ),
+        InlineKeyboardButton("Update All (Latest)", callback_data="admin_refresh_all"),
+    )
+    markup.row(
+        InlineKeyboardButton(
+            "Backfill Selected (4Y)", callback_data="admin_backfill_selected_confirm"
+        ),
+        InlineKeyboardButton(
+            "Backfill All (4Y)", callback_data="admin_backfill_all_confirm"
+        ),
     )
     markup.row(
         InlineKeyboardButton(
@@ -41,19 +50,47 @@ def build_admin_markup():
             "Refresh Sector / Industry", callback_data="admin_refresh_classifications"
         )
     )
+    markup.row(
+        InlineKeyboardButton(
+            "Refresh Benchmark", callback_data="admin_refresh_benchmark"
+        )
+    )
     markup.row(InlineKeyboardButton("Show Data Cache Status", callback_data="admin_cache_status"))
     markup.row(InlineKeyboardButton("Back", callback_data="go_home"))
+    return markup
+
+
+def build_admin_backfill_confirm_markup(scope):
+    if scope not in {"selected", "all"}:
+        raise ValueError(f"Unknown backfill scope: {scope}")
+
+    markup = InlineKeyboardMarkup()
+    markup.row(
+        InlineKeyboardButton(
+            "Confirm 4Y Backfill",
+            callback_data=f"admin_backfill_{scope}_run",
+        )
+    )
+    markup.row(InlineKeyboardButton("Cancel", callback_data="admin"))
     return markup
 
 
 def admin_text():
     return (
         "**Admin**\n\n"
-        "Preload 4Y Market Data: build the history required for fixed IS/OOS tests.\n"
-        "Refresh Selected Universe: backfill four years for the fixed 2024-25 IS / 2026 OOS tests.\n"
+        f"Version: {runtime_settings.VERSION_LABEL}\n"
+        f"Private config: `{runtime_settings.config_path_for_display()}`\n"
+        "Market cache, exports, and portfolio state are local to this deployment.\n\n"
+        "Update Latest: fetch from each ticker's last cached date with a 10-day overlap. "
+        "Uncached tickers receive four years.\n"
+        "Backfill 4Y: replace historical gaps or initialize a full fixed IS/OOS window; "
+        "confirmation is required.\n"
         "Refresh Market Countries: derive US/CH/JP/KR from cached ticker suffixes (local DB only).\n"
         "Refresh Sector / Industry: refresh sector/industry metadata; market country is also refreshed.\n"
-        "Show Data Cache Status: show the current cache date range."
+        "Refresh Benchmark: download ACWI market data and refresh its "
+        "dividend-adjusted benchmark prices.\n"
+        "Show Data Cache Status: show the current universe cache range and "
+        "whether ACWI benchmark prices are loaded."
     )
 
 
@@ -147,10 +184,24 @@ def build_position_mode_markup(chat_id):
     return markup
 
 
-def build_scan_result_markup(has_detail=False):
+def build_scan_result_markup(
+    has_detail=False,
+    report_id=None,
+    has_export=False,
+):
     markup = InlineKeyboardMarkup()
     if has_detail:
-        markup.row(InlineKeyboardButton("See Detail", callback_data="scan_detail"))
+        callback = (
+            f"scan_detail:{report_id}" if report_id else "scan_detail"
+        )
+        markup.row(InlineKeyboardButton("See Detail", callback_data=callback))
+    if has_export:
+        callback = (
+            f"scan_export:{report_id}" if report_id else "scan_export"
+        )
+        markup.row(
+            InlineKeyboardButton("Download Export", callback_data=callback)
+        )
     markup.row(InlineKeyboardButton("Back to Menu", callback_data="go_home"))
     return markup
 
@@ -160,6 +211,7 @@ def home_text(chat_id):
     universe = compile_selected_universe(session)
     return (
         "**Quant Bot Menu**\n\n"
+        f"Version: {runtime_settings.VERSION_LABEL}\n"
         f"Universe: {selected_universe_label(session)} ({len(universe)} tickers)\n"
         f"Strategy: {STRATEGY_LABELS.get(session['strategy'], session['strategy'])}\n"
         f"Neutralize: {NEUTRALIZATION_LABELS.get(session.get('neutralization', 'NONE'), 'None')}\n"
@@ -176,6 +228,7 @@ def settings_text(chat_id):
     custom = ", ".join(session.get("custom_tickers", [])) or "None"
     return (
         "**Settings**\n\n"
+        f"Version: {runtime_settings.VERSION_LABEL}\n"
         f"Universe: {selected_universe_label(session)}\n"
         f"Direct Input: {custom}\n"
         f"Strategy: {STRATEGY_LABELS.get(session['strategy'], session['strategy'])}\n"

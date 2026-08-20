@@ -7,7 +7,7 @@
   "cards": [
     {
       "label": "Selected version",
-      "value": "BETA",
+      "value": "DEPLOY",
       "tone": "neutral"
     },
     {
@@ -56,7 +56,7 @@
       "title": "Promotion boundary",
       "tone": "warning",
       "items": [
-        "The production QuantBotSystem line remains the stable rollback baseline.",
+        "The unified Beta runtime is promoted into QuantBotSystem; external actions remain blocked in this fixture.",
         "All candidates, markets, and states are deliberately synthetic.",
         "The view checks message hierarchy and labels, not strategy performance."
       ]

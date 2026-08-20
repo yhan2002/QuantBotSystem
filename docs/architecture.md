@@ -4,7 +4,7 @@
 
 | 위치 | 역할 | 수정 원칙 |
 | --- | --- | --- |
-| `QuantBotSystem/` | 검증된 배포선 | 명시적 승인과 Beta 검증 없이 직접 수정하지 않는다 |
+| `QuantBotSystem/` | 검증된 통합 런타임 배포선 | 명시적 승인과 Beta 검증 없이 직접 수정하지 않는다 |
 | `QuantBotSystem_Beta/` | 레거시 소스·비밀 설정·공유 시장 DB 보존선 | 신규 실행 금지, 기존 로컬 데이터 호환만 유지 |
 | `QuantBotSystem_Portfolio_Beta/` | 단일 통합 Beta 실행선 | Classic 전략과 포트폴리오 원장·비동기 스캔·연구 overlay 포함 |
 | `RUN_quantbot_version_switch.py` | 통합 Beta 실행·프로세스 잠금 | `BETA`를 Portfolio 폴더에 연결하고 기존 이름은 alias로 처리 |

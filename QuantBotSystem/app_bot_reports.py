@@ -1,12 +1,65 @@
 ﻿# File name: bot_reports.py
 # Generates strategy scan, quick-check, and box backtest reports.
+from dataclasses import dataclass
+
 import strategy_ma_cross
 import strategy_box_range
 import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
+import app_runtime_lock
 
-from app_bot_session import STRATEGY_LABELS, compile_selected_universe, get_or_create_session
+from app_bot_session import (
+    STRATEGY_LABELS,
+    compile_selected_universe,
+    get_or_create_session,
+    store_backtest_report,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ScanRequest:
+    """Immutable strategy settings captured when a scan is submitted."""
+
+    universe: tuple[str, ...]
+    strategy: str
+    neutralization: str
+    position_mode: str
+    custom_tickers: frozenset[str]
+
+
+def snapshot_scan_request(chat_id):
+    session = get_or_create_session(chat_id)
+    return ScanRequest(
+        universe=tuple(compile_selected_universe(session)),
+        strategy=session["strategy"],
+        neutralization=session.get("neutralization", "NONE"),
+        position_mode=session.get("position_mode", "LONG_SHORT_NEUTRAL"),
+        custom_tickers=frozenset(session.get("custom_tickers", [])),
+    )
+
+
+def _emit_scan_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker=None,
+    succeeded=True,
+):
+    """Keep presentation callback failures out of strategy calculations."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(
+            stage,
+            int(completed),
+            int(total),
+            ticker,
+            bool(succeeded),
+        )
+    except Exception:
+        pass
 
 
 def _wins_text(win_rate, count):
@@ -17,9 +70,9 @@ def _wins_text(win_rate, count):
 def _bt_line(label, avg_return, win_rate, count, side_label):
     side_text = f" | {side_label}" if side_label else ""
     if count <= 0:
-        return f"- {label}{side_text}: avg N/A | win N/A (0/0)"
+        return f"- {label}{side_text}: avg trade N/A | win N/A (0/0)"
     return (
-        f"- {label}{side_text}: avg {avg_return:+.1f}% | "
+        f"- {label}{side_text}: avg trade {avg_return:+.1f}% | "
         f"win {_wins_text(win_rate, count)}"
     )
 
@@ -38,16 +91,16 @@ def _momentum_explanation(signal):
 
 def _box_explanation(status):
     meanings = {
-        "LONG_RANGE_RECLAIM": "flat-channel lower false break recovered by the close; LONG at next open.",
+        "LONG_RANGE_RECLAIM": "flat lower-boundary false break recovered by the close; LONG at next open.",
+        "SHORT_RANGE_RECLAIM": "flat upper-boundary false break recovered by the close; SHORT at next open.",
         "LONG_TREND_PULLBACK": "rising-channel support rebound confirmed at the close; LONG at next open.",
-        "SHORT_RANGE_RECLAIM": "flat-channel upper false break rejected by the close; SHORT at next open.",
         "SHORT_TREND_RALLY": "falling-channel resistance rejection confirmed at the close; SHORT at next open.",
-        "CHANNEL_QUALIFIED": "channel quality passed; waiting for a directional close signal.",
-        "CHANNEL_UNQUALIFIED": "channel containment, width, or boundary touches did not qualify.",
-        "TRANSITION_NO_TRADE": "channel direction is transitional, so entry is blocked.",
+        "CHANNEL_QUALIFIED": "a robust channel is valid; waiting for its setup-specific event.",
         "VOLUME_VETO": "channel setup exists but turnover surge is too large, so entry is blocked.",
-        "DATA_INSUFFICIENT": "not enough local price data for channel signal.",
-        "ERROR": "channel calculation failed.",
+        "TRANSITION": "the channel is transitioning and is not tradable.",
+        "NORMAL": "no valid flat/rising/falling channel setup.",
+        "DATA_INSUFFICIENT": "not enough local price data for box signal.",
+        "ERROR": "box calculation failed.",
     }
     return meanings.get(status, "unclassified box state.")
 
@@ -63,56 +116,103 @@ def _reversion_explanation(signal):
     return meanings.get(signal, "unclassified value reversion state.")
 
 
-def run_compiled_scan(chat_id, progress_callback=None):
+def run_compiled_scan(
+    chat_id,
+    progress_callback=None,
+    return_report_id=False,
+    request=None,
+):
+    with app_runtime_lock.serialized_runtime_operation():
+        return _run_compiled_scan(
+            chat_id,
+            progress_callback=progress_callback,
+            return_report_id=return_report_id,
+            request=request,
+        )
+
+
+def _run_compiled_scan(
+    chat_id,
+    progress_callback=None,
+    return_report_id=False,
+    request=None,
+):
     session = get_or_create_session(chat_id)
-    compiled_universe = compile_selected_universe(session)
+    request = request or snapshot_scan_request(chat_id)
+    compiled_universe = list(request.universe)
     if not compiled_universe:
         raise ValueError("No tickers selected. Set a universe first.")
 
-    selected_strategy = session["strategy"]
-    neutralization = session.get("neutralization", "NONE")
-    position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
+    selected_strategy = request.strategy
+    neutralization = request.neutralization
+    position_mode = request.position_mode
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
-    custom_tickers = set(session.get("custom_tickers", []))
+    custom_tickers = set(request.custom_tickers)
 
     missing_before_scan = core_market_data_store.get_missing_tickers(compiled_universe)
     missing_custom = [ticker for ticker in missing_before_scan if ticker in custom_tickers]
     if missing_custom:
-        if progress_callback:
-            progress_callback(
-                f"Downloading new Direct Input tickers ({len(missing_custom)})..."
-            )
-        core_market_data_store.ensure_price_data(missing_custom, min_period="1y")
-
-    if progress_callback:
-        progress_callback(
-            f"Running {strategy_label} scan on {len(compiled_universe)} tickers using local DB..."
+        _emit_scan_progress(
+            progress_callback,
+            "DATA_DOWNLOAD",
+            0,
+            len(missing_custom),
         )
+        core_market_data_store.ensure_price_data(
+            missing_custom,
+            min_period="1y",
+            progress_callback=lambda completed, total, ticker: _emit_scan_progress(
+                progress_callback,
+                "DATA_DOWNLOAD",
+                completed,
+                total,
+                ticker,
+                True,
+            ),
+        )
+
+    _emit_scan_progress(
+        progress_callback,
+        "PREPARING",
+        1,
+        1,
+        strategy_label,
+        True,
+    )
+    scan_kwargs = {
+        "neutralization": neutralization,
+        "position_mode": position_mode,
+    }
+    report_artifacts = {}
+    scan_kwargs["report_artifacts"] = report_artifacts
+    if progress_callback is not None:
+        scan_kwargs["progress_callback"] = progress_callback
 
     if selected_strategy == "MA_CROSS":
         report = strategy_ma_cross.scan_ma_cross(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     elif selected_strategy == "BOX_RANGE":
         report = strategy_box_range.scan_box_range(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     elif selected_strategy == "VALUE_REVERSION":
         report = strategy_price_liquidity_reversion.scan_value_reversion(
             compiled_universe,
-            neutralization=neutralization,
-            position_mode=position_mode,
+            **scan_kwargs,
         )
     else:
         raise ValueError(f"Unknown strategy: {selected_strategy}")
 
     report, detail, csv_path = core_universe_backtest.split_report_payload(report)
-    session["last_backtest_detail"] = detail
-    session["last_backtest_csv_path"] = csv_path
+    report_id = store_backtest_report(
+        session,
+        detail,
+        csv_path,
+        export_spec=report_artifacts.get("backtest_export"),
+    )
 
     cache_line = core_market_data_store.freshness_summary(compiled_universe)
     missing = core_market_data_store.get_missing_tickers(compiled_universe)
@@ -124,9 +224,26 @@ def run_compiled_scan(chat_id, progress_callback=None):
             f"\nRun Admin -> Refresh Selected Universe. Missing sample: {shown}{suffix}"
         )
     report = f"{report}\n\n----------------------------------------\n{cache_line}"
+    _emit_scan_progress(
+        progress_callback,
+        "FINALIZING",
+        1,
+        1,
+        None,
+        True,
+    )
 
+    if return_report_id:
+        return report, report_id
     return report
+
+
 def quick_report(ticker):
+    with app_runtime_lock.serialized_runtime_operation():
+        return _quick_report(ticker)
+
+
+def _quick_report(ticker):
     core_market_data_store.ensure_price_data([ticker], min_period="1y")
     ma_signal, ma_strength = strategy_ma_cross.analyze_trend_strict_signals(ticker)
     box = strategy_box_range.analyze_box_range(ticker)
@@ -142,18 +259,18 @@ def quick_report(ticker):
     else:
         reversion_signal = reversion_status
 
-    long_box_statuses = {"LONG_RANGE_RECLAIM", "LONG_TREND_PULLBACK"}
-    short_box_statuses = {"SHORT_RANGE_RECLAIM", "SHORT_TREND_RALLY"}
-    if ma_signal == "LONG_ENTRY" and box_status in long_box_statuses:
+    box_long = box_status in ("LONG_RANGE_RECLAIM", "LONG_TREND_PULLBACK")
+    box_short = box_status in ("SHORT_RANGE_RECLAIM", "SHORT_TREND_RALLY")
+    if ma_signal == "LONG_ENTRY" and box_long:
         view = "Strong long watch: MA uptrend plus lower false-break reclaim."
-    elif ma_signal == "SHORT_ENTRY" and box_status in short_box_statuses:
+    elif ma_signal == "SHORT_ENTRY" and box_short:
         view = "Strong short watch: MA downtrend plus upper false-break reclaim."
-    elif reversion_signal == "LONG_BIAS" and box_status in long_box_statuses:
+    elif reversion_signal == "LONG_BIAS" and box_long:
         view = "Reversion long bias with lower false-break reclaim."
-    elif reversion_signal == "SHORT_BIAS" and box_status in short_box_statuses:
+    elif reversion_signal == "SHORT_BIAS" and box_short:
         view = "Reversion short bias with upper false-break reclaim."
-    elif box_status in long_box_statuses | short_box_statuses:
-        view = "Box reclaim signal is active for next-open entry."
+    elif box_long or box_short:
+        view = "Box/channel signal is active for next-open entry."
     elif ma_signal in ["LONG_ENTRY", "SHORT_ENTRY"]:
         view = "Trend signal active. Box signal is not the main driver."
     elif reversion_status == "OK":
@@ -172,10 +289,10 @@ def quick_report(ticker):
 
     box_side = None
     box_side_label = "LONG+SHORT"
-    if box_status in long_box_statuses:
+    if box_long:
         box_side = "LONG"
         box_side_label = "LONG"
-    elif box_status in short_box_statuses:
+    elif box_short:
         box_side = "SHORT"
         box_side_label = "SHORT"
 
@@ -209,7 +326,7 @@ def quick_report(ticker):
     report += "  Benchmark: strength above 0 supports LONG, below 0 supports SHORT; stronger magnitude means stronger slope.\n"
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
-    report += "  Benchmark: prior 40 completed bars, channel containment >=85%, width 4~12 ATR, 2+ spaced same-side touches, directional close signal, and turnover below 2x.\n"
+    report += "  Benchmark: prior 40 completed bars, containment >=85%, width 4~12 ATR, 2+ spaced touches, setup confirmation, and turnover below 2x.\n"
     report += f"- Reversion: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"

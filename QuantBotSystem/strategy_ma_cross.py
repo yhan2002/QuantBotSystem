@@ -8,6 +8,8 @@ import core_backtest_periods
 import core_cross_sectional_neutralization
 import core_entry_execution
 import core_position_mode
+import core_signal_scoring
+from core_signal_model import Signal
 
 
 MOMENTUM_MA_WINDOWS = (5, 20, 60)
@@ -221,14 +223,12 @@ def run_isolated_backtest(
         trade_details = []
 
         next_available_idx = 0
-        for idx in range(
-            signal_start_idx,
-            len(df) - holding_days,
-        ):
+        for idx in range(signal_start_idx, len(df) - 1):
             if idx + 1 < next_available_idx:
                 continue
             entry_idx = idx + 1
-            exit_idx = idx + holding_days
+            planned_exit_idx = idx + holding_days
+            exit_idx = min(planned_exit_idx, len(df) - 1)
             if evaluation_start and df.index[entry_idx] < pd.Timestamp(evaluation_start):
                 continue
             signal_side = (
@@ -258,16 +258,30 @@ def run_isolated_backtest(
                 "signal_to_open_return_pct": execution["signal_to_open_return_pct"],
                 "signal_to_fill_return_pct": execution["signal_to_fill_return_pct"],
             }
+            exit_reason = (
+                f"{holding_days}d holding exit"
+                if planned_exit_idx <= len(df) - 1
+                else "evaluation end mark"
+            )
+            exit_event = {
+                "date": df.index[exit_idx].date().isoformat(),
+                "reason": exit_reason,
+                "weight": 1.0,
+                "price": exit_price,
+            }
             if signal_side == "LONG":
                 trade_return = (exit_price / entry_price - 1.0) * 100.0
                 trades.append(trade_return)
                 trade_details.append(
                     {
                         "side": "LONG",
+                        "signal_date": df.index[idx].date().isoformat(),
                         "entry_date": df.index[entry_idx].date().isoformat(),
                         "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
                         "exit_price": exit_price,
+                        "exit_reason": exit_reason,
+                        "exit_events": [exit_event],
                         "signal_score": float(df["SIGNAL_STRENGTH"].iloc[idx]),
                         "return": trade_return,
                         **execution_fields,
@@ -280,10 +294,13 @@ def run_isolated_backtest(
                 trade_details.append(
                     {
                         "side": "SHORT",
+                        "signal_date": df.index[idx].date().isoformat(),
                         "entry_date": df.index[entry_idx].date().isoformat(),
                         "entry_price": entry_price,
                         "exit_date": df.index[exit_idx].date().isoformat(),
                         "exit_price": exit_price,
+                        "exit_reason": exit_reason,
+                        "exit_events": [exit_event],
                         "signal_score": float(df["SIGNAL_STRENGTH"].iloc[idx]),
                         "return": trade_return,
                         **execution_fields,
@@ -330,28 +347,73 @@ def _format_ranked_rows(items, long_side=True):
         return "None\n"
 
     rows = []
-    for idx, (ticker, strength, neutralized_score) in enumerate(items, start=1):
+    for idx, (
+        ticker,
+        strength,
+        neutralized_score,
+        rank_score,
+        requested_weight,
+    ) in enumerate(items, start=1):
         sign = "+" if long_side else ""
         rows.append(
             f"{idx}. {ticker:<6} | raw {sign}{strength:.2f}% | "
-            f"neutral {neutralized_score:+.2f} | momentum rank"
+            f"neutral {neutralized_score:+.2f} | rank {rank_score:+.2f} | "
+            f"alpha weight {requested_weight * 100:.1f}%"
         )
     return "\n".join(rows) + "\n"
+
+
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker,
+    succeeded,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, completed, total, ticker, succeeded)
+    except Exception:
+        pass
+
+
+def _stage_progress_callback(progress_callback, stage):
+    if progress_callback is None:
+        return None
+
+    def notify(completed, total, ticker, succeeded):
+        _notify_progress(
+            progress_callback,
+            stage,
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
+
+    return notify
 
 
 def scan_ma_cross(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
+    report_artifacts=None,
 ):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
     failed_tickers = []
     raw_scores = {}
 
-    for ticker in universe_list:
+    total_tickers = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
         try:
             signal, strength = analyze_trend_strict_signals(ticker)
+            succeeded = signal not in ("INSUFFICIENT_DATA", "ERROR")
 
             if signal in ["INSUFFICIENT_DATA", "ERROR", "NO_SIGNAL"]:
                 failed_tickers.append(ticker)
@@ -371,6 +433,15 @@ def scan_ma_cross(
                 exit_list.append((ticker, strength))
         except Exception:
             failed_tickers.append(ticker)
+        finally:
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total_tickers,
+                ticker,
+                succeeded,
+            )
 
     neutralized_scores = core_cross_sectional_neutralization.neutralize_scores(
         raw_scores, neutralization
@@ -401,8 +472,51 @@ def scan_ma_cross(
     if not core_position_mode.allows_short(position_mode):
         short_list = []
         new_shorts = []
-    long_list.sort(key=lambda item: (item[2], item[1]), reverse=True)
-    short_list.sort(key=lambda item: (item[2], item[1]))
+    candidate_pairs = []
+    for side, rows in (("LONG", long_list), ("SHORT", short_list)):
+        for ticker, strength, neutralized_score in rows:
+            candidate_pairs.append(
+                (
+                    Signal(
+                        strategy="MA_CROSS",
+                        ticker=ticker,
+                        side=side,
+                        signal_date="LATEST_CLOSE",
+                        raw_score=strength,
+                        status=f"{side}_ENTRY",
+                        entry_execution="NEXT_OPEN",
+                    ),
+                    neutralized_score,
+                )
+            )
+    scored_by_ticker = {
+        item.signal.ticker: item
+        for item in core_signal_scoring.score_signal_cohort(candidate_pairs)
+    }
+    long_list = [
+        (
+            ticker,
+            strength,
+            neutralized_score,
+            scored_by_ticker[ticker].rank_score,
+            scored_by_ticker[ticker].requested_weight,
+        )
+        for ticker, strength, neutralized_score in long_list
+        if ticker in scored_by_ticker
+    ]
+    short_list = [
+        (
+            ticker,
+            strength,
+            neutralized_score,
+            scored_by_ticker[ticker].rank_score,
+            scored_by_ticker[ticker].requested_weight,
+        )
+        for ticker, strength, neutralized_score in short_list
+        if ticker in scored_by_ticker
+    ]
+    long_list.sort(key=lambda item: (item[3], item[1]), reverse=True)
+    short_list.sort(key=lambda item: (item[3], item[1]))
     exit_list.sort(key=lambda item: item[0])
 
     top_longs = long_list[:5]
@@ -416,6 +530,11 @@ def scan_ma_cross(
         run_isolated_backtest,
         period=core_backtest_periods.HISTORY_PERIOD,
         neutralization=neutralization,
+        position_mode=position_mode,
+        portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "IS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.selection_window(),
     )
@@ -424,6 +543,11 @@ def scan_ma_cross(
         run_isolated_backtest,
         period=core_backtest_periods.HISTORY_PERIOD,
         neutralization=neutralization,
+        position_mode=position_mode,
+        portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "OOS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.oos_window(),
     )
@@ -439,6 +563,7 @@ def scan_ma_cross(
             f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
         ),
         strategy_key="ma_momentum",
+        report_artifacts=report_artifacts,
     )
 
     msg = (
