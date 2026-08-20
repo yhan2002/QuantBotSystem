@@ -25,6 +25,7 @@ UNIVERSE_MENUS = [
     ("CSQ_SMID", "CSQ SMID"),
     ("CSQ_UNIV", "CSQ UNIV"),
     ("JP_UNIV", "JP Universe"),
+    ("NASDAQ_TOP_30_20260731", "Nasdaq Top 30"),
     ("US_LARGE_CAP_100_20260630_PROXY", "US Top 100"),
 ]
 

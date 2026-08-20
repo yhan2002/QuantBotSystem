@@ -72,7 +72,7 @@ class ChildEnvironmentTests(unittest.TestCase):
             str((portfolio_dir / "data" / "state").resolve()),
             environment["QUANTBOT_STATE_DIR"],
         )
-        self.assertEqual("2026.08.10", environment["QUANTBOT_BUILD"])
+        self.assertEqual("2026.08.20", environment["QUANTBOT_BUILD"])
 
     def test_legacy_classic_alias_uses_unified_environment(self):
         inherited = {"PATH": "test-path"}
@@ -86,7 +86,7 @@ class ChildEnvironmentTests(unittest.TestCase):
 
         for key in selector.PORTFOLIO_PATH_ENV_KEYS:
             self.assertIn(key, environment)
-        self.assertEqual("2026.08.10", environment["QUANTBOT_BUILD"])
+        self.assertEqual("2026.08.20", environment["QUANTBOT_BUILD"])
         self.assertEqual(selector.BETA, environment["QUANTBOT_VERSION"])
 
 

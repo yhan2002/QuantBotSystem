@@ -81,10 +81,10 @@ class RuntimeSettingsTests(unittest.TestCase):
 
     def test_version_constants_are_explicit(self):
         self.assertEqual("BETA", runtime_settings.VERSION)
-        self.assertEqual("2026.08.10", runtime_settings.BUILD)
+        self.assertEqual("2026.08.20", runtime_settings.BUILD)
         self.assertEqual("QuantBot Beta", runtime_settings.VERSION_DISPLAY_NAME)
         self.assertEqual(
-            "QuantBot Beta (build 2026.08.10)",
+            "QuantBot Beta (build 2026.08.20)",
             runtime_settings.VERSION_LABEL,
         )
 
