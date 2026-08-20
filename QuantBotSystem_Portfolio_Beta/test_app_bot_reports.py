@@ -16,6 +16,7 @@ class BotReportTests(unittest.TestCase):
     ):
         session = {
             "strategy": "BOX_RANGE",
+            "exit_policy": "FIXED_5D",
             "custom_tickers": ["AAA"],
             "neutralization": "COUNTRY",
             "position_mode": "LONG_ONLY",
@@ -27,6 +28,7 @@ class BotReportTests(unittest.TestCase):
         session["custom_tickers"].append("BBB")
 
         self.assertEqual("BOX_RANGE", request.strategy)
+        self.assertEqual("FIXED_5D", request.exit_policy)
         self.assertEqual(("AAA",), request.universe)
         self.assertEqual(frozenset({"AAA"}), request.custom_tickers)
         self.assertEqual("COUNTRY", request.neutralization)
@@ -64,6 +66,7 @@ class BotReportTests(unittest.TestCase):
             scan.call_args.kwargs["position_mode"],
         )
         self.assertEqual({}, scan.call_args.kwargs["report_artifacts"])
+        self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
 
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
     @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
@@ -152,6 +155,7 @@ class BotReportTests(unittest.TestCase):
         request = app_bot_reports.ScanRequest(
             universe=("AAA", "BBB"),
             strategy="MA_CROSS",
+            exit_policy="FIXED_5D",
             neutralization="MARKET",
             position_mode="SHORT_ONLY",
             custom_tickers=frozenset(),
@@ -184,6 +188,7 @@ class BotReportTests(unittest.TestCase):
         self.assertEqual(["AAA", "BBB"], scan.call_args.args[0])
         self.assertEqual("MARKET", scan.call_args.kwargs["neutralization"])
         self.assertEqual("SHORT_ONLY", scan.call_args.kwargs["position_mode"])
+        self.assertEqual(5, scan.call_args.kwargs["fixed_exit_sessions"])
 
 
 if __name__ == "__main__":

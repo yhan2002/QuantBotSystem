@@ -10,6 +10,19 @@ DEFAULT_ADVERSE_GAP_LIMIT_PCT = 2.0
 SUPPORTED_MODES = (NEXT_OPEN, NEXT_DAY_OHLC4, ADVERSE_GAP_FILTER)
 
 
+def normalize_fixed_exit_sessions(value):
+    if value is None:
+        return None
+    try:
+        sessions = int(value)
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("fixed_exit_sessions must be a positive integer") from exc
+    if isinstance(value, bool) or sessions < 1 or numeric != sessions:
+        raise ValueError("fixed_exit_sessions must be a positive integer")
+    return sessions
+
+
 def normalize_mode(mode):
     normalized = str(mode or NEXT_OPEN).strip().upper()
     if normalized not in SUPPORTED_MODES:

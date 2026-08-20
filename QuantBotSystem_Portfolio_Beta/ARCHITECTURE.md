@@ -51,8 +51,9 @@ Interactive scans for Momentum, Box Range, and Reversion, plus Admin
 price/backfill/metadata downloads, run through one process-local
 FIFO background worker. The Telegram callback returns immediately and edits
 one loading message in monotonic 5% steps. A frozen request snapshot keeps the
-strategy, universe, neutralization, and position mode unchanged while a job is
-queued. The existing operation lock remains the database consistency boundary.
+strategy, universe, exit policy, neutralization, and position mode unchanged
+while a job is queued. The existing operation lock remains the database
+consistency boundary.
 
 ## Common signal contract
 
@@ -63,8 +64,11 @@ ticker, strategy, side, signal_date, raw_score,
 setup, structure, metadata, entry_execution
 ```
 
-The three existing strategy engines keep their entry and exit rules. The
-adapter is the boundary between strategy research and portfolio construction.
+The three existing strategy engines keep their entry rules. Their native exit
+rules remain the default, while the optional Beta D+5 policy replaces every
+native target, stop, partial, and time exit with a full close at the fifth
+session close after next-open entry. The adapter is the boundary between
+strategy research and portfolio construction.
 
 ## Score pipeline
 
@@ -112,8 +116,10 @@ The ledger processes:
 
 For a short entry, sale proceeds increase cash and the short market value is a
 liability. Partial exits reduce the original quantity by the event weight.
-Positions whose normal exit lies after an IS/OOS boundary are marked at the
-last available close, rather than omitted from end-of-window NAV.
+With native exits, positions whose normal exit lies after an IS/OOS boundary
+are marked at the last available close rather than omitted from end-of-window
+NAV. With the D+5 policy, entries without all five post-entry sessions inside
+the evaluation window are excluded instead of marked.
 
 ## Strategy boundaries
 

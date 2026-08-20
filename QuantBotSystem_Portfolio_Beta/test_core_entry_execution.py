@@ -47,6 +47,14 @@ class EntryExecutionTests(unittest.TestCase):
         )
         self.assertIsNone(short_result)
 
+    def test_fixed_exit_sessions_requires_a_positive_integer(self):
+        self.assertEqual(5, core_entry_execution.normalize_fixed_exit_sessions(5))
+        self.assertIsNone(core_entry_execution.normalize_fixed_exit_sessions(None))
+        for value in (0, -1, 1.5, True, "bad"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    core_entry_execution.normalize_fixed_exit_sessions(value)
+
 
 if __name__ == "__main__":
     unittest.main()

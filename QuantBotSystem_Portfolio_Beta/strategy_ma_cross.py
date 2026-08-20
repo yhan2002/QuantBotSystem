@@ -196,13 +196,22 @@ def run_isolated_backtest(
     df=None,
     entry_execution=core_entry_execution.NEXT_OPEN,
     adverse_gap_limit_pct=core_entry_execution.DEFAULT_ADVERSE_GAP_LIMIT_PCT,
+    fixed_exit_sessions=None,
 ):
     """Run a simple isolated MA momentum backtest."""
     try:
+        fixed_exit_sessions = core_entry_execution.normalize_fixed_exit_sessions(
+            fixed_exit_sessions
+        )
         df = _load_ohlcv(ticker, period=period) if df is None else _normalize_ohlcv(df)
         if evaluation_end:
             df = df.loc[:pd.Timestamp(evaluation_end)]
-        if df.empty or len(df) < TURNOVER_LOOKBACK_DAYS + holding_days + 1:
+        exit_buffer = (
+            fixed_exit_sessions + 1
+            if fixed_exit_sessions is not None
+            else holding_days
+        )
+        if df.empty or len(df) < TURNOVER_LOOKBACK_DAYS + exit_buffer + 1:
             result = (0.0, 0.0, 0, "N/A", [])
             return result if include_trades else result[:4]
 
@@ -227,7 +236,13 @@ def run_isolated_backtest(
             if idx + 1 < next_available_idx:
                 continue
             entry_idx = idx + 1
-            planned_exit_idx = idx + holding_days
+            planned_exit_idx = (
+                entry_idx + fixed_exit_sessions
+                if fixed_exit_sessions is not None
+                else idx + holding_days
+            )
+            if fixed_exit_sessions is not None and planned_exit_idx >= len(df):
+                continue
             exit_idx = min(planned_exit_idx, len(df) - 1)
             if evaluation_start and df.index[entry_idx] < pd.Timestamp(evaluation_start):
                 continue
@@ -259,7 +274,9 @@ def run_isolated_backtest(
                 "signal_to_fill_return_pct": execution["signal_to_fill_return_pct"],
             }
             exit_reason = (
-                f"{holding_days}d holding exit"
+                f"D+{fixed_exit_sessions} fixed close"
+                if fixed_exit_sessions is not None
+                else f"{holding_days}d holding exit"
                 if planned_exit_idx <= len(df) - 1
                 else "evaluation end mark"
             )
@@ -402,6 +419,7 @@ def scan_ma_cross(
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
     report_artifacts=None,
+    fixed_exit_sessions=None,
 ):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
@@ -536,6 +554,7 @@ def scan_ma_cross(
             progress_callback, "IS_BACKTEST"
         ),
         side_filter=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.selection_window(),
     )
     oos_result = core_universe_backtest.aggregate_universe_backtest(
@@ -549,6 +568,7 @@ def scan_ma_cross(
             progress_callback, "OOS_BACKTEST"
         ),
         side_filter=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.oos_window(),
     )
     backtest_report = core_universe_backtest.format_fixed_is_oos_backtest(
@@ -560,7 +580,9 @@ def scan_ma_cross(
             "at close; enter next open"
         ),
         exit_text=(
-            f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
+            f"close at D+{fixed_exit_sessions}; native exits disabled; incomplete D+N holdings excluded"
+            if fixed_exit_sessions is not None
+            else f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
         ),
         strategy_key="ma_momentum",
         report_artifacts=report_artifacts,

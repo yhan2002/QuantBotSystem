@@ -543,9 +543,13 @@ def run_box_backtest(
     entry_execution=core_entry_execution.NEXT_OPEN,
     adverse_gap_limit_pct=core_entry_execution.DEFAULT_ADVERSE_GAP_LIMIT_PCT,
     precomputed_candidates=None,
+    fixed_exit_sessions=None,
 ):
     """Backtest directional V2 range and trend-channel setups."""
     try:
+        fixed_exit_sessions = core_entry_execution.normalize_fixed_exit_sessions(
+            fixed_exit_sessions
+        )
         df = (
             _load_ohlcv(ticker, period=period)
             if df is None
@@ -689,6 +693,25 @@ def run_box_backtest(
 
             entry = position["entry_price"]
             side = position["side"]
+            if fixed_exit_sessions is not None:
+                if index - position["entry_index"] < fixed_exit_sessions:
+                    continue
+                exit_price = float(day["Close"])
+                position["realized"] += position["remaining"] * _pnl_pct(
+                    side, exit_price, entry
+                )
+                position["exit_events"].append(
+                    {
+                        "date": df.index[index].date().isoformat(),
+                        "reason": f"D+{fixed_exit_sessions} fixed close",
+                        "weight": position["remaining"],
+                        "price": exit_price,
+                    }
+                )
+                position["remaining"] = 0.0
+                close_trade(position)
+                position = None
+                continue
             remaining = position["remaining"]
             first_stop = entry * (0.93 if side == "LONG" else 1.07)
             final_stop = entry * (0.90 if side == "LONG" else 1.10)
@@ -840,7 +863,11 @@ def run_box_backtest(
                     close_trade(position)
                     position = None
 
-        if position is not None and position["remaining"] > 1e-12:
+        if (
+            fixed_exit_sessions is None
+            and position is not None
+            and position["remaining"] > 1e-12
+        ):
             final_index = len(df) - 1
             final_close = float(df["Close"].iloc[final_index])
             position["realized"] += position["remaining"] * _pnl_pct(
@@ -946,6 +973,7 @@ def scan_total_universe(
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
     report_artifacts=None,
+    fixed_exit_sessions=None,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
     long_candidates = []
@@ -1154,6 +1182,7 @@ def scan_total_universe(
             progress_callback, "IS_BACKTEST"
         ),
         side_filter=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.selection_window(),
     )
     oos_result = core_universe_backtest.aggregate_universe_backtest(
@@ -1167,6 +1196,7 @@ def scan_total_universe(
             progress_callback, "OOS_BACKTEST"
         ),
         side_filter=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.oos_window(),
     )
     report += core_universe_backtest.format_fixed_is_oos_backtest(
@@ -1181,7 +1211,9 @@ def scan_total_universe(
             "close and entry at the next open"
         ),
         exit_text=(
-            "50% at the setup-specific first target and balance at the projected "
+            f"close at D+{fixed_exit_sessions}; native targets/stops disabled; incomplete D+N holdings excluded"
+            if fixed_exit_sessions is not None
+            else "50% at the setup-specific first target and balance at the projected "
             "channel upper line; 10d no-target exit; remaining position exits 10d "
             "after the first target; -7% half stop and -10% final stop; stop-first "
             "daily-bar convention"
@@ -1204,6 +1236,7 @@ def scan_box_range(
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
     progress_callback=None,
     report_artifacts=None,
+    fixed_exit_sessions=None,
 ):
     return scan_total_universe(
         universe_list,
@@ -1211,4 +1244,5 @@ def scan_box_range(
         position_mode=position_mode,
         progress_callback=progress_callback,
         report_artifacts=report_artifacts,
+        fixed_exit_sessions=fixed_exit_sessions,
     )

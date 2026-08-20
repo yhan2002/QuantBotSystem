@@ -9,6 +9,46 @@ import app_runtime_lock
 
 
 class SchedulerRuntimeSafetyTests(unittest.TestCase):
+    def test_scheduled_scan_uses_selected_fixed_exit_policy(self):
+        session = {
+            "selected_groups": {"CSQ_CP"},
+            "strategy": "MA_CROSS",
+            "exit_policy": "FIXED_5D",
+            "neutralization": "COUNTRY",
+            "position_mode": "LONG_SHORT_NEUTRAL",
+            "custom_tickers": [],
+            "scheduler_active": True,
+        }
+
+        with patch.object(
+            app_daily_market_scheduler.runtime_settings,
+            "get_setting",
+            return_value=["chat-id"],
+        ), patch.dict(
+            app_daily_market_scheduler.USER_SESSIONS,
+            {"chat-id": session},
+            clear=True,
+        ), patch.object(
+            app_daily_market_scheduler,
+            "compile_selected_universe",
+            return_value=["AAA"],
+        ), patch.object(
+            app_daily_market_scheduler.strategy_ma_cross,
+            "scan_ma_cross",
+            return_value="report",
+        ) as scan, patch.object(
+            app_daily_market_scheduler,
+            "send_split_telegram_message",
+        ):
+            app_daily_market_scheduler._daily_market_scanner()
+
+        self.assertEqual(5, scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual("COUNTRY", scan.call_args.kwargs["neutralization"])
+        self.assertEqual(
+            "LONG_SHORT_NEUTRAL",
+            scan.call_args.kwargs["position_mode"],
+        )
+
     def test_scheduler_send_error_fully_redacts_bot_token(self):
         token = "123456:ABC_def-secret"
         encoded_token = quote(token, safe="")

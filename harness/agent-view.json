@@ -7,7 +7,7 @@
   "cards": [
     {
       "label": "Selected version",
-      "value": "DEPLOY",
+      "value": "BETA",
       "tone": "neutral"
     },
     {
@@ -18,6 +18,11 @@
     {
       "label": "Position mode",
       "value": "Long / Short Neutral",
+      "tone": "neutral"
+    },
+    {
+      "label": "Exit policy",
+      "value": "D+5 Close",
       "tone": "neutral"
     },
     {
@@ -56,7 +61,8 @@
       "title": "Promotion boundary",
       "tone": "warning",
       "items": [
-        "The unified Beta runtime is promoted into QuantBotSystem; external actions remain blocked in this fixture.",
+        "D+5 Close is selectable in Beta; Strategy Default remains the default.",
+        "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",
         "All candidates, markets, and states are deliberately synthetic.",
         "The view checks message hierarchy and labels, not strategy performance."
       ]

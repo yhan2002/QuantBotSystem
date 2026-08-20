@@ -17,6 +17,7 @@ import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
 from app_bot_session import (
+    EXIT_POLICY_SESSIONS,
     STRATEGY_LABELS,
     USER_SESSIONS,
     compile_selected_universe,
@@ -73,6 +74,7 @@ def _daily_market_scanner():
             {
                 "selected_groups": set(["CSQ_CP"]),
                 "strategy": "MA_CROSS",
+                "exit_policy": "NATIVE",
                 "neutralization": "NONE",
                 "position_mode": "LONG_SHORT_NEUTRAL",
                 "custom_tickers": [],
@@ -90,6 +92,9 @@ def _daily_market_scanner():
             session["strategy"] = selected_strategy
         neutralization = session.get("neutralization", "NONE")
         position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
+        fixed_exit_sessions = EXIT_POLICY_SESSIONS.get(
+            session.get("exit_policy", "NATIVE")
+        )
         compiled_universe = compile_selected_universe(session)
         if not compiled_universe:
             compiled_universe = config.universe
@@ -98,6 +103,7 @@ def _daily_market_scanner():
             if selected_strategy == "MA_CROSS":
                 report_content = strategy_ma_cross.scan_ma_cross(
                     compiled_universe,
+                    fixed_exit_sessions=fixed_exit_sessions,
                     neutralization=neutralization,
                     position_mode=position_mode,
                 )
@@ -105,6 +111,7 @@ def _daily_market_scanner():
             elif selected_strategy == "BOX_RANGE":
                 report_content = strategy_box_range.scan_box_range(
                     compiled_universe,
+                    fixed_exit_sessions=fixed_exit_sessions,
                     neutralization=neutralization,
                     position_mode=position_mode,
                 )
@@ -112,6 +119,7 @@ def _daily_market_scanner():
             elif selected_strategy == "VALUE_REVERSION":
                 report_content = strategy_price_liquidity_reversion.scan_value_reversion(
                     compiled_universe,
+                    fixed_exit_sessions=fixed_exit_sessions,
                     neutralization=neutralization,
                     position_mode=position_mode,
                 )

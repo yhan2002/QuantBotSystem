@@ -10,6 +10,7 @@ import core_universe_backtest
 import app_runtime_lock
 
 from app_bot_session import (
+    EXIT_POLICY_SESSIONS,
     STRATEGY_LABELS,
     compile_selected_universe,
     get_or_create_session,
@@ -23,6 +24,7 @@ class ScanRequest:
 
     universe: tuple[str, ...]
     strategy: str
+    exit_policy: str
     neutralization: str
     position_mode: str
     custom_tickers: frozenset[str]
@@ -33,6 +35,7 @@ def snapshot_scan_request(chat_id):
     return ScanRequest(
         universe=tuple(compile_selected_universe(session)),
         strategy=session["strategy"],
+        exit_policy=session.get("exit_policy", "NATIVE"),
         neutralization=session.get("neutralization", "NONE"),
         position_mode=session.get("position_mode", "LONG_SHORT_NEUTRAL"),
         custom_tickers=frozenset(session.get("custom_tickers", [])),
@@ -144,6 +147,7 @@ def _run_compiled_scan(
         raise ValueError("No tickers selected. Set a universe first.")
 
     selected_strategy = request.strategy
+    fixed_exit_sessions = EXIT_POLICY_SESSIONS.get(request.exit_policy)
     neutralization = request.neutralization
     position_mode = request.position_mode
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
@@ -180,6 +184,7 @@ def _run_compiled_scan(
         True,
     )
     scan_kwargs = {
+        "fixed_exit_sessions": fixed_exit_sessions,
         "neutralization": neutralization,
         "position_mode": position_mode,
     }
