@@ -141,6 +141,59 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
         )
         self.assertEqual(cutoff_result[4], details)
 
+    def test_fixed_exit_closes_at_d_plus_five_and_drops_incomplete_entries(self):
+        dates = pd.date_range("2024-01-01", periods=280, freq="B")
+        frame = pd.DataFrame(
+            {
+                "Open": 100.0,
+                "High": 111.0,
+                "Low": 99.0,
+                "Close": 100.0,
+                "Volume": 1000.0,
+            },
+            index=dates,
+        )
+        frame.iloc[-1, frame.columns.get_loc("Close")] = 110.0
+        signal_date = dates[-7]
+
+        def add_signals(prices, **_kwargs):
+            result = prices.copy()
+            result["LONG_SIGNAL"] = False
+            result["SHORT_SIGNAL"] = False
+            result["SIGNAL_STRENGTH"] = 0.0
+            if signal_date in result.index:
+                result.loc[signal_date, "LONG_SIGNAL"] = True
+                result.loc[signal_date, "SIGNAL_STRENGTH"] = 2.0
+            return result
+
+        with patch.object(
+            strategy_ma_cross,
+            "_add_ma_signal_columns",
+            side_effect=add_signals,
+        ):
+            result = strategy_ma_cross.run_isolated_backtest(
+                "TEST",
+                df=frame,
+                include_trades=True,
+                fixed_exit_sessions=5,
+            )
+            incomplete = strategy_ma_cross.run_isolated_backtest(
+                "TEST",
+                df=frame.iloc[:-1],
+                include_trades=True,
+                fixed_exit_sessions=5,
+            )
+
+        trade = result[4][0]
+        self.assertEqual(1, result[2])
+        self.assertEqual("D+5 fixed close", trade["exit_reason"])
+        self.assertEqual(
+            5,
+            frame.index.get_loc(pd.Timestamp(trade["exit_date"]))
+            - frame.index.get_loc(pd.Timestamp(trade["entry_date"])),
+        )
+        self.assertEqual(0, incomplete[2])
+
 
 if __name__ == "__main__":
     unittest.main()

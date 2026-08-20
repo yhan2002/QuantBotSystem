@@ -48,6 +48,18 @@ class BotUiTests(unittest.TestCase):
         self.assertIn("[ ] Short Only", position_texts)
         self.assertIn("Position: Long / Short Neutral", app_bot_ui.settings_text(chat_id))
 
+    def test_settings_exposes_exit_policies(self):
+        chat_id = "test-chat"
+        settings_texts = _button_texts(app_bot_ui.build_settings_markup(chat_id))
+        exit_texts = _button_texts(app_bot_ui.build_exit_policy_markup(chat_id))
+
+        self.assertIn("Exit Policy", settings_texts)
+        self.assertEqual(
+            exit_texts,
+            ["[x] Strategy Default", "[ ] D+5 Close", "Back"],
+        )
+        self.assertIn("Exit: Strategy Default", app_bot_ui.settings_text(chat_id))
+
     def test_strategy_names_are_consistent(self):
         chat_id = "test-chat"
         strategy_texts = _button_texts(app_bot_ui.build_strategy_markup(chat_id))

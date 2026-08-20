@@ -540,12 +540,16 @@ def run_reversion_backtest(
     evaluation_end=None,
     entry_execution=core_entry_execution.NEXT_OPEN,
     adverse_gap_limit_pct=core_entry_execution.DEFAULT_ADVERSE_GAP_LIMIT_PCT,
+    fixed_exit_sessions=None,
 ):
     """Backtest confirmed reversion entries and B-style two-stage profit taking.
 
     All indicator exits are confirmed at the close and filled at the next open.
     ATR stops are intraday protective exits and use a conservative gap fill.
     """
+    fixed_exit_sessions = core_entry_execution.normalize_fixed_exit_sessions(
+        fixed_exit_sessions
+    )
     prices = core_market_data_store.get_price_data(ticker, period_days=period_days) if df is None else df
     if evaluation_end:
         prices = prices.loc[:pd.Timestamp(evaluation_end)]
@@ -601,6 +605,18 @@ def run_reversion_backtest(
 
     for idx in range(signal_start_idx, len(features)):
         day = features.iloc[idx]
+        if position is not None and fixed_exit_sessions is not None:
+            if idx - position["entry_idx"] >= fixed_exit_sessions:
+                add_exit(
+                    position,
+                    idx,
+                    f"D+{fixed_exit_sessions} fixed close",
+                    position["remaining"],
+                    float(day["Close"]),
+                )
+                finish_trade(position)
+                position = None
+            continue
         if position is not None and position.get("pending_exit"):
             pending = position.pop("pending_exit")
             fill = float(day["Open"])
@@ -696,7 +712,11 @@ def run_reversion_backtest(
         elif held_days >= REVERSION_MAX_HOLDING_DAYS:
             position["pending_exit"] = {"reason": "10d time exit", "final": True}
 
-    if position is not None and position["remaining"] > 1e-12:
+    if (
+        fixed_exit_sessions is None
+        and position is not None
+        and position["remaining"] > 1e-12
+    ):
         final_idx = len(features) - 1
         add_exit(
             position,
@@ -756,6 +776,7 @@ def scan_value_reversion(
     progress_callback=None,
     report_artifacts=None,
     brain_alpha_policy=BRAIN_ALPHA_SCORE_WEIGHTED,
+    fixed_exit_sessions=None,
 ):
     brain_alpha_policy = normalize_brain_alpha_policy(brain_alpha_policy)
     brain_alpha_overlay = build_brain_alpha_trade_overlay(brain_alpha_policy)
@@ -864,6 +885,7 @@ def scan_value_reversion(
             progress_callback, "IS_BACKTEST"
         ),
         side=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.selection_window(),
     )
     oos_result = core_universe_backtest.aggregate_universe_backtest(
@@ -878,6 +900,7 @@ def scan_value_reversion(
             progress_callback, "OOS_BACKTEST"
         ),
         side=core_position_mode.side_filter(position_mode),
+        fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.oos_window(),
     )
     msg = (
@@ -893,7 +916,7 @@ def scan_value_reversion(
         "**SHORT Candidates**\n"
         "Rule: 5d upside shock >= +1.60σ within 3d, near-flat/down MA60, reversal close, turnover <2.0x.\n"
         f"{_format_rows(top_shorts, long_side=False)}"
-        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text='50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit', strategy_key='price_liquidity_reversion', report_artifacts=report_artifacts)}"
+        f"{core_universe_backtest.format_fixed_is_oos_backtest(selection_result, oos_result, entry_text='shock within prior 3d, near-flat/trend-aligned MA60, close-confirmed reversal, positive LONG candle, and turnover <2.0x; enter next open', exit_text=(f'close at D+{fixed_exit_sessions}; native exits disabled; incomplete D+N holdings excluded' if fixed_exit_sessions is not None else '50% at ±0.5σ, move residual stop to entry, then exit at mean; ATR stop, 3d no-progress, or 10d time exit'), strategy_key='price_liquidity_reversion', report_artifacts=report_artifacts)}"
     )
     if failed:
         msg += "\n----------------------------------------\nInsufficient local data: " + ", ".join(sorted(failed))

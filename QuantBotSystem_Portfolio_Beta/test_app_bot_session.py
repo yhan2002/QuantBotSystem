@@ -39,6 +39,21 @@ class BotSessionTests(unittest.TestCase):
 
         self.assertEqual(session["strategy"], "MA_CROSS")
 
+    def test_exit_policy_defaults_and_legacy_values_fall_back_to_native(self):
+        self.assertEqual(
+            app_bot_session.get_or_create_session("new-chat")["exit_policy"],
+            "NATIVE",
+        )
+        app_bot_session.USER_SESSIONS["legacy-chat"] = {
+            "strategy": "MA_CROSS",
+            "exit_policy": "REMOVED_POLICY",
+        }
+
+        self.assertEqual(
+            app_bot_session.get_or_create_session("legacy-chat")["exit_policy"],
+            "NATIVE",
+        )
+
     def test_report_ids_keep_results_independent(self):
         session = {}
         first = app_bot_session.store_backtest_report(

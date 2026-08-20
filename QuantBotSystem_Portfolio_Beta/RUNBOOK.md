@@ -145,3 +145,28 @@ python .\experiment_reversion_brain_alpha.py `
 It reads only the existing local cache and compares `BASELINE`,
 `APAC_EXACT_FILTER`, and `APAC_UNIT_SAFE_FILTER`. The exact filter retains the
 BRAIN price-unit warning; both filters remain research-only and default OFF.
+
+## Signal D+5 fixed-exit comparison
+
+Preview the bounded Nasdaq Top 30 workload without running it:
+
+```powershell
+Set-Location .\QuantBotSystem_Portfolio_Beta
+python .\analyze_signal_fixed_exit.py --strategy ALL
+```
+
+Run it only after reviewing the preview:
+
+```powershell
+python .\analyze_signal_fixed_exit.py --strategy ALL --confirm-long-run
+```
+
+The comparison confirms the signal at the close, enters at the next open, and
+closes the entire position at the D+5 close. Native targets, stops, and partial
+exits are disabled, and entries without a complete D+5 observation inside the
+evaluation window are excluded. It reads the local cache only.
+
+Beta Telegram Settings -> Exit Policy exposes `Strategy Default` and `D+5
+Close`. The selected policy is frozen when a manual scan is submitted and is
+also used by scheduled scans. It applies to both LONG and SHORT trades in the
+IS/OOS portfolio calculation; the default remains `Strategy Default`.

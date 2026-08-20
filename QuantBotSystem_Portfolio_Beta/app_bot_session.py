@@ -35,6 +35,16 @@ STRATEGY_LABELS = {
     "VALUE_REVERSION": "Reversion",
 }
 
+EXIT_POLICY_LABELS = {
+    "NATIVE": "Strategy Default",
+    "FIXED_5D": "D+5 Close",
+}
+
+EXIT_POLICY_SESSIONS = {
+    "NATIVE": None,
+    "FIXED_5D": 5,
+}
+
 NEUTRALIZATION_LABELS = {
     "NONE": "None",
     "MARKET": "Market",
@@ -129,6 +139,7 @@ def get_or_create_session(chat_id):
         USER_SESSIONS[chat_id] = {
             "selected_groups": set(DEFAULT_GROUPS),
             "strategy": "MA_CROSS",
+            "exit_policy": "NATIVE",
             "neutralization": "NONE",
             "position_mode": "LONG_SHORT_NEUTRAL",
             "custom_tickers": [],
@@ -144,6 +155,8 @@ def get_or_create_session(chat_id):
     session = USER_SESSIONS[chat_id]
     if session.get("strategy") not in STRATEGY_LABELS:
         session["strategy"] = "MA_CROSS"
+    if session.get("exit_policy") not in EXIT_POLICY_LABELS:
+        session["exit_policy"] = "NATIVE"
     return session
 
 

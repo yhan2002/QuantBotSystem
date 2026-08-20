@@ -9,6 +9,78 @@ import app_daily_market_scheduler
 
 
 class TelegramServerRuntimeSafetyTests(unittest.TestCase):
+    def test_exit_policy_callback_updates_beta_session(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="set_exit_policy:FIXED_5D",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        session = {"exit_policy": "NATIVE"}
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value=session,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "build_exit_policy_markup",
+            return_value="markup",
+        ), patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer, patch.object(
+            RUN_telegram_bot_server.bot,
+            "edit_message_reply_markup",
+        ) as edit_markup:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        self.assertEqual("FIXED_5D", session["exit_policy"])
+        answer.assert_called_once_with("callback-id", "Exit policy updated.")
+        edit_markup.assert_called_once_with("123", 456, reply_markup="markup")
+
+    def test_unknown_exit_policy_callback_is_rejected(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="set_exit_policy:UNKNOWN",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        session = {"exit_policy": "NATIVE"}
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value=session,
+        ), patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer, patch.object(
+            RUN_telegram_bot_server.bot,
+            "edit_message_reply_markup",
+        ) as edit_markup:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        self.assertEqual("NATIVE", session["exit_policy"])
+        answer.assert_called_once_with(
+            "callback-id",
+            "Unknown exit policy.",
+            show_alert=True,
+        )
+        edit_markup.assert_not_called()
+
     def test_see_detail_sends_text_without_downloading_export(self):
         call = SimpleNamespace(
             id="callback-id",

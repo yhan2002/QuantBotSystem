@@ -429,6 +429,36 @@ class ValueReversionEngineTests(unittest.TestCase):
         )
         self.assertEqual(cutoff_result[4], details)
 
+    def test_fixed_exit_ignores_native_exits_and_closes_at_d_plus_five(self):
+        frame = _long_reversion_frame()
+
+        result = strategy_price_liquidity_reversion.run_reversion_backtest(
+            "TEST",
+            "LONG",
+            df=frame,
+            include_trades=True,
+            fixed_exit_sessions=5,
+        )
+
+        trade = result[4][0]
+        entry_index = frame.index.get_loc(pd.Timestamp(trade["entry_date"]))
+        incomplete = strategy_price_liquidity_reversion.run_reversion_backtest(
+            "TEST",
+            "LONG",
+            df=frame.iloc[: entry_index + 5],
+            include_trades=True,
+            fixed_exit_sessions=5,
+        )
+        self.assertEqual(1, result[2])
+        self.assertEqual(1, len(trade["exit_events"]))
+        self.assertEqual("D+5 fixed close", trade["exit_events"][0]["reason"])
+        self.assertEqual(
+            5,
+            frame.index.get_loc(pd.Timestamp(trade["exit_events"][0]["date"]))
+            - frame.index.get_loc(pd.Timestamp(trade["entry_date"])),
+        )
+        self.assertEqual(0, incomplete[2])
+
     def test_open_position_is_marked_at_evaluation_close(self):
         frame = _long_reversion_frame().iloc[:68]
 

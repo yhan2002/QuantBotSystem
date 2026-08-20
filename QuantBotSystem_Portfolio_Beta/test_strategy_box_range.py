@@ -268,6 +268,43 @@ class BoxRangeV2Tests(unittest.TestCase):
         )
         self.assertEqual(cutoff_result[4], details)
 
+    def test_fixed_exit_ignores_native_targets_and_closes_at_d_plus_five(self):
+        frame, _ = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )
+        extension = pd.DataFrame(
+            [frame.iloc[-1].to_dict()] * 10,
+            index=pd.date_range(
+                frame.index[-1] + pd.offsets.BDay(1), periods=10, freq="B"
+            ),
+        )
+        frame = pd.concat([frame, extension])
+
+        result = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=frame,
+            include_trades=True,
+            fixed_exit_sessions=5,
+        )
+
+        trade = result[4][0]
+        entry_index = frame.index.get_loc(pd.Timestamp(trade["entry_date"]))
+        incomplete = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=frame.iloc[: entry_index + 5],
+            include_trades=True,
+            fixed_exit_sessions=5,
+        )
+        self.assertEqual(1, result[2])
+        self.assertEqual(1, len(trade["exit_events"]))
+        self.assertEqual("D+5 fixed close", trade["exit_events"][0]["reason"])
+        self.assertEqual(
+            5,
+            frame.index.get_loc(pd.Timestamp(trade["exit_events"][0]["date"]))
+            - frame.index.get_loc(pd.Timestamp(trade["entry_date"])),
+        )
+        self.assertEqual(0, incomplete[2])
+
     def test_open_position_is_marked_at_evaluation_close(self):
         frame, _ = _append_signal_and_targets(
             _channel_history(0.0), "range"

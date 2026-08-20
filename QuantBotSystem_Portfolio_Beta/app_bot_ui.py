@@ -5,6 +5,7 @@ import runtime_settings
 
 from app_bot_session import (
     CUSTOM_GROUP_CODE,
+    EXIT_POLICY_LABELS,
     NEUTRALIZATION_LABELS,
     POSITION_MODE_LABELS,
     STRATEGY_LABELS,
@@ -102,6 +103,7 @@ def build_settings_markup(chat_id):
     markup = InlineKeyboardMarkup()
     markup.row(InlineKeyboardButton("Universe", callback_data="settings_universe"))
     markup.row(InlineKeyboardButton("Strategy", callback_data="settings_strategy"))
+    markup.row(InlineKeyboardButton("Exit Policy", callback_data="settings_exit_policy"))
     markup.row(InlineKeyboardButton("Neutralize", callback_data="settings_neutralize"))
     markup.row(InlineKeyboardButton("Position Mode", callback_data="settings_position_mode"))
     markup.row(InlineKeyboardButton(scheduler_label, callback_data="toggle_scheduler"))
@@ -184,6 +186,21 @@ def build_position_mode_markup(chat_id):
     return markup
 
 
+def build_exit_policy_markup(chat_id):
+    session = get_or_create_session(chat_id)
+    selected = session.get("exit_policy", "NATIVE")
+    markup = InlineKeyboardMarkup()
+    for policy, label in EXIT_POLICY_LABELS.items():
+        status = "[x]" if selected == policy else "[ ]"
+        markup.row(
+            InlineKeyboardButton(
+                f"{status} {label}", callback_data=f"set_exit_policy:{policy}"
+            )
+        )
+    markup.row(InlineKeyboardButton("Back", callback_data="settings"))
+    return markup
+
+
 def build_scan_result_markup(
     has_detail=False,
     report_id=None,
@@ -214,6 +231,7 @@ def home_text(chat_id):
         f"Version: {runtime_settings.VERSION_LABEL}\n"
         f"Universe: {selected_universe_label(session)} ({len(universe)} tickers)\n"
         f"Strategy: {STRATEGY_LABELS.get(session['strategy'], session['strategy'])}\n"
+        f"Exit: {EXIT_POLICY_LABELS.get(session.get('exit_policy', 'NATIVE'), 'Strategy Default')}\n"
         f"Neutralize: {NEUTRALIZATION_LABELS.get(session.get('neutralization', 'NONE'), 'None')}\n"
         f"Position: {POSITION_MODE_LABELS.get(session.get('position_mode', 'LONG_SHORT_NEUTRAL'), 'Long / Short Neutral')}\n"
         f"Scheduler: {'ON' if session.get('scheduler_active', True) else 'OFF'}\n"
@@ -232,6 +250,7 @@ def settings_text(chat_id):
         f"Universe: {selected_universe_label(session)}\n"
         f"Direct Input: {custom}\n"
         f"Strategy: {STRATEGY_LABELS.get(session['strategy'], session['strategy'])}\n"
+        f"Exit: {EXIT_POLICY_LABELS.get(session.get('exit_policy', 'NATIVE'), 'Strategy Default')}\n"
         f"Neutralize: {NEUTRALIZATION_LABELS.get(session.get('neutralization', 'NONE'), 'None')}\n"
         f"Position: {POSITION_MODE_LABELS.get(session.get('position_mode', 'LONG_SHORT_NEUTRAL'), 'Long / Short Neutral')}\n"
         f"Scheduler: {'ON' if session.get('scheduler_active', True) else 'OFF'}\n"

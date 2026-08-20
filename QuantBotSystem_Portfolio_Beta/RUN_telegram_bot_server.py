@@ -23,6 +23,7 @@ from app_bot_reports import (
 )
 from app_bot_session import (
     CUSTOM_GROUP_CODE,
+    EXIT_POLICY_LABELS,
     NEUTRALIZATION_LABELS,
     POSITION_MODE_LABELS,
     STRATEGY_LABELS,
@@ -40,6 +41,7 @@ from app_bot_ui import (
     build_admin_backfill_confirm_markup,
     build_back_home_markup,
     build_admin_markup,
+    build_exit_policy_markup,
     build_home_markup,
     build_neutralization_markup,
     build_position_mode_markup,
@@ -506,6 +508,19 @@ def handle_menu_callbacks(call):
                 reply_markup=build_strategy_markup(chat_id),
             )
 
+        elif data == "settings_exit_policy":
+            bot.answer_callback_query(call.id)
+            bot.edit_message_text(
+                "**Exit Policy Settings**\n\n"
+                "Strategy Default: use the selected engine's native target, stop, and time exits.\n"
+                "D+5 Close: enter next open after the signal, then close the full position "
+                "at the fifth following session's close. Native exits are disabled.",
+                chat_id,
+                call.message.message_id,
+                parse_mode="Markdown",
+                reply_markup=build_exit_policy_markup(chat_id),
+            )
+
         elif data == "settings_neutralize":
             bot.answer_callback_query(call.id)
             bot.edit_message_text(
@@ -614,6 +629,23 @@ def handle_menu_callbacks(call):
                 chat_id,
                 call.message.message_id,
                 reply_markup=build_position_mode_markup(chat_id),
+            )
+
+        elif data.startswith("set_exit_policy:"):
+            policy = data.split(":", 1)[1]
+            if policy not in EXIT_POLICY_LABELS:
+                bot.answer_callback_query(
+                    call.id,
+                    "Unknown exit policy.",
+                    show_alert=True,
+                )
+                return
+            session["exit_policy"] = policy
+            bot.answer_callback_query(call.id, "Exit policy updated.")
+            bot.edit_message_reply_markup(
+                chat_id,
+                call.message.message_id,
+                reply_markup=build_exit_policy_markup(chat_id),
             )
 
         elif data == "toggle_scheduler":

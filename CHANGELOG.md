@@ -4,6 +4,17 @@
 
 ## 2026-08-20
 
+### Beta 청산 정책 선택과 D+5 비교
+
+- 통합 Beta에 신호일 종가 확정, 다음 거래일 시가 진입, 진입 후 D+5 종가
+  전량청산을 비교하는 로컬 캐시 전용 분석 경로를 추가했습니다.
+- 이 비교에서는 Momentum·Box Range·Reversion의 기존 목표가, 손절,
+  부분청산을 사용하지 않으며 평가구간 안에 D+5가 없는 진입은 제외합니다.
+- Beta Settings의 Exit Policy에서 `Strategy Default`와 `D+5 Close`를
+  선택할 수 있으며, 선택값은 수동·예약 스캔의 Long/Short IS/OOS
+  포트폴리오 계산에 동일하게 적용됩니다. 기본값은 기존 전략 청산입니다.
+- 별도 전체 비교 스크립트는 `--confirm-long-run`을 명시해야만 시작됩니다.
+
 ### 통합 Beta → 배포 승격
 
 - 통합 Beta에서 검증한 포트폴리오 원장·score-weighted 배분, 비동기 스캔,
