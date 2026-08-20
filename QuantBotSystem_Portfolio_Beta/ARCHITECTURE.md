@@ -70,6 +70,11 @@ native target, stop, partial, and time exit with a full close at the fifth
 session close after next-open entry. The adapter is the boundary between
 strategy research and portfolio construction.
 
+`analyze_research_analytics.py` is a top-layer, offline-only sidecar. It sends
+uniform-horizon, precomputed `rank_score` panels to Alphalens Reloaded and the
+existing net portfolio daily return plus local ACWI series to QuantStats. It is
+not imported by strategy, scheduler, Telegram, ledger, or market-data modules.
+
 ## Score pipeline
 
 For each signal-date cohort:

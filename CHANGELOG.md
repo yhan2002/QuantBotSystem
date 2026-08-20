@@ -33,6 +33,43 @@
   선택 메뉴를 통합 Beta에 동일하게 복원했습니다. 배포판 코드는 변경하지 않았습니다.
 - 통합 Beta 표시 빌드를 `2026.08.20`으로 갱신했습니다. 봇 실행·재시작,
   가격 다운로드와 전체 유니버스 백테스트는 수행하지 않았습니다.
+## 2026-08-13
+
+### Portfolio Beta 연구 분석 sidecar
+
+- 균일 보유기간의 사전계산 팩터 패널을 `max_loss=0`으로 검증하는 Alphalens
+  Reloaded adapter와, 기존 순비용 일별 포트폴리오 수익률·로컬 ACWI를 사용하는
+  QuantStats 리포트 adapter를 추가했습니다.
+- 기존 Momentum 계산과 로컬 가격 캐시를 재사용해 close 시점 연속 팩터와
+  next-open부터 고정 exit-close까지의 raw 수익률 패널을 만드는 opt-in 명령을
+  추가했습니다.
+- 두 라이브러리는 연구 명령에서만 지연 import되며 Telegram·스케줄러·전략·원장
+  경로에는 연결하지 않았습니다. 데이터 다운로드와 장기 백테스트는 실행하지
+  않았습니다.
+
+## 주간 요약: 2026-08-10 ~ 2026-08-17
+
+### 배포판 변경
+
+- `QuantBotSystem/` 변경 없음.
+- Beta의 Reversion BRAIN 점수·비중 연구는 배포판에 승격하지 않았습니다.
+- 배포 Telegram·스케줄러·전략 실행 규칙은 기존 상태를 유지합니다.
+
+### 베타판 변경
+
+- `QuantBotSystem_Beta/`는 비밀 설정·시장 DB 호환용 레거시로 보존했으며 코드 변경은 없습니다.
+- 통합 Beta 실행선을 `QuantBotSystem_Portfolio_Beta/`로 단일화하고 기존 selector 이름은 같은 런타임으로 연결해 호환성을 유지했습니다.
+- Reversion에 국가별 BRAIN unit-safe 점수를 적용하고 score-weighted 비중, 종목당 5% 한도, 최대 30개 동시 포지션을 연결했습니다.
+- 기존 충격 진입·종가 확인·next-open·부분청산·손절·시간청산 규칙은 유지했습니다.
+- 로컬 캐시만 사용하는 Alphalens Reloaded·QuantStats 연구 sidecar와 Momentum 연속 팩터 패널을 추가했으며 운영 경로에는 연결하지 않았습니다.
+- 전체 유니버스 분석, 데이터 다운로드, Telegram 실행은 수행하지 않았습니다.
+
+### GitHub 커밋 요약
+
+- `575ca6c`: 국가별 Reversion BRAIN alpha A/B 경계 추가
+- `8e927e3`: Portfolio Beta를 단일 Beta 런타임으로 통합
+- `0700ffb`: BRAIN 점수 기반 Reversion 비중 배분 적용
+- `0b7dc1e`, `eb71c77`: 연구 분석 sidecar와 Momentum 팩터 패널 추가
 
 ## 2026-08-10
 

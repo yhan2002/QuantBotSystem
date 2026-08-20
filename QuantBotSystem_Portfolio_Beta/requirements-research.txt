@@ -1,0 +1,2 @@
+alphalens-reloaded==0.4.5
+quantstats==0.0.81
