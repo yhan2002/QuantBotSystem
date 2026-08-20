@@ -2,7 +2,8 @@
 """Directional range/channel strategy.
 
 Signals use only completed bars through the signal-day close and enter no
-earlier than the next open. Classic Beta and deployment share this V2 engine.
+earlier than the next open. The prior fixed 20-day two-sided reclaim engine
+remains available in the deployment folder; Beta intentionally uses this V2.
 """
 
 import numpy as np
@@ -13,6 +14,8 @@ import core_cross_sectional_neutralization
 import core_entry_execution
 import core_market_data_store
 import core_position_mode
+import core_signal_scoring
+from core_signal_model import Signal
 import core_universe_backtest
 
 
@@ -582,6 +585,7 @@ def run_box_backtest(
                     "side": current_position["side"],
                     "setup": current_position["stats"]["setup"],
                     "structure": current_position["stats"]["structure"],
+                    "signal_date": current_position["signal_date"],
                     "entry_date": current_position["entry_date"],
                     "entry_price": current_position["entry_price"],
                     "signal_score": current_position["signal_score"],
@@ -605,9 +609,11 @@ def run_box_backtest(
                 }
             )
 
-        for index in range(signal_start_index, len(df) - 1):
+        for index in range(signal_start_index, len(df)):
             day = df.iloc[index]
             if position is None:
+                if index + 1 >= len(df):
+                    continue
                 if (
                     evaluation_start
                     and df.index[index + 1] < pd.Timestamp(evaluation_start)
@@ -646,6 +652,7 @@ def run_box_backtest(
                     "entry_price": entry_price,
                     "entry_index": index + 1,
                     "signal_index": index,
+                    "signal_date": df.index[index].date().isoformat(),
                     "entry_date": df.index[index + 1].date().isoformat(),
                     "entry_execution": execution["mode"],
                     "signal_close": execution["signal_close"],
@@ -833,6 +840,25 @@ def run_box_backtest(
                     close_trade(position)
                     position = None
 
+        if position is not None and position["remaining"] > 1e-12:
+            final_index = len(df) - 1
+            final_close = float(df["Close"].iloc[final_index])
+            position["realized"] += position["remaining"] * _pnl_pct(
+                position["side"],
+                final_close,
+                position["entry_price"],
+            )
+            position["exit_events"].append(
+                {
+                    "date": df.index[final_index].date().isoformat(),
+                    "reason": "evaluation end mark",
+                    "weight": position["remaining"],
+                    "price": final_close,
+                }
+            )
+            position["remaining"] = 0.0
+            close_trade(position)
+
         if not trades:
             result = (0.0, 0.0, 0, period_label, [])
             return result if include_trades else result[:4]
@@ -851,7 +877,14 @@ def run_box_backtest(
         return result if include_trades else result[:4]
 
 
-def _candidate_row(index, ticker, result, neutralized_score):
+def _candidate_row(
+    index,
+    ticker,
+    result,
+    neutralized_score,
+    rank_score,
+    requested_weight,
+):
     setup_labels = {
         "LONG_RANGE_RECLAIM": "flat lower reclaim",
         "LONG_TREND_PULLBACK": "rising pullback",
@@ -869,14 +902,50 @@ def _candidate_row(index, ticker, result, neutralized_score):
         f"{index}. {ticker:<6} | {setup} | slope {result['slope_ratio']:+.2f}w | "
         f"width {result['width_atr']:.1f} ATR | quality {result['quality_score']:.2f} | "
         f"turnover {result['turnover_ratio']:.1f}x | neutral {neutralized_score:+.2f} | "
+        f"rank {rank_score:+.2f} | alpha weight {requested_weight * 100:.1f}% | "
         f"open gate {open_gate}"
     )
+
+
+def _notify_progress(
+    progress_callback,
+    stage,
+    completed,
+    total,
+    ticker,
+    succeeded,
+):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(stage, completed, total, ticker, succeeded)
+    except Exception:
+        pass
+
+
+def _stage_progress_callback(progress_callback, stage):
+    if progress_callback is None:
+        return None
+
+    def notify(completed, total, ticker, succeeded):
+        _notify_progress(
+            progress_callback,
+            stage,
+            completed,
+            total,
+            ticker,
+            succeeded,
+        )
+
+    return notify
 
 
 def scan_total_universe(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
+    report_artifacts=None,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
     long_candidates = []
@@ -890,26 +959,39 @@ def scan_total_universe(
         )
         for ticker in universe_list
     }
-    for ticker in universe_list:
-        result = analyze_box_range(ticker, df=price_data[ticker])
-        if result["status"] in ("DATA_INSUFFICIENT", "ERROR"):
-            failed_tickers.append(ticker)
-            continue
-        raw_score = 0.0
-        if result["status"] in (
-            "LONG_RANGE_RECLAIM",
-            "LONG_TREND_PULLBACK",
-            "SHORT_RANGE_RECLAIM",
-            "SHORT_TREND_RALLY",
-        ):
-            raw_score = _candidate_score(result, result["side"])
-            target = (
-                long_candidates
-                if result["side"] == "LONG"
-                else short_candidates
+    total_tickers = len(universe_list)
+    for completed, ticker in enumerate(universe_list, start=1):
+        succeeded = False
+        try:
+            result = analyze_box_range(ticker, df=price_data[ticker])
+            succeeded = result["status"] not in ("DATA_INSUFFICIENT", "ERROR")
+            if not succeeded:
+                failed_tickers.append(ticker)
+                continue
+            raw_score = 0.0
+            if result["status"] in (
+                "LONG_RANGE_RECLAIM",
+                "LONG_TREND_PULLBACK",
+                "SHORT_RANGE_RECLAIM",
+                "SHORT_TREND_RALLY",
+            ):
+                raw_score = _candidate_score(result, result["side"])
+                target = (
+                    long_candidates
+                    if result["side"] == "LONG"
+                    else short_candidates
+                )
+                target.append((ticker, result, raw_score))
+            raw_scores[ticker] = raw_score
+        finally:
+            _notify_progress(
+                progress_callback,
+                "CURRENT_SCAN",
+                completed,
+                total_tickers,
+                ticker,
+                succeeded,
             )
-            target.append((ticker, result, raw_score))
-        raw_scores[ticker] = raw_score
 
     neutralized_scores = (
         core_cross_sectional_neutralization.neutralize_scores(
@@ -948,6 +1030,58 @@ def scan_total_universe(
         long_candidates = []
     if not core_position_mode.allows_short(position_mode):
         short_candidates = []
+    candidate_pairs = []
+    for side, rows in (
+        ("LONG", long_candidates),
+        ("SHORT", short_candidates),
+    ):
+        for ticker, result, raw_score, neutralized_score in rows:
+            candidate_pairs.append(
+                (
+                    Signal(
+                        strategy="BOX_RANGE",
+                        ticker=ticker,
+                        side=side,
+                        signal_date="LATEST_CLOSE",
+                        raw_score=raw_score,
+                        status=result["status"],
+                        setup=result.get("setup"),
+                        structure=result.get("structure"),
+                        entry_execution="NEXT_OPEN",
+                    ),
+                    neutralized_score,
+                )
+            )
+    scored_by_ticker = {
+        item.signal.ticker: item
+        for item in core_signal_scoring.score_signal_cohort(candidate_pairs)
+    }
+    long_candidates = [
+        (
+            ticker,
+            result,
+            raw_score,
+            neutralized_score,
+            scored_by_ticker[ticker].rank_score,
+            scored_by_ticker[ticker].requested_weight,
+        )
+        for ticker, result, raw_score, neutralized_score in long_candidates
+        if ticker in scored_by_ticker
+    ]
+    short_candidates = [
+        (
+            ticker,
+            result,
+            raw_score,
+            neutralized_score,
+            scored_by_ticker[ticker].rank_score,
+            scored_by_ticker[ticker].requested_weight,
+        )
+        for ticker, result, raw_score, neutralized_score in short_candidates
+        if ticker in scored_by_ticker
+    ]
+    long_candidates.sort(key=lambda item: (item[4], item[2]), reverse=True)
+    short_candidates.sort(key=lambda item: (item[4], item[2]))
 
     report = (
         "**Box Range V2 Scan Report**\n"
@@ -966,8 +1100,15 @@ def scan_total_universe(
     )
     report += "**LONG Candidates (next open)**\n" + (
         "\n".join(
-            _candidate_row(index, ticker, result, score)
-            for index, (ticker, result, _, score) in enumerate(
+            _candidate_row(index, ticker, result, score, rank_score, requested_weight)
+            for index, (
+                ticker,
+                result,
+                _,
+                score,
+                rank_score,
+                requested_weight,
+            ) in enumerate(
                 long_candidates[:10], 1
             )
         )
@@ -975,8 +1116,15 @@ def scan_total_universe(
     )
     report += "\n\n**SHORT Candidates (next open)**\n" + (
         "\n".join(
-            _candidate_row(index, ticker, result, score)
-            for index, (ticker, result, _, score) in enumerate(
+            _candidate_row(index, ticker, result, score, rank_score, requested_weight)
+            for index, (
+                ticker,
+                result,
+                _,
+                score,
+                rank_score,
+                requested_weight,
+            ) in enumerate(
                 short_candidates[:10], 1
             )
         )
@@ -1000,6 +1148,11 @@ def scan_total_universe(
         cached_box_backtest,
         period=core_backtest_periods.HISTORY_PERIOD,
         neutralization=neutralization,
+        position_mode=position_mode,
+        portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "IS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.selection_window(),
     )
@@ -1008,6 +1161,11 @@ def scan_total_universe(
         cached_box_backtest,
         period=core_backtest_periods.HISTORY_PERIOD,
         neutralization=neutralization,
+        position_mode=position_mode,
+        portfolio_accounting=True,
+        progress_callback=_stage_progress_callback(
+            progress_callback, "OOS_BACKTEST"
+        ),
         side_filter=core_position_mode.side_filter(position_mode),
         **core_backtest_periods.oos_window(),
     )
@@ -1029,6 +1187,7 @@ def scan_total_universe(
             "daily-bar convention"
         ),
         strategy_key="box_range",
+        report_artifacts=report_artifacts,
     )
     if failed_tickers:
         report += (
@@ -1043,9 +1202,13 @@ def scan_box_range(
     universe_list,
     neutralization="NONE",
     position_mode=core_position_mode.LONG_SHORT_NEUTRAL,
+    progress_callback=None,
+    report_artifacts=None,
 ):
     return scan_total_universe(
         universe_list,
         neutralization=neutralization,
         position_mode=position_mode,
+        progress_callback=progress_callback,
+        report_artifacts=report_artifacts,
     )

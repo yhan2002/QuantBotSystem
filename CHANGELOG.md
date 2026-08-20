@@ -4,6 +4,16 @@
 
 ## 2026-08-20
 
+### 통합 Beta → 배포 승격
+
+- 통합 Beta에서 검증한 포트폴리오 원장·score-weighted 배분, 비동기 스캔,
+  ACWI 비교, BRAIN Reversion 기본 스캔을 `QuantBotSystem` 배포선에 승격했습니다.
+- 배포판의 `config.py`와 `NASDAQ_TOP_30_20260731` 스냅샷, 로컬 비밀 설정과
+  시장 DB 경로는 그대로 유지했습니다. HMM/RL overlay와 분석·실험 스크립트는
+  연구 전용으로 남겨 배포하지 않았습니다.
+- 배포 표시 빌드는 `2026.08.20`입니다. 이전 배포선은 Git 커밋
+  `58e892b`에서 롤백할 수 있으며 봇 실행·재시작·Telegram 발송은 수행하지 않았습니다.
+
 ### 통합 Beta 관찰선과 Nasdaq 유니버스 유지
 
 - `QuantBotSystem_Portfolio_Beta`를 최신 전략 관찰선으로 사용하고

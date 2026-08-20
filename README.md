@@ -4,7 +4,7 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 
 ## 코드 라인
 
-- `QuantBotSystem/`: 안정화된 배포·롤백 기준선입니다.
+- `QuantBotSystem/`: 통합 Beta에서 승격된 안정화 배포선입니다.
 - `QuantBotSystem_Portfolio_Beta/`: 최신 전략 관찰선이며 Classic 전략과 포트폴리오 기능을 합친 단일 Beta 실행선입니다.
 - `QuantBotSystem_Beta/`: 기존 로컬 설정·시장 DB와 롤백 호환을 위한 레거시 보존선입니다.
 
@@ -27,6 +27,8 @@ cd ".\QuantBot\QuantBotSystem_Portfolio_Beta"
 
 통합 Beta selector는 기존 `..\QuantBotSystem_Beta\config.local.py`와 시장 DB를
 그대로 재사용하므로 비밀 설정을 복사하지 않습니다.
+배포판은 `QuantBotSystem/config.local.py`와 `QuantBotSystem/data/market_data.sqlite`를
+계속 사용합니다.
 
 API 키, Telegram 설정 등 비밀값은 `config.local.py`, `local_settings.py`, 환경변수에만 보관하고 Git에 추가하지 않습니다.
 

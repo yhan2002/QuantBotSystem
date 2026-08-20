@@ -3,18 +3,24 @@
 import time
 import threading
 from datetime import datetime
+from urllib.parse import quote
 
 import requests
 import schedule
 
+import app_runtime_lock
 import strategy_box_range
 import config
-import local_settings
+import runtime_settings
 import strategy_ma_cross
 import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
-from app_bot_session import USER_SESSIONS, compile_selected_universe
+from app_bot_session import (
+    STRATEGY_LABELS,
+    USER_SESSIONS,
+    compile_selected_universe,
+)
 
 _scheduler_started = False
 MORNING_DATA_REFRESH_TIME = "08:00"
@@ -22,8 +28,20 @@ EVENING_DATA_REFRESH_TIME = "19:00"
 SCHEDULED_SCAN_TIME = "19:10"
 
 
+def _redact_bot_token(message, bot_token):
+    redacted = str(message)
+    secret = str(bot_token or "")
+    if not secret:
+        return redacted
+    variants = {secret, quote(secret, safe="")}
+    for variant in sorted(variants, key=len, reverse=True):
+        if variant:
+            redacted = redacted.replace(variant, "[REDACTED_BOT_TOKEN]")
+    return redacted
+
+
 def send_split_telegram_message(chat_id, text):
-    bot_token = local_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
+    bot_token = runtime_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     max_length = 4000
 
@@ -34,14 +52,22 @@ def send_split_telegram_message(chat_id, text):
             requests.post(url, json=payload, timeout=10)
             time.sleep(0.5)
         except Exception as e:
-            print(f"[scheduler send failed] Chat ID {chat_id}: {e}")
+            safe_error = _redact_bot_token(e, bot_token)
+            print(f"[scheduler send failed] Chat ID {chat_id}: {safe_error}")
 
 
 def daily_market_scanner():
+    with app_runtime_lock.serialized_runtime_operation():
+        return _daily_market_scanner()
+
+
+def _daily_market_scanner():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_str}] Scheduled market scanner started.")
 
-    for chat_id in local_settings.get_setting("ALLOWED_CHAT_IDS", config.ALLOWED_CHAT_IDS):
+    for chat_id in runtime_settings.get_setting(
+        "ALLOWED_CHAT_IDS", config.ALLOWED_CHAT_IDS
+    ):
         session = USER_SESSIONS.get(
             chat_id,
             {
@@ -59,6 +85,9 @@ def daily_market_scanner():
             continue
 
         selected_strategy = session.get("strategy", "MA_CROSS")
+        if selected_strategy not in STRATEGY_LABELS:
+            selected_strategy = "MA_CROSS"
+            session["strategy"] = selected_strategy
         neutralization = session.get("neutralization", "NONE")
         position_mode = session.get("position_mode", "LONG_SHORT_NEUTRAL")
         compiled_universe = compile_selected_universe(session)
@@ -107,6 +136,11 @@ def daily_market_scanner():
 
 
 def daily_market_data_refresh(label="daily"):
+    with app_runtime_lock.serialized_runtime_operation():
+        return _daily_market_data_refresh(label=label)
+
+
+def _daily_market_data_refresh(label="daily"):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{now_str}] Market data refresh started. label={label}")
     try:
