@@ -79,6 +79,13 @@ and above the setup-specific first target. Otherwise the signal is cancelled.
 
 ## Exits
 
+Beta Exit Policy provides three choices. `Strategy Default` uses the native
+rules below. `D+5 Close` disables them and closes the full position at the D+5
+close. The Box-only `Box TP/SL + D+5` keeps native target and stop events first,
+then closes the remaining quantity from D+5 onward on the first session without
+a native exit event. A partial target or stop on D+5 therefore defers the
+remaining close to the next event-free session.
+
 - Flat reclaim: take 50% at the projected channel center and the balance at the
   projected upper line.
 - Rising pullback: take 50% at the greater of the projected center or available

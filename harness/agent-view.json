@@ -22,7 +22,7 @@
     },
     {
       "label": "Exit policy",
-      "value": "D+5 Close",
+      "value": "Box TP/SL + D+5",
       "tone": "neutral"
     },
     {
@@ -61,7 +61,8 @@
       "title": "Promotion boundary",
       "tone": "warning",
       "items": [
-        "D+5 Close is selectable in Beta; Strategy Default remains the default.",
+        "Box TP/SL + D+5 keeps native Box exits and closes the remainder from D+5 on an event-free session.",
+        "D+5 Close remains selectable in Beta; Strategy Default remains the default.",
         "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",
         "All candidates, markets, and states are deliberately synthetic.",
         "The view checks message hierarchy and labels, not strategy performance."

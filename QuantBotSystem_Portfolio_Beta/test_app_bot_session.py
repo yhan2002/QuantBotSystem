@@ -54,6 +54,15 @@ class BotSessionTests(unittest.TestCase):
             "NATIVE",
         )
 
+        app_bot_session.USER_SESSIONS["wrong-strategy"] = {
+            "strategy": "MA_CROSS",
+            "exit_policy": app_bot_session.BOX_HYBRID_EXIT_POLICY,
+        }
+        self.assertEqual(
+            "NATIVE",
+            app_bot_session.get_or_create_session("wrong-strategy")["exit_policy"],
+        )
+
     def test_report_ids_keep_results_independent(self):
         session = {}
         first = app_bot_session.store_backtest_report(

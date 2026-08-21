@@ -81,6 +81,42 @@ class TelegramServerRuntimeSafetyTests(unittest.TestCase):
         )
         edit_markup.assert_not_called()
 
+    def test_box_hybrid_exit_policy_requires_box_strategy(self):
+        call = SimpleNamespace(
+            id="callback-id",
+            data="set_exit_policy:BOX_HYBRID_5D",
+            message=SimpleNamespace(
+                chat=SimpleNamespace(id=123),
+                message_id=456,
+            ),
+        )
+        session = {"strategy": "MA_CROSS", "exit_policy": "NATIVE"}
+
+        with patch.object(
+            RUN_telegram_bot_server,
+            "check_permission",
+            return_value=True,
+        ), patch.object(
+            RUN_telegram_bot_server,
+            "get_or_create_session",
+            return_value=session,
+        ), patch.object(
+            RUN_telegram_bot_server.bot,
+            "answer_callback_query",
+        ) as answer, patch.object(
+            RUN_telegram_bot_server.bot,
+            "edit_message_reply_markup",
+        ) as edit_markup:
+            RUN_telegram_bot_server.handle_menu_callbacks(call)
+
+        self.assertEqual("NATIVE", session["exit_policy"])
+        answer.assert_called_once_with(
+            "callback-id",
+            "Select Box Range strategy first.",
+            show_alert=True,
+        )
+        edit_markup.assert_not_called()
+
     def test_see_detail_sends_text_without_downloading_export(self):
         call = SimpleNamespace(
             id="callback-id",

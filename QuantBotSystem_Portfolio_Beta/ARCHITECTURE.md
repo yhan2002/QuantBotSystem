@@ -67,8 +67,10 @@ setup, structure, metadata, entry_execution
 The three existing strategy engines keep their entry rules. Their native exit
 rules remain the default, while the optional Beta D+5 policy replaces every
 native target, stop, partial, and time exit with a full close at the fifth
-session close after next-open entry. The adapter is the boundary between
-strategy research and portfolio construction.
+session close after next-open entry. Box also exposes a hybrid policy that
+preserves its native stop/target events and, from D+5, closes the remainder on
+the first session without a native exit event. The adapter is the boundary
+between strategy research and portfolio construction.
 
 `analyze_research_analytics.py` is a top-layer, offline-only sidecar. It sends
 uniform-horizon, precomputed `rank_score` panels to Alphalens Reloaded and the
@@ -124,7 +126,8 @@ liability. Partial exits reduce the original quantity by the event weight.
 With native exits, positions whose normal exit lies after an IS/OOS boundary
 are marked at the last available close rather than omitted from end-of-window
 NAV. With the D+5 policy, entries without all five post-entry sessions inside
-the evaluation window are excluded instead of marked.
+the evaluation window are excluded instead of marked. The Box hybrid policy
+also excludes an incomplete remainder rather than marking it.
 
 ## Strategy boundaries
 

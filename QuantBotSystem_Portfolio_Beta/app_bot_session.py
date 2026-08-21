@@ -35,9 +35,13 @@ STRATEGY_LABELS = {
     "VALUE_REVERSION": "Reversion",
 }
 
+BOX_HYBRID_EXIT_POLICY = "BOX_HYBRID_5D"
+BOX_HYBRID_EXIT_SESSIONS = 5
+
 EXIT_POLICY_LABELS = {
     "NATIVE": "Strategy Default",
     "FIXED_5D": "D+5 Close",
+    BOX_HYBRID_EXIT_POLICY: "Box TP/SL + D+5",
 }
 
 EXIT_POLICY_SESSIONS = {
@@ -156,6 +160,11 @@ def get_or_create_session(chat_id):
     if session.get("strategy") not in STRATEGY_LABELS:
         session["strategy"] = "MA_CROSS"
     if session.get("exit_policy") not in EXIT_POLICY_LABELS:
+        session["exit_policy"] = "NATIVE"
+    if (
+        session["exit_policy"] == BOX_HYBRID_EXIT_POLICY
+        and session["strategy"] != "BOX_RANGE"
+    ):
         session["exit_policy"] = "NATIVE"
     return session
 

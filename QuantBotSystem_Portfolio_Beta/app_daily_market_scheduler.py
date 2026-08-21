@@ -17,6 +17,8 @@ import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
 from app_bot_session import (
+    BOX_HYBRID_EXIT_POLICY,
+    BOX_HYBRID_EXIT_SESSIONS,
     EXIT_POLICY_SESSIONS,
     STRATEGY_LABELS,
     USER_SESSIONS,
@@ -95,6 +97,12 @@ def _daily_market_scanner():
         fixed_exit_sessions = EXIT_POLICY_SESSIONS.get(
             session.get("exit_policy", "NATIVE")
         )
+        hybrid_exit_sessions = (
+            BOX_HYBRID_EXIT_SESSIONS
+            if selected_strategy == "BOX_RANGE"
+            and session.get("exit_policy") == BOX_HYBRID_EXIT_POLICY
+            else None
+        )
         compiled_universe = compile_selected_universe(session)
         if not compiled_universe:
             compiled_universe = config.universe
@@ -112,6 +120,7 @@ def _daily_market_scanner():
                 report_content = strategy_box_range.scan_box_range(
                     compiled_universe,
                     fixed_exit_sessions=fixed_exit_sessions,
+                    hybrid_exit_sessions=hybrid_exit_sessions,
                     neutralization=neutralization,
                     position_mode=position_mode,
                 )

@@ -4,6 +4,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import runtime_settings
 
 from app_bot_session import (
+    BOX_HYBRID_EXIT_POLICY,
     CUSTOM_GROUP_CODE,
     EXIT_POLICY_LABELS,
     NEUTRALIZATION_LABELS,
@@ -191,6 +192,8 @@ def build_exit_policy_markup(chat_id):
     selected = session.get("exit_policy", "NATIVE")
     markup = InlineKeyboardMarkup()
     for policy, label in EXIT_POLICY_LABELS.items():
+        if policy == BOX_HYBRID_EXIT_POLICY and session.get("strategy") != "BOX_RANGE":
+            continue
         status = "[x]" if selected == policy else "[ ]"
         markup.row(
             InlineKeyboardButton(

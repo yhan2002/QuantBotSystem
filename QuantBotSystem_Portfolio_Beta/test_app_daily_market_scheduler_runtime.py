@@ -9,6 +9,42 @@ import app_runtime_lock
 
 
 class SchedulerRuntimeSafetyTests(unittest.TestCase):
+    def test_scheduled_box_scan_uses_hybrid_exit_policy(self):
+        session = {
+            "selected_groups": {"CSQ_CP"},
+            "strategy": "BOX_RANGE",
+            "exit_policy": "BOX_HYBRID_5D",
+            "neutralization": "NONE",
+            "position_mode": "LONG_SHORT_NEUTRAL",
+            "custom_tickers": [],
+            "scheduler_active": True,
+        }
+
+        with patch.object(
+            app_daily_market_scheduler.runtime_settings,
+            "get_setting",
+            return_value=["chat-id"],
+        ), patch.dict(
+            app_daily_market_scheduler.USER_SESSIONS,
+            {"chat-id": session},
+            clear=True,
+        ), patch.object(
+            app_daily_market_scheduler,
+            "compile_selected_universe",
+            return_value=["AAA"],
+        ), patch.object(
+            app_daily_market_scheduler.strategy_box_range,
+            "scan_box_range",
+            return_value="report",
+        ) as scan, patch.object(
+            app_daily_market_scheduler,
+            "send_split_telegram_message",
+        ):
+            app_daily_market_scheduler._daily_market_scanner()
+
+        self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual(5, scan.call_args.kwargs["hybrid_exit_sessions"])
+
     def test_scheduled_scan_uses_selected_fixed_exit_policy(self):
         session = {
             "selected_groups": {"CSQ_CP"},
