@@ -22,6 +22,7 @@ from app_bot_reports import (
     snapshot_scan_request,
 )
 from app_bot_session import (
+    BOX_HYBRID_EXIT_POLICY,
     CUSTOM_GROUP_CODE,
     EXIT_POLICY_LABELS,
     NEUTRALIZATION_LABELS,
@@ -514,7 +515,9 @@ def handle_menu_callbacks(call):
                 "**Exit Policy Settings**\n\n"
                 "Strategy Default: use the selected engine's native target, stop, and time exits.\n"
                 "D+5 Close: enter next open after the signal, then close the full position "
-                "at the fifth following session's close. Native exits are disabled.",
+                "at the fifth following session's close. Native exits are disabled.\n"
+                "Box TP/SL + D+5: Box Range keeps its native stop/target events; "
+                "from D+5 onward, the first day without one closes the remainder.",
                 chat_id,
                 call.message.message_id,
                 parse_mode="Markdown",
@@ -637,6 +640,16 @@ def handle_menu_callbacks(call):
                 bot.answer_callback_query(
                     call.id,
                     "Unknown exit policy.",
+                    show_alert=True,
+                )
+                return
+            if (
+                policy == BOX_HYBRID_EXIT_POLICY
+                and session.get("strategy") != "BOX_RANGE"
+            ):
+                bot.answer_callback_query(
+                    call.id,
+                    "Select Box Range strategy first.",
                     show_alert=True,
                 )
                 return

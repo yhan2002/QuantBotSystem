@@ -10,6 +10,8 @@ import core_universe_backtest
 import app_runtime_lock
 
 from app_bot_session import (
+    BOX_HYBRID_EXIT_POLICY,
+    BOX_HYBRID_EXIT_SESSIONS,
     EXIT_POLICY_SESSIONS,
     STRATEGY_LABELS,
     compile_selected_universe,
@@ -148,6 +150,11 @@ def _run_compiled_scan(
 
     selected_strategy = request.strategy
     fixed_exit_sessions = EXIT_POLICY_SESSIONS.get(request.exit_policy)
+    hybrid_exit_sessions = (
+        BOX_HYBRID_EXIT_SESSIONS
+        if request.exit_policy == BOX_HYBRID_EXIT_POLICY
+        else None
+    )
     neutralization = request.neutralization
     position_mode = request.position_mode
     strategy_label = STRATEGY_LABELS.get(selected_strategy, selected_strategy)
@@ -199,6 +206,7 @@ def _run_compiled_scan(
             **scan_kwargs,
         )
     elif selected_strategy == "BOX_RANGE":
+        scan_kwargs["hybrid_exit_sessions"] = hybrid_exit_sessions
         report = strategy_box_range.scan_box_range(
             compiled_universe,
             **scan_kwargs,

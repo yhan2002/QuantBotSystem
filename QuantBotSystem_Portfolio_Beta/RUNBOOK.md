@@ -166,7 +166,9 @@ closes the entire position at the D+5 close. Native targets, stops, and partial
 exits are disabled, and entries without a complete D+5 observation inside the
 evaluation window are excluded. It reads the local cache only.
 
-Beta Telegram Settings -> Exit Policy exposes `Strategy Default` and `D+5
-Close`. The selected policy is frozen when a manual scan is submitted and is
-also used by scheduled scans. It applies to both LONG and SHORT trades in the
-IS/OOS portfolio calculation; the default remains `Strategy Default`.
+Beta Telegram Settings -> Exit Policy exposes `Strategy Default`, `D+5 Close`,
+and the Box-only `Box TP/SL + D+5`. The Box hybrid keeps native targets and
+stops, then closes the remainder from D+5 on the first session without a native
+exit event. The selected policy is frozen when a manual scan is submitted and
+is also used by scheduled scans. It applies to both LONG and SHORT trades in
+the IS/OOS portfolio calculation; the default remains `Strategy Default`.

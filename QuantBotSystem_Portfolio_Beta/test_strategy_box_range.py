@@ -140,6 +140,36 @@ def _append_short_signal_and_targets(history, setup):
     return pd.concat([history, signal, target_day]), status
 
 
+def _hybrid_quiet_frame(side="LONG", periods=6):
+    builder = (
+        _append_signal_and_targets
+        if side == "LONG"
+        else _append_short_signal_and_targets
+    )
+    frame, _ = builder(_channel_history(0.0), "range")
+    frame = frame.iloc[:41]
+    _, stats = strategy_box_range._entry_signal(frame.iloc[:40], frame.iloc[40])
+    levels = strategy_box_range._project_levels(stats, 1)
+    entry = (
+        (levels["lowest"] + levels["first_target"]) / 2.0
+        if side == "LONG"
+        else (levels["first_target"] + levels["highest"]) / 2.0
+    )
+    quiet = pd.DataFrame(
+        {
+            "Open": entry,
+            "High": entry * 1.001,
+            "Low": entry * 0.999,
+            "Close": entry,
+            "Volume": 1000.0,
+        },
+        index=pd.date_range(
+            frame.index[-1] + pd.offsets.BDay(), periods=periods, freq="B"
+        ),
+    )
+    return pd.concat([frame, quiet]), quiet, stats, entry
+
+
 class BoxRangeV2Tests(unittest.TestCase):
     def test_structure_classifier_separates_flat_rising_falling(self):
         flat = strategy_box_range._channel_stats(_channel_history(0.0))
@@ -304,6 +334,106 @@ class BoxRangeV2Tests(unittest.TestCase):
             - frame.index.get_loc(pd.Timestamp(trade["entry_date"])),
         )
         self.assertEqual(0, incomplete[2])
+
+    def test_hybrid_exit_closes_long_and_short_exactly_at_d_plus_five(self):
+        for side in ("LONG", "SHORT"):
+            with self.subTest(side=side):
+                frame, quiet, _, _ = _hybrid_quiet_frame(side)
+                result = strategy_box_range.run_box_backtest(
+                    "TEST",
+                    df=frame,
+                    side_filter=side,
+                    include_trades=True,
+                    hybrid_exit_sessions=5,
+                )
+                incomplete = strategy_box_range.run_box_backtest(
+                    "TEST",
+                    df=frame.iloc[:-1],
+                    side_filter=side,
+                    include_trades=True,
+                    hybrid_exit_sessions=5,
+                )
+
+                self.assertEqual(1, result[2])
+                self.assertEqual(0, incomplete[2])
+                self.assertEqual(
+                    "D+5 hybrid close",
+                    result[4][0]["exit_events"][-1]["reason"],
+                )
+                self.assertEqual(
+                    quiet.index[-1].date().isoformat(),
+                    result[4][0]["exit_events"][-1]["date"],
+                )
+
+    def test_hybrid_exit_defers_after_a_d5_partial_target(self):
+        frame, quiet, stats, entry = _hybrid_quiet_frame("LONG", periods=7)
+        d5_levels = strategy_box_range._project_levels(stats, 6)
+        quiet.iloc[5, quiet.columns.get_loc("High")] = (
+            d5_levels["first_target"] + 0.01
+        )
+        quiet.iloc[5, quiet.columns.get_loc("Close")] = entry
+        frame.iloc[-7:] = quiet
+
+        result = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=frame,
+            include_trades=True,
+            hybrid_exit_sessions=5,
+        )
+
+        events = result[4][0]["exit_events"]
+        self.assertEqual(
+            ["first target 50%", "D+5 hybrid close"],
+            [event["reason"] for event in events],
+        )
+        self.assertEqual(quiet.index[5].date().isoformat(), events[0]["date"])
+        self.assertEqual(quiet.index[6].date().isoformat(), events[1]["date"])
+
+    def test_hybrid_exit_keeps_native_targets_and_rejects_fixed_combination(self):
+        frame, _ = _append_signal_and_targets(_channel_history(0.0), "range")
+        result = strategy_box_range.run_box_backtest(
+            "TEST",
+            df=frame,
+            include_trades=True,
+            hybrid_exit_sessions=5,
+        )
+
+        self.assertEqual(
+            ["first target 50%", "channel upper target"],
+            [event["reason"] for event in result[4][0]["exit_events"]],
+        )
+        with self.assertRaisesRegex(ValueError, "mutually exclusive"):
+            strategy_box_range.run_box_backtest(
+                "TEST",
+                df=frame,
+                fixed_exit_sessions=5,
+                hybrid_exit_sessions=5,
+            )
+
+    def test_hybrid_exit_keeps_native_stop_first_for_long_and_short(self):
+        for side in ("LONG", "SHORT"):
+            with self.subTest(side=side):
+                frame, quiet, _, entry = _hybrid_quiet_frame(side)
+                if side == "LONG":
+                    quiet.iloc[0, quiet.columns.get_loc("Low")] = entry * 0.89
+                    quiet.iloc[0, quiet.columns.get_loc("High")] = entry * 1.50
+                else:
+                    quiet.iloc[0, quiet.columns.get_loc("High")] = entry * 1.11
+                    quiet.iloc[0, quiet.columns.get_loc("Low")] = entry * 0.50
+                frame.iloc[-len(quiet) :] = quiet
+
+                result = strategy_box_range.run_box_backtest(
+                    "TEST",
+                    df=frame,
+                    side_filter=side,
+                    include_trades=True,
+                    hybrid_exit_sessions=5,
+                )
+
+                self.assertEqual(
+                    ["-7% stop", "-10% stop"],
+                    [event["reason"] for event in result[4][0]["exit_events"]],
+                )
 
     def test_open_position_is_marked_at_evaluation_close(self):
         frame, _ = _append_signal_and_targets(

@@ -544,11 +544,19 @@ def run_box_backtest(
     adverse_gap_limit_pct=core_entry_execution.DEFAULT_ADVERSE_GAP_LIMIT_PCT,
     precomputed_candidates=None,
     fixed_exit_sessions=None,
+    hybrid_exit_sessions=None,
 ):
     """Backtest directional V2 range and trend-channel setups."""
+    if fixed_exit_sessions is not None and hybrid_exit_sessions is not None:
+        raise ValueError(
+            "fixed_exit_sessions and hybrid_exit_sessions are mutually exclusive"
+        )
     try:
         fixed_exit_sessions = core_entry_execution.normalize_fixed_exit_sessions(
             fixed_exit_sessions
+        )
+        hybrid_exit_sessions = core_entry_execution.normalize_fixed_exit_sessions(
+            hybrid_exit_sessions
         )
         df = (
             _load_ohlcv(ticker, period=period)
@@ -716,6 +724,7 @@ def run_box_backtest(
             first_stop = entry * (0.93 if side == "LONG" else 1.07)
             final_stop = entry * (0.90 if side == "LONG" else 1.10)
             event_date = df.index[index].date().isoformat()
+            exit_events_before = len(position["exit_events"])
 
             # Conservative daily-bar rule: stops take priority over targets.
             if _stop_hit(side, day, final_stop):
@@ -826,6 +835,26 @@ def run_box_backtest(
 
             held_days = index - position["entry_index"] + 1
             if (
+                hybrid_exit_sessions is not None
+                and index - position["entry_index"] >= hybrid_exit_sessions
+                and len(position["exit_events"]) == exit_events_before
+            ):
+                position["realized"] += position["remaining"] * _pnl_pct(
+                    side, float(day["Close"]), entry
+                )
+                position["exit_events"].append(
+                    {
+                        "date": event_date,
+                        "reason": f"D+{hybrid_exit_sessions} hybrid close",
+                        "weight": position["remaining"],
+                        "price": float(day["Close"]),
+                    }
+                )
+                close_trade(position)
+                position = None
+                continue
+
+            if (
                 not position["first_target_taken"]
                 and held_days >= TIME_EXIT_DAYS
             ):
@@ -865,6 +894,7 @@ def run_box_backtest(
 
         if (
             fixed_exit_sessions is None
+            and hybrid_exit_sessions is None
             and position is not None
             and position["remaining"] > 1e-12
         ):
@@ -974,6 +1004,7 @@ def scan_total_universe(
     progress_callback=None,
     report_artifacts=None,
     fixed_exit_sessions=None,
+    hybrid_exit_sessions=None,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
     long_candidates = []
@@ -1183,6 +1214,7 @@ def scan_total_universe(
         ),
         side_filter=core_position_mode.side_filter(position_mode),
         fixed_exit_sessions=fixed_exit_sessions,
+        hybrid_exit_sessions=hybrid_exit_sessions,
         **core_backtest_periods.selection_window(),
     )
     oos_result = core_universe_backtest.aggregate_universe_backtest(
@@ -1197,6 +1229,7 @@ def scan_total_universe(
         ),
         side_filter=core_position_mode.side_filter(position_mode),
         fixed_exit_sessions=fixed_exit_sessions,
+        hybrid_exit_sessions=hybrid_exit_sessions,
         **core_backtest_periods.oos_window(),
     )
     report += core_universe_backtest.format_fixed_is_oos_backtest(
@@ -1213,6 +1246,8 @@ def scan_total_universe(
         exit_text=(
             f"close at D+{fixed_exit_sessions}; native targets/stops disabled; incomplete D+N holdings excluded"
             if fixed_exit_sessions is not None
+            else f"native stop/target events first; from D+{hybrid_exit_sessions}, close the remainder on the first event-free session; incomplete holdings excluded"
+            if hybrid_exit_sessions is not None
             else "50% at the setup-specific first target and balance at the projected "
             "channel upper line; 10d no-target exit; remaining position exits 10d "
             "after the first target; -7% half stop and -10% final stop; stop-first "
@@ -1237,6 +1272,7 @@ def scan_box_range(
     progress_callback=None,
     report_artifacts=None,
     fixed_exit_sessions=None,
+    hybrid_exit_sessions=None,
 ):
     return scan_total_universe(
         universe_list,
@@ -1245,4 +1281,5 @@ def scan_box_range(
         progress_callback=progress_callback,
         report_artifacts=report_artifacts,
         fixed_exit_sessions=fixed_exit_sessions,
+        hybrid_exit_sessions=hybrid_exit_sessions,
     )

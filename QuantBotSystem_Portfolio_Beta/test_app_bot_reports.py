@@ -7,6 +7,30 @@ import core_universe_backtest
 
 
 class BotReportTests(unittest.TestCase):
+    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
+    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
+    @patch("app_bot_reports.strategy_box_range.scan_box_range", return_value="summary")
+    @patch("app_bot_reports.get_or_create_session", return_value={})
+    def test_box_hybrid_policy_is_forwarded_only_to_box_scan(
+        self, _session, scan, _missing, _freshness
+    ):
+        request = app_bot_reports.ScanRequest(
+            universe=("AAA",),
+            strategy="BOX_RANGE",
+            exit_policy=app_bot_session.BOX_HYBRID_EXIT_POLICY,
+            neutralization="NONE",
+            position_mode="LONG_SHORT_NEUTRAL",
+            custom_tickers=frozenset(),
+        )
+
+        app_bot_reports.run_compiled_scan("any-chat", request=request)
+
+        self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual(
+            5,
+            scan.call_args.kwargs["hybrid_exit_sessions"],
+        )
+
     @patch("app_bot_reports.compile_selected_universe", return_value=["AAA"])
     @patch("app_bot_reports.get_or_create_session")
     def test_scan_request_is_an_immutable_settings_snapshot(
