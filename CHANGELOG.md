@@ -14,6 +14,29 @@
   `Strategy Default`와 전량 `D+5 Close`의 동작은 바꾸지 않았습니다.
 - 전체 유니버스 백테스트, 봇 재시작, Telegram 발송은 수행하지 않았습니다.
 
+## 주간 요약: 2026-08-17 ~ 2026-08-24
+
+### 배포판 변경
+
+- 통합 Beta에서 검증한 포트폴리오 원장·score-weighted 배분, 비동기 스캔, ACWI 비교와 BRAIN Reversion 기본 스캔을 `QuantBotSystem/`에 승격했습니다.
+- 배포판의 Nasdaq Top 30 스냅샷, 로컬 비밀 설정과 시장 DB 경로는 유지하고 HMM·RL overlay 및 연구 스크립트는 제외했습니다.
+- 배포 표시 빌드를 `2026.08.20`으로 갱신했으며 봇 재시작·Telegram 발송은 수행하지 않았습니다.
+
+### 베타판 변경
+
+- 레거시 `QuantBotSystem_Beta/`는 변경 없이 보존하고 `QuantBotSystem_Portfolio_Beta/`를 통합 Beta 관찰선으로 유지했습니다.
+- 통합 Beta에 Nasdaq Top 30 선택 메뉴를 복원하고 배포판과 같은 30종목 스냅샷을 사용하도록 맞췄습니다.
+- `Strategy Default`와 진입 후 `D+5 Close`를 선택하는 청산 정책을 수동·예약 스캔의 Long/Short IS/OOS 계산에 동일하게 연결했습니다.
+- Box Range 전용 `Box TP/SL + D+5`를 추가해 기존 목표가·부분익절·손절을 우선 적용하고 무이벤트 D+5 이후 잔량만 종가 청산하도록 했습니다.
+- 장시간 전체 비교는 `--confirm-long-run`이 있어야 시작되며 이번 주에는 전체 백테스트·가격 다운로드·봇 실행을 수행하지 않았습니다.
+
+### GitHub 커밋 요약
+
+- `58e892b`: 통합 Beta의 Nasdaq Top 30 유니버스 복원
+- `c5aa2f1`: 통합 Beta 런타임을 배포판에 승격
+- `256bcff`: 선택형 고정 D+5 청산 정책과 비교 경로 추가
+- `d87070c`: Box TP/SL 우선 후 D+5 잔량 청산 정책 추가
+
 ## 2026-08-20
 
 ### Beta 청산 정책 선택과 D+5 비교
