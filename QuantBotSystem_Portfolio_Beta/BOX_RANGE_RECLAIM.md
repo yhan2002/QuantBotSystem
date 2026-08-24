@@ -135,3 +135,8 @@ indicator and does not replace the Python portfolio backtest or exit ledger.
 To keep the chart bounded, a new signal replaces the previous frozen-channel
 drawing, so only the latest confirmed frozen channel remains visible. The
 script rejects chart timeframes other than one day.
+
+The default chart view shows only the latest confirmed frozen channel and
+next-open entry markers. Live rolling channels, touch thresholds, and setup
+labels remain available as opt-in diagnostics, with live history capped at 80
+bars by default. Inputs and plot values are hidden from the chart status line.
