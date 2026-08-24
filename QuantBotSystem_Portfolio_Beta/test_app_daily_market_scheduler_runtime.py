@@ -9,6 +9,45 @@ import app_runtime_lock
 
 
 class SchedulerRuntimeSafetyTests(unittest.TestCase):
+    def test_scheduled_relative_equilibrium_scan_uses_common_settings(self):
+        session = {
+            "selected_groups": {"CSQ_CP"},
+            "strategy": "RELATIVE_EQUILIBRIUM",
+            "exit_policy": "FIXED_5D",
+            "neutralization": "SECTOR",
+            "position_mode": "LONG_ONLY",
+            "custom_tickers": [],
+            "scheduler_active": True,
+        }
+
+        with patch.object(
+            app_daily_market_scheduler.runtime_settings,
+            "get_setting",
+            return_value=["chat-id"],
+        ), patch.dict(
+            app_daily_market_scheduler.USER_SESSIONS,
+            {"chat-id": session},
+            clear=True,
+        ), patch.object(
+            app_daily_market_scheduler,
+            "compile_selected_universe",
+            return_value=["AAA"],
+        ), patch.object(
+            app_daily_market_scheduler.strategy_relative_equilibrium,
+            "scan_relative_equilibrium",
+            return_value="report",
+        ) as scan, patch.object(
+            app_daily_market_scheduler,
+            "send_split_telegram_message",
+        ) as send:
+            app_daily_market_scheduler._daily_market_scanner()
+
+        self.assertEqual(["AAA"], scan.call_args.args[0])
+        self.assertEqual(5, scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual("SECTOR", scan.call_args.kwargs["neutralization"])
+        self.assertEqual("LONG_ONLY", scan.call_args.kwargs["position_mode"])
+        self.assertIn("Relative Equilibrium Scan", send.call_args.args[1])
+
     def test_scheduled_box_scan_uses_hybrid_exit_policy(self):
         session = {
             "selected_groups": {"CSQ_CP"},

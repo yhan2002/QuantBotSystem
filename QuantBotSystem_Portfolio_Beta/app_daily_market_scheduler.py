@@ -15,6 +15,7 @@ import runtime_settings
 import strategy_ma_cross
 import core_market_data_store
 import strategy_price_liquidity_reversion
+import strategy_relative_equilibrium
 import core_entry_execution
 import core_universe_backtest
 from app_bot_session import (
@@ -140,6 +141,14 @@ def _daily_market_scanner():
                     position_mode=position_mode,
                 )
                 header = f"*Scheduled Alert* Reversion Scan ({now_str})\n"
+            elif selected_strategy == "RELATIVE_EQUILIBRIUM":
+                report_content = strategy_relative_equilibrium.scan_relative_equilibrium(
+                    compiled_universe,
+                    fixed_exit_sessions=fixed_exit_sessions,
+                    neutralization=neutralization,
+                    position_mode=position_mode,
+                )
+                header = f"*Scheduled Alert* Relative Equilibrium Scan ({now_str})\n"
             else:
                 report_content = f"Unknown strategy: {selected_strategy}"
                 header = f"*Scheduled Alert* ({now_str})\n"

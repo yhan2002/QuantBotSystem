@@ -43,6 +43,7 @@
       "rows": [
         ["Momentum", "SYNTH-US", "LONG", "SYNTH-A", "READY"],
         ["Box Range", "SYNTH-JP", "SHORT", "SYNTH-B", "REVIEW"],
+        ["Relative Equilibrium", "SYNTH-US", "LONG+HEDGE", "SYNTH-D", "READY"],
         ["Reversion", "SYNTH-CSQ", "LONG", "SYNTH-C", "SKIP"]
       ]
     },
@@ -63,6 +64,7 @@
       "items": [
         "Box TP/SL + D+5 keeps native Box exits and closes the remainder from D+5 on an event-free session.",
         "Box Breakout Fill enters only when the next session touches the projected same-side boundary and preserves native exits.",
+        "Relative Equilibrium is a daily LONG-alpha plus factor-hedge strategy; it does not use intraday signals.",
         "D+5 Close remains selectable in Beta; Strategy Default remains the default.",
         "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",
         "All candidates, markets, and states are deliberately synthetic.",
