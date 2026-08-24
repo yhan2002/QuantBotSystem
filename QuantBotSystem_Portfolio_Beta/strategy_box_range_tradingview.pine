@@ -1,0 +1,238 @@
+//@version=6
+indicator("QuantBot Beta Box Range Causal", overlay=true, max_bars_back=500, max_lines_count=10, max_labels_count=20)
+
+int channelBars = input.int(40, "Channel bars", minval=20)
+int atrBars = input.int(20, "ATR bars", minval=2)
+int volumeBars = input.int(20, "Turnover bars", minval=2)
+float minContainment = input.float(0.85, "Minimum containment")
+float minWidthAtr = input.float(4.0, "Minimum width / ATR")
+float maxWidthAtr = input.float(12.0, "Maximum width / ATR")
+float touchTolerance = input.float(0.50, "Touch tolerance / ATR")
+int minTouches = input.int(2, "Minimum touches", minval=1)
+int touchSpacing = input.int(5, "Touch spacing", minval=1)
+float volumeLimit = input.float(2.0, "Maximum turnover multiple")
+float reboundLocation = input.float(0.60, "Rebound close location")
+int frozenDisplayBars = input.int(40, "Frozen channel display bars", minval=1)
+bool showLiveChannel = input.bool(true, "Show live signal channel")
+bool showFrozenChannel = input.bool(true, "Show latest confirmed frozen channel")
+
+if barstate.isfirst and not (timeframe.isdaily and timeframe.multiplier == 1)
+    runtime.error("QuantBot Box Range requires a 1D chart")
+
+f_quantile(array<float> values, float quantile) =>
+    array<float> sorted = array.copy(values)
+    array.sort(sorted, order.ascending)
+    float position = (array.size(sorted) - 1) * quantile
+    int lowerIndex = int(math.floor(position))
+    int upperIndex = int(math.ceil(position))
+    float weight = position - lowerIndex
+    array.get(sorted, lowerIndex) * (1.0 - weight) + array.get(sorted, upperIndex) * weight
+
+f_channel(int length, int atrLength) =>
+    float lowerSignal = na
+    float middleSignal = na
+    float upperSignal = na
+    float priceSlope = na
+    float slopeRatio = na
+    float efficiency = na
+    float channelAtr = na
+    float widthAtr = na
+    float containment = na
+    int lowerTouches = 0
+    int upperTouches = 0
+    int structure = 0
+    bool longQuality = false
+    bool shortQuality = false
+    bool ready = false
+
+    if bar_index >= length and not na(close[length])
+        float basePrice = close[length]
+        float sumX = 0.0
+        float sumY = 0.0
+        float sumXX = 0.0
+        float sumXY = 0.0
+
+        for i = 0 to length - 1
+            int offset = length - i
+            float x = i
+            float y = ((high[offset] + low[offset]) * 0.5) / basePrice
+            sumX += x
+            sumY += y
+            sumXX += x * x
+            sumXY += x * y
+
+        float denominator = length * sumXX - sumX * sumX
+        float normalizedSlope = (length * sumXY - sumX * sumY) / denominator
+        float intercept = (sumY - normalizedSlope * sumX) / length
+        array<float> lowerResiduals = array.new_float()
+        array<float> upperResiduals = array.new_float()
+        float pathLength = 0.0
+        float atrSum = 0.0
+        int usedAtrBars = math.min(atrLength, length)
+
+        for i = 0 to length - 1
+            int offset = length - i
+            float center = intercept + normalizedSlope * i
+            array.push(lowerResiduals, low[offset] / basePrice - center)
+            array.push(upperResiduals, high[offset] / basePrice - center)
+            float previousClose = i == 0 ? close[offset] : close[offset + 1]
+            float trueRange = math.max(high[offset] - low[offset], math.max(math.abs(high[offset] - previousClose), math.abs(low[offset] - previousClose)))
+            if i >= length - usedAtrBars
+                atrSum += trueRange
+            if i > 0
+                pathLength += math.abs(close[offset] - close[offset + 1])
+
+        float lowerOffset = f_quantile(lowerResiduals, 0.10)
+        float upperOffset = f_quantile(upperResiduals, 0.90)
+        channelAtr := atrSum / usedAtrBars
+        priceSlope := normalizedSlope * basePrice
+        middleSignal := (intercept + normalizedSlope * length) * basePrice
+        lowerSignal := (intercept + normalizedSlope * length + lowerOffset) * basePrice
+        upperSignal := (intercept + normalizedSlope * length + upperOffset) * basePrice
+        float channelWidth = upperSignal - lowerSignal
+        float fittedMove = priceSlope * (length - 1)
+        slopeRatio := channelWidth > 0 ? fittedMove / channelWidth : na
+        efficiency := pathLength > 0 ? math.abs(close[1] - close[length]) / pathLength : 0.0
+        structure := math.abs(slopeRatio) <= 0.35 ? 1 : slopeRatio >= 0.75 and efficiency >= 0.20 ? 2 : slopeRatio <= -0.75 and efficiency >= 0.20 ? 3 : 0
+
+        int containedBars = 0
+        int lastLowerTouch = -touchSpacing
+        int lastUpperTouch = -touchSpacing
+        float tolerance = channelAtr * touchTolerance
+
+        for i = 0 to length - 1
+            int offset = length - i
+            float historicalMiddle = (intercept + normalizedSlope * i) * basePrice
+            float historicalLower = historicalMiddle + lowerOffset * basePrice
+            float historicalUpper = historicalMiddle + upperOffset * basePrice
+            if close[offset] >= historicalLower and close[offset] <= historicalUpper
+                containedBars += 1
+            bool lowerTouch = low[offset] <= historicalLower + tolerance and close[offset] >= historicalLower
+            bool upperTouch = high[offset] >= historicalUpper - tolerance and close[offset] <= historicalUpper
+            if lowerTouch and i - lastLowerTouch >= touchSpacing
+                lowerTouches += 1
+                lastLowerTouch := i
+            if upperTouch and i - lastUpperTouch >= touchSpacing
+                upperTouches += 1
+                lastUpperTouch := i
+
+        containment := float(containedBars) / length
+        widthAtr := channelAtr > 0 ? channelWidth / channelAtr : na
+        bool commonQuality = containment >= minContainment and widthAtr >= minWidthAtr and widthAtr <= maxWidthAtr
+        longQuality := commonQuality and lowerTouches >= minTouches
+        shortQuality := commonQuality and upperTouches >= minTouches
+        ready := true
+
+    [lowerSignal, middleSignal, upperSignal, priceSlope, slopeRatio, efficiency, channelAtr, widthAtr, containment, lowerTouches, upperTouches, structure, longQuality, shortQuality, ready]
+
+[lowerChannel, middleChannel, upperChannel, channelSlope, channelSlopeRatio, trendEfficiency, atr, channelWidthAtr, channelContainment, lowerTouchCount, upperTouchCount, boxStructure, validLongChannel, validShortChannel, channelReady] = f_channel(channelBars, atrBars)
+
+float averageTurnover = ta.sma(volume * close, volumeBars)[1]
+float turnoverRatio = averageTurnover > 0 ? volume * close / averageTurnover : na
+bool turnoverAllowed = not na(turnoverRatio) and turnoverRatio < volumeLimit
+float candleRange = high - low
+float closeLocation = candleRange > 0 ? (close - low) / candleRange : 0.0
+float priorSwingHigh = ta.highest(high[1], 20)
+float priorSwingLow = ta.lowest(low[1], 20)
+float signalTolerance = atr * touchTolerance
+float risingTarget = math.max(middleChannel, math.min(priorSwingHigh, upperChannel))
+float fallingTarget = math.min(middleChannel, math.max(priorSwingLow, lowerChannel))
+bool commonSignal = barstate.isconfirmed and channelReady and turnoverAllowed
+
+bool flatLong = commonSignal and boxStructure == 1 and validLongChannel and low < lowerChannel and close > lowerChannel and close < middleChannel and closeLocation >= reboundLocation
+bool flatShort = commonSignal and boxStructure == 1 and validShortChannel and high > upperChannel and close < upperChannel and close > middleChannel and closeLocation <= 1.0 - reboundLocation
+bool risingLong = commonSignal and boxStructure == 2 and validLongChannel and low <= lowerChannel + signalTolerance and close > lowerChannel and close < upperChannel and close > open and closeLocation >= reboundLocation and close < risingTarget
+bool fallingShort = commonSignal and boxStructure == 3 and validShortChannel and high >= upperChannel - signalTolerance and close > lowerChannel and close < upperChannel and close < open and closeLocation <= 1.0 - reboundLocation and close > fallingTarget
+bool longSignal = flatLong or risingLong
+bool shortSignal = flatShort or fallingShort
+
+float entryLower = lowerChannel[1] + channelSlope[1]
+float entryMiddle = middleChannel[1] + channelSlope[1]
+float entryUpper = upperChannel[1] + channelSlope[1]
+float longEntryTarget = risingLong[1] ? math.max(entryMiddle, math.min(priorSwingHigh[1], entryUpper)) : entryMiddle
+float shortEntryTarget = fallingShort[1] ? math.min(entryMiddle, math.max(priorSwingLow[1], entryLower)) : entryMiddle
+bool longEntry = longSignal[1] and open > entryLower and open < longEntryTarget
+bool shortEntry = shortSignal[1] and open < entryUpper and open > shortEntryTarget
+
+color liveColor = boxStructure == 1 ? color.gray : boxStructure == 2 ? color.yellow : boxStructure == 3 ? color.orange : color.new(color.gray, 80)
+liveUpperPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? upperChannel : na, "Live signal upper", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr)
+liveMiddlePlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? middleChannel : na, "Live signal midpoint", color=color.new(liveColor, 60), linewidth=1, style=plot.style_linebr)
+liveLowerPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? lowerChannel : na, "Live signal lower", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr)
+plot(showLiveChannel and boxStructure == 2 ? lowerChannel + signalTolerance : na, "RISING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles)
+plot(showLiveChannel and boxStructure == 3 ? upperChannel - signalTolerance : na, "FALLING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles)
+
+var line frozenUpperLine = na
+var line frozenMiddleLine = na
+var line frozenLowerLine = na
+var linefill frozenFill = na
+var label confirmationLabel = na
+var float frozenBaseUpper = na
+var float frozenBaseMiddle = na
+var float frozenBaseLower = na
+var float frozenSlope = na
+var int frozenSignalBar = na
+var int frozenAge = 0
+var bool frozenActive = false
+
+if barstate.isconfirmed
+    if frozenActive
+        int projectionSteps = bar_index - frozenSignalBar
+        frozenAge := projectionSteps
+        float projectedUpper = frozenBaseUpper + frozenSlope * projectionSteps
+        float projectedMiddle = frozenBaseMiddle + frozenSlope * projectionSteps
+        float projectedLower = frozenBaseLower + frozenSlope * projectionSteps
+        line.set_xy2(frozenUpperLine, bar_index, projectedUpper)
+        line.set_xy2(frozenMiddleLine, bar_index, projectedMiddle)
+        line.set_xy2(frozenLowerLine, bar_index, projectedLower)
+        if frozenAge >= frozenDisplayBars
+            frozenActive := false
+
+    if showFrozenChannel and (longSignal or shortSignal)
+        if not na(frozenFill)
+            linefill.delete(frozenFill)
+        if not na(frozenUpperLine)
+            line.delete(frozenUpperLine)
+        if not na(frozenMiddleLine)
+            line.delete(frozenMiddleLine)
+        if not na(frozenLowerLine)
+            line.delete(frozenLowerLine)
+        if not na(confirmationLabel)
+            label.delete(confirmationLabel)
+        color frozenColor = longSignal ? color.lime : color.red
+        frozenUpperLine := line.new(bar_index, upperChannel, bar_index + 1, upperChannel + channelSlope, xloc=xloc.bar_index, color=frozenColor, width=2)
+        frozenMiddleLine := line.new(bar_index, middleChannel, bar_index + 1, middleChannel + channelSlope, xloc=xloc.bar_index, color=color.new(frozenColor, 35), style=line.style_dashed)
+        frozenLowerLine := line.new(bar_index, lowerChannel, bar_index + 1, lowerChannel + channelSlope, xloc=xloc.bar_index, color=frozenColor, width=2)
+        frozenFill := linefill.new(frozenUpperLine, frozenLowerLine, color=color.new(frozenColor, 92))
+        confirmationLabel := label.new(bar_index, longSignal ? lowerChannel : upperChannel, "CONFIRMED", style=longSignal ? label.style_label_up : label.style_label_down, color=frozenColor, textcolor=color.white, size=size.tiny)
+        frozenBaseUpper := upperChannel
+        frozenBaseMiddle := middleChannel
+        frozenBaseLower := lowerChannel
+        frozenSlope := channelSlope
+        frozenSignalBar := bar_index
+        frozenAge := 0
+        frozenActive := true
+
+plotshape(flatLong, title="Flat long signal", text="FLAT L", style=shape.labelup, location=location.belowbar, color=color.teal, textcolor=color.white, size=size.tiny)
+plotshape(risingLong, title="Rising long signal", text="RISE L", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.tiny)
+plotshape(flatShort, title="Flat short signal", text="FLAT S", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, size=size.tiny)
+plotshape(fallingShort, title="Falling short signal", text="FALL S", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.tiny)
+plotshape(longEntry, title="Next-open long entry", text="ENTRY L", style=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.small)
+plotshape(shortEntry, title="Next-open short entry", text="ENTRY S", style=shape.triangledown, location=location.abovebar, color=color.fuchsia, size=size.small)
+
+plot(channelContainment, "Containment", display=display.data_window)
+plot(channelWidthAtr, "Channel width / ATR", display=display.data_window)
+plot(channelSlopeRatio, "Slope ratio", display=display.data_window)
+plot(trendEfficiency, "Trend efficiency", display=display.data_window)
+plot(0.35 - math.abs(channelSlopeRatio), "Flat slope margin", display=display.data_window)
+plot(math.abs(channelSlopeRatio) - 0.75, "Trend slope margin", display=display.data_window)
+plot(trendEfficiency - 0.20, "Trend efficiency margin", display=display.data_window)
+plot(lowerTouchCount, "Lower touches", display=display.data_window)
+plot(upperTouchCount, "Upper touches", display=display.data_window)
+plot(turnoverRatio, "Turnover multiple", display=display.data_window)
+
+alertcondition(flatLong, "BOX FLAT Long", "BOX FLAT long signal confirmed")
+alertcondition(flatShort, "BOX FLAT Short", "BOX FLAT short signal confirmed")
+alertcondition(risingLong, "BOX RISING Long", "BOX RISING long signal confirmed")
+alertcondition(fallingShort, "BOX FALLING Short", "BOX FALLING short signal confirmed")
+alertcondition(longEntry, "BOX Long Entry", "BOX long entry valid at this open")
+alertcondition(shortEntry, "BOX Short Entry", "BOX short entry valid at this open")

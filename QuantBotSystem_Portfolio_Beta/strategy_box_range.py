@@ -193,7 +193,9 @@ def _channel_stats(history, assume_clean=False):
         / ((MAX_CHANNEL_WIDTH_ATR - MIN_CHANNEL_WIDTH_ATR) / 2.0),
     )
     trend_component = (
-        min(trend_efficiency / 0.50, 1.0) if structure == "RISING" else 1.0
+        min(trend_efficiency / 0.50, 1.0)
+        if structure in ("RISING", "FALLING")
+        else 1.0
     )
     common_quality_score = (
         0.35 * containment_component
@@ -213,6 +215,11 @@ def _channel_stats(history, assume_clean=False):
         "box_width_pct": channel_width / float(lower_line[-1]),
         "slope_ratio": float(slope_ratio),
         "trend_efficiency": float(trend_efficiency),
+        "flat_slope_margin": float(FLAT_MAX_SLOPE_RATIO - abs(slope_ratio)),
+        "trend_slope_margin": float(abs(slope_ratio) - TREND_MIN_SLOPE_RATIO),
+        "trend_efficiency_margin": float(
+            trend_efficiency - MIN_TREND_EFFICIENCY
+        ),
         "containment_ratio": containment,
         "atr": atr,
         "width_atr": float(width_atr),
@@ -603,6 +610,17 @@ def run_box_backtest(
                     "signal_score": current_position["signal_score"],
                     "expected_rr": current_position["expected_rr"],
                     "slope_ratio": current_position["stats"]["slope_ratio"],
+                    "flat_slope_margin": current_position["stats"][
+                        "flat_slope_margin"
+                    ],
+                    "trend_slope_margin": current_position["stats"][
+                        "trend_slope_margin"
+                    ],
+                    "trend_efficiency_margin": current_position["stats"][
+                        "trend_efficiency_margin"
+                    ],
+                    "lower_touches": current_position["stats"]["lower_touches"],
+                    "upper_touches": current_position["stats"]["upper_touches"],
                     "containment_ratio": current_position["stats"][
                         "containment_ratio"
                     ],

@@ -24,6 +24,10 @@ The signal bar is excluded from channel fitting.
 - Values between the flat and directional thresholds are `TRANSITION`.
 - `RISING` permits trend-following LONG entries, `FALLING` permits
   trend-following SHORT entries, and `TRANSITION` permits neither.
+- RISING and FALLING quality scores apply the same trend-efficiency component.
+- Exported trade diagnostics include signed flat/trend threshold margins and
+  both lower/upper spaced-touch counts. These fields are diagnostic only and do
+  not delay entries or add a new filter.
 
 ## Channel quality
 
@@ -102,7 +106,10 @@ remaining close to the next event-free session.
 - After the first target, allow 10 trading days for the upper target.
 - At 7% adverse movement, close half of the remaining quantity; at 10%, close
   all remaining quantity, mirrored for LONG and SHORT.
-- When a daily bar can satisfy a stop and target, process the stop first.
+- When a daily bar satisfies the final stop and a target, the final-stop branch
+  closes the trade and no target is recorded. When it satisfies only the first
+  stop and targets, record the half stop first, then apply targets to the
+  remaining quantity on that same bar.
 - Backtest details retain entry date, setup, structure, quality metrics, expected
   reward/risk, and every partial-exit date and reason.
 
@@ -116,3 +123,15 @@ remaining close to the next event-free session.
   CAGR, MDD, and Sharpe are secondary diagnostics.
 - Review target, time-exit, -7% stop, and -10% stop contributions separately.
 - Do not tune thresholds from the fixed OOS result.
+
+## TradingView reference
+
+`strategy_box_range_tradingview.pine` mirrors the close-known channel and entry
+conditions for daily-chart inspection. Its thin live channel is recalculated
+from the prior 40 completed bars and is the channel used by signal markers. A
+frozen channel starts only on the signal-confirmation bar and extends forward;
+it is never drawn backward over the formation window. The Pine file is an
+indicator and does not replace the Python portfolio backtest or exit ledger.
+To keep the chart bounded, a new signal replaces the previous frozen-channel
+drawing, so only the latest confirmed frozen channel remains visible. The
+script rejects chart timeframes other than one day.

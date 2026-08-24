@@ -341,6 +341,9 @@ class UniverseBacktestTests(unittest.TestCase):
             "trades": [{
                 "ticker": "AAA", "side": "LONG", "entry_date": "2024-02-01",
                 "entry_price": 100.0, "return": 3.0,
+                "flat_slope_margin": 0.10, "trend_slope_margin": -0.50,
+                "trend_efficiency_margin": 0.20,
+                "lower_touches": 3, "upper_touches": 2,
                 "exit_events": [
                     {"date": "2024-02-05", "reason": "partial", "weight": 0.5, "price": 102.0},
                     {"date": "2024-02-08", "reason": "final", "weight": 0.5, "price": 104.0},
@@ -360,10 +363,14 @@ class UniverseBacktestTests(unittest.TestCase):
                 selection, oos, "box_range", temp_dir
             )
             lines = Path(path).read_text(encoding="utf-8-sig").splitlines()
+            rows = pd.read_csv(path)
 
         self.assertEqual(len(lines), 4)  # header + two partial IS exits + one OOS exit
         self.assertIn("IS,2024-01-01,2025-12-31,box_range,IS-00001,AAA,LONG", lines[1])
         self.assertIn("OOS,2026-01-01,2026-07-16,box_range,OOS-00001,BBB,SHORT", lines[3])
+        self.assertEqual(0.10, rows.iloc[0]["flat_slope_margin"])
+        self.assertEqual(3, rows.iloc[0]["lower_touches"])
+        self.assertEqual(2, rows.iloc[0]["upper_touches"])
 
     def test_portfolio_bundle_contains_trade_ledger_and_daily_nav_files(self):
         daily = pd.DataFrame(
