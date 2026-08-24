@@ -1,20 +1,24 @@
 //@version=6
 indicator("QuantBot Beta Box Range Causal", overlay=true, max_bars_back=500, max_lines_count=10, max_labels_count=20)
 
-int channelBars = input.int(40, "Channel bars", minval=20)
-int atrBars = input.int(20, "ATR bars", minval=2)
-int volumeBars = input.int(20, "Turnover bars", minval=2)
-float minContainment = input.float(0.85, "Minimum containment")
-float minWidthAtr = input.float(4.0, "Minimum width / ATR")
-float maxWidthAtr = input.float(12.0, "Maximum width / ATR")
-float touchTolerance = input.float(0.50, "Touch tolerance / ATR")
-int minTouches = input.int(2, "Minimum touches", minval=1)
-int touchSpacing = input.int(5, "Touch spacing", minval=1)
-float volumeLimit = input.float(2.0, "Maximum turnover multiple")
-float reboundLocation = input.float(0.60, "Rebound close location")
-int frozenDisplayBars = input.int(40, "Frozen channel display bars", minval=1)
-bool showLiveChannel = input.bool(true, "Show live signal channel")
-bool showFrozenChannel = input.bool(true, "Show latest confirmed frozen channel")
+int channelBars = input.int(40, "Channel bars", minval=20, display=display.none)
+int atrBars = input.int(20, "ATR bars", minval=2, display=display.none)
+int volumeBars = input.int(20, "Turnover bars", minval=2, display=display.none)
+float minContainment = input.float(0.85, "Minimum containment", display=display.none)
+float minWidthAtr = input.float(4.0, "Minimum width / ATR", display=display.none)
+float maxWidthAtr = input.float(12.0, "Maximum width / ATR", display=display.none)
+float touchTolerance = input.float(0.50, "Touch tolerance / ATR", display=display.none)
+int minTouches = input.int(2, "Minimum touches", minval=1, display=display.none)
+int touchSpacing = input.int(5, "Touch spacing", minval=1, display=display.none)
+float volumeLimit = input.float(2.0, "Maximum turnover multiple", display=display.none)
+float reboundLocation = input.float(0.60, "Rebound close location", display=display.none)
+int frozenDisplayBars = input.int(40, "Frozen channel display bars", minval=1, display=display.none)
+int liveHistoryBars = input.int(80, "Live channel history bars", minval=1, display=display.none)
+bool showLiveChannel = input.bool(false, "Show live signal channel", display=display.none)
+bool showTouchThresholds = input.bool(false, "Show touch thresholds", display=display.none)
+bool showSetupLabels = input.bool(false, "Show setup labels", display=display.none)
+bool showEntryMarkers = input.bool(true, "Show entry markers", display=display.none)
+bool showFrozenChannel = input.bool(true, "Show latest confirmed frozen channel", display=display.none)
 
 if barstate.isfirst and not (timeframe.isdaily and timeframe.multiplier == 1)
     runtime.error("QuantBot Box Range requires a 1D chart")
@@ -155,11 +159,11 @@ bool longEntry = longSignal[1] and open > entryLower and open < longEntryTarget
 bool shortEntry = shortSignal[1] and open < entryUpper and open > shortEntryTarget
 
 color liveColor = boxStructure == 1 ? color.gray : boxStructure == 2 ? color.yellow : boxStructure == 3 ? color.orange : color.new(color.gray, 80)
-liveUpperPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? upperChannel : na, "Live signal upper", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr)
-liveMiddlePlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? middleChannel : na, "Live signal midpoint", color=color.new(liveColor, 60), linewidth=1, style=plot.style_linebr)
-liveLowerPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? lowerChannel : na, "Live signal lower", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr)
-plot(showLiveChannel and boxStructure == 2 ? lowerChannel + signalTolerance : na, "RISING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles)
-plot(showLiveChannel and boxStructure == 3 ? upperChannel - signalTolerance : na, "FALLING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles)
+liveUpperPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? upperChannel : na, "Live signal upper", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr, show_last=liveHistoryBars, display=display.pane)
+liveMiddlePlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? middleChannel : na, "Live signal midpoint", color=color.new(liveColor, 60), linewidth=1, style=plot.style_linebr, show_last=liveHistoryBars, display=display.pane)
+liveLowerPlot = plot(showLiveChannel and channelReady and boxStructure != 0 ? lowerChannel : na, "Live signal lower", color=color.new(liveColor, 25), linewidth=1, style=plot.style_linebr, show_last=liveHistoryBars, display=display.pane)
+plot(showTouchThresholds and boxStructure == 2 ? lowerChannel + signalTolerance : na, "RISING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles, show_last=liveHistoryBars, display=display.pane)
+plot(showTouchThresholds and boxStructure == 3 ? upperChannel - signalTolerance : na, "FALLING touch threshold", color=color.orange, linewidth=2, style=plot.style_circles, show_last=liveHistoryBars, display=display.pane)
 
 var line frozenUpperLine = na
 var line frozenMiddleLine = na
@@ -203,7 +207,7 @@ if barstate.isconfirmed
         frozenMiddleLine := line.new(bar_index, middleChannel, bar_index + 1, middleChannel + channelSlope, xloc=xloc.bar_index, color=color.new(frozenColor, 35), style=line.style_dashed)
         frozenLowerLine := line.new(bar_index, lowerChannel, bar_index + 1, lowerChannel + channelSlope, xloc=xloc.bar_index, color=frozenColor, width=2)
         frozenFill := linefill.new(frozenUpperLine, frozenLowerLine, color=color.new(frozenColor, 92))
-        confirmationLabel := label.new(bar_index, longSignal ? lowerChannel : upperChannel, "CONFIRMED", style=longSignal ? label.style_label_up : label.style_label_down, color=frozenColor, textcolor=color.white, size=size.tiny)
+        confirmationLabel := label.new(bar_index, longSignal ? upperChannel : lowerChannel, longSignal ? "L CONF" : "S CONF", style=longSignal ? label.style_label_down : label.style_label_up, color=frozenColor, textcolor=color.white, size=size.tiny)
         frozenBaseUpper := upperChannel
         frozenBaseMiddle := middleChannel
         frozenBaseLower := lowerChannel
@@ -212,12 +216,12 @@ if barstate.isconfirmed
         frozenAge := 0
         frozenActive := true
 
-plotshape(flatLong, title="Flat long signal", text="FLAT L", style=shape.labelup, location=location.belowbar, color=color.teal, textcolor=color.white, size=size.tiny)
-plotshape(risingLong, title="Rising long signal", text="RISE L", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.tiny)
-plotshape(flatShort, title="Flat short signal", text="FLAT S", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, size=size.tiny)
-plotshape(fallingShort, title="Falling short signal", text="FALL S", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.tiny)
-plotshape(longEntry, title="Next-open long entry", text="ENTRY L", style=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.small)
-plotshape(shortEntry, title="Next-open short entry", text="ENTRY S", style=shape.triangledown, location=location.abovebar, color=color.fuchsia, size=size.small)
+plotshape(showSetupLabels and flatLong, title="Flat long signal", text="FLAT L", style=shape.labelup, location=location.belowbar, color=color.teal, textcolor=color.white, size=size.tiny, display=display.pane)
+plotshape(showSetupLabels and risingLong, title="Rising long signal", text="RISE L", style=shape.labelup, location=location.belowbar, color=color.green, textcolor=color.white, size=size.tiny, display=display.pane)
+plotshape(showSetupLabels and flatShort, title="Flat short signal", text="FLAT S", style=shape.labeldown, location=location.abovebar, color=color.purple, textcolor=color.white, size=size.tiny, display=display.pane)
+plotshape(showSetupLabels and fallingShort, title="Falling short signal", text="FALL S", style=shape.labeldown, location=location.abovebar, color=color.red, textcolor=color.white, size=size.tiny, display=display.pane)
+plotshape(showEntryMarkers and longEntry, title="Next-open long entry", text="L", style=shape.triangleup, location=location.belowbar, color=color.aqua, size=size.small, display=display.pane)
+plotshape(showEntryMarkers and shortEntry, title="Next-open short entry", text="S", style=shape.triangledown, location=location.abovebar, color=color.fuchsia, size=size.small, display=display.pane)
 
 plot(channelContainment, "Containment", display=display.data_window)
 plot(channelWidthAtr, "Channel width / ATR", display=display.data_window)
