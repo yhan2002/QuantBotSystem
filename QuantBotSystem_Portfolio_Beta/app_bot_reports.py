@@ -4,7 +4,6 @@ from dataclasses import dataclass
 
 import strategy_ma_cross
 import strategy_box_range
-import strategy_box_range_new
 import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
@@ -111,19 +110,6 @@ def _box_explanation(status):
     return meanings.get(status, "unclassified box state.")
 
 
-def _new_box_explanation(status):
-    meanings = {
-        "LONG_BREAKOUT": "15-bar compressed box broke higher on 2x turnover; LONG at next open if the open gate holds.",
-        "SHORT_BREAKOUT": "15-bar compressed box broke lower on 2x turnover; SHORT at next open if the open gate holds.",
-        "WAIT_BREAKOUT": "the 15-bar box is compressed; waiting for a close outside it on 2x turnover.",
-        "BOX_TOO_WIDE": "the 15-bar range is wider than the 3 ATR compression limit.",
-        "TURNOVER_TOO_LOW": "the breakout turnover gate is below 2x its prior 20-bar average.",
-        "DATA_INSUFFICIENT": "not enough local OHLCV data for the 15-bar box and ATR20.",
-        "ERROR": "new box calculation failed.",
-    }
-    return meanings.get(status, "no qualifying compressed-box breakout.")
-
-
 def _reversion_explanation(signal):
     meanings = {
         "LONG_BIAS": "downside shock has reversed at the close within a non-negative MA60 trend.",
@@ -225,11 +211,6 @@ def _run_compiled_scan(
             compiled_universe,
             **scan_kwargs,
         )
-    elif selected_strategy == "BOX_RANGE_NEW":
-        report = strategy_box_range_new.scan_box_range_new(
-            compiled_universe,
-            **scan_kwargs,
-        )
     elif selected_strategy == "VALUE_REVERSION":
         report = strategy_price_liquidity_reversion.scan_value_reversion(
             compiled_universe,
@@ -279,18 +260,11 @@ def _quick_report(ticker):
     core_market_data_store.ensure_price_data([ticker], min_period="1y")
     ma_signal, ma_strength = strategy_ma_cross.analyze_trend_strict_signals(ticker)
     box = strategy_box_range.analyze_box_range(ticker)
-    new_box = strategy_box_range_new.analyze_box_range_new(ticker)
     reversion = strategy_price_liquidity_reversion.analyze_value_reversion(ticker)
 
     box_status = box.get("status", "ERROR")
     box_width = box.get("box_width_pct")
     box_width_text = f"{box_width * 100:.1f}%" if isinstance(box_width, float) else "N/A"
-    new_box_status = new_box.get("status", "ERROR")
-    new_box_width = new_box.get("box_width_pct")
-    new_box_width_text = (
-        f"{new_box_width * 100:.1f}%" if isinstance(new_box_width, float) else "N/A"
-    )
-    new_box_score = new_box.get("raw_score", new_box.get("score"))
     reversion_status = reversion.get("status", "ERROR")
     reversion_score = reversion.get("score", 0.0)
     if reversion_status == "OK":
@@ -300,8 +274,6 @@ def _quick_report(ticker):
 
     box_long = box_status in ("LONG_RANGE_RECLAIM", "LONG_TREND_PULLBACK")
     box_short = box_status in ("SHORT_RANGE_RECLAIM", "SHORT_TREND_RALLY")
-    new_box_long = new_box_status == "LONG_BREAKOUT"
-    new_box_short = new_box_status == "SHORT_BREAKOUT"
     if ma_signal == "LONG_ENTRY" and box_long:
         view = "Strong long watch: MA uptrend plus lower false-break reclaim."
     elif ma_signal == "SHORT_ENTRY" and box_short:
@@ -312,8 +284,6 @@ def _quick_report(ticker):
         view = "Reversion short bias with upper false-break reclaim."
     elif box_long or box_short:
         view = "Box/channel signal is active for next-open entry."
-    elif new_box_long or new_box_short:
-        view = "Compressed-box breakout is active for a gated next-open entry."
     elif ma_signal in ["LONG_ENTRY", "SHORT_ENTRY"]:
         view = "Trend signal active. Box signal is not the main driver."
     elif reversion_status == "OK":
@@ -339,15 +309,6 @@ def _quick_report(ticker):
         box_side = "SHORT"
         box_side_label = "SHORT"
 
-    new_box_side = None
-    new_box_side_label = "LONG+SHORT"
-    if new_box_long:
-        new_box_side = "LONG"
-        new_box_side_label = "LONG"
-    elif new_box_short:
-        new_box_side = "SHORT"
-        new_box_side_label = "SHORT"
-
     ma_bt = strategy_ma_cross.run_isolated_backtest(
         ticker,
         side_filter=ma_side,
@@ -356,11 +317,6 @@ def _quick_report(ticker):
     box_bt = strategy_box_range.run_box_backtest(
         ticker,
         side_filter=box_side,
-        period="6mo",
-    )
-    new_box_bt = strategy_box_range_new.run_box_backtest(
-        ticker,
-        side_filter=new_box_side,
         period="6mo",
     )
 
@@ -384,12 +340,6 @@ def _quick_report(ticker):
     report += f"- Box Range: `{box_status}` | width {box_width_text}\n"
     report += f"  Meaning: {_box_explanation(box_status)}\n"
     report += "  Benchmark: prior 40 completed bars, containment >=85%, width 4~12 ATR, 2+ spaced touches, setup confirmation, and turnover below 2x.\n"
-    report += f"- Box Range (New one): `{new_box_status}` | width {new_box_width_text}"
-    if isinstance(new_box_score, (int, float)):
-        report += f" | score {new_box_score:+.2f}"
-    report += "\n"
-    report += f"  Meaning: {_new_box_explanation(new_box_status)}\n"
-    report += "  Benchmark: prior 15 completed bars, width <=3 ATR20, breakout close, and signal-day turnover >=2x its prior 20-bar average.\n"
     report += f"- Reversion: `{reversion_signal}`"
     if reversion_status == "OK":
         report += f" | score {reversion_score:+.2f}"
@@ -398,21 +348,12 @@ def _quick_report(ticker):
     report += "  Benchmark: 5d shock within 3d, near-flat/trend-aligned MA60, reversal close, and turnover below 2.0x its 20d average.\n"
     if box.get("message"):
         report += f"\nBox Detail: {box['message']}\n"
-    if new_box.get("message"):
-        report += f"New Box Detail: {new_box['message']}\n"
     report += f"\nView: {view}\n\n"
     report += "**6M Backtest Summary**\n"
     report += "Entry: strategy signal at close; enter next open.\n"
     report += "Exit: each strategy's configured exit condition.\n"
     report += _bt_line("Momentum", ma_bt[0], ma_bt[1], ma_bt[2], ma_side_label) + "\n"
     report += _bt_line("Box Range", box_bt[0], box_bt[1], box_bt[2], box_side_label) + "\n"
-    report += _bt_line(
-        "Box Range (New one)",
-        new_box_bt[0],
-        new_box_bt[1],
-        new_box_bt[2],
-        new_box_side_label,
-    ) + "\n"
     report += (
         _bt_line(
             "Reversion",

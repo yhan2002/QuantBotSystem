@@ -39,17 +39,6 @@ class BotSessionTests(unittest.TestCase):
 
         self.assertEqual(session["strategy"], "MA_CROSS")
 
-    def test_new_box_strategy_is_available(self):
-        app_bot_session.USER_SESSIONS["new-box-chat"] = {
-            "strategy": "BOX_RANGE_NEW",
-            "exit_policy": app_bot_session.BOX_HYBRID_EXIT_POLICY,
-        }
-
-        session = app_bot_session.get_or_create_session("new-box-chat")
-
-        self.assertEqual("Box Range (New one)", app_bot_session.STRATEGY_LABELS[session["strategy"]])
-        self.assertEqual("NATIVE", session["exit_policy"])
-
     def test_exit_policy_defaults_and_legacy_values_fall_back_to_native(self):
         self.assertEqual(
             app_bot_session.get_or_create_session("new-chat")["exit_policy"],

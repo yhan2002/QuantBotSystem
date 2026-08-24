@@ -10,7 +10,6 @@ import schedule
 
 import app_runtime_lock
 import strategy_box_range
-import strategy_box_range_new
 import config
 import runtime_settings
 import strategy_ma_cross
@@ -126,14 +125,6 @@ def _daily_market_scanner():
                     position_mode=position_mode,
                 )
                 header = f"*Scheduled Alert* Box Range Scan ({now_str})\n"
-            elif selected_strategy == "BOX_RANGE_NEW":
-                report_content = strategy_box_range_new.scan_box_range_new(
-                    compiled_universe,
-                    fixed_exit_sessions=fixed_exit_sessions,
-                    neutralization=neutralization,
-                    position_mode=position_mode,
-                )
-                header = f"*Scheduled Alert* Box Range (New one) Scan ({now_str})\n"
             elif selected_strategy == "VALUE_REVERSION":
                 report_content = strategy_price_liquidity_reversion.scan_value_reversion(
                     compiled_universe,
