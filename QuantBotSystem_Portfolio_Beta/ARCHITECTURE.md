@@ -11,7 +11,6 @@ This version adds:
 - score-proportional position sizing with a 5% per-security cap;
 - cash, quantity, partial-exit, gross/net exposure, and NAV accounting;
 - separate Box FLAT and TREND attribution;
-- a separate 15-bar compressed-box breakout engine;
 - a stop/start version selector for Telegram operation.
 
 ## Non-negotiable invariants
@@ -48,7 +47,7 @@ manual scan stores an immutable report id, so an older See Detail button
 cannot be redirected to a newer scan. Per-chat export snapshots are retained
 for at most 24 hours, eight results, and a 32 MB soft cap.
 
-Interactive scans for Momentum, Box Range, Box Range (New one), and Reversion, plus Admin
+Interactive scans for Momentum, Box Range, and Reversion, plus Admin
 price/backfill/metadata downloads, run through one process-local
 FIFO background worker. The Telegram callback returns immediately and edits
 one loading message in monotonic 5% steps. A frozen request snapshot keeps the
@@ -65,12 +64,12 @@ ticker, strategy, side, signal_date, raw_score,
 setup, structure, metadata, entry_execution
 ```
 
-The four strategy engines keep their entry rules. Their native exit
+The three existing strategy engines keep their entry rules. Their native exit
 rules remain the default, while the optional Beta D+5 policy replaces every
 native target, stop, partial, and time exit with a full close at the fifth
-session close after next-open entry. Box Range V2 also exposes a hybrid policy
-that preserves its native stop/target events and, from D+5, closes the remainder
-on the first session without a native exit event. The adapter is the boundary
+session close after next-open entry. Box also exposes a hybrid policy that
+preserves its native stop/target events and, from D+5, closes the remainder on
+the first session without a native exit event. The adapter is the boundary
 between strategy research and portfolio construction.
 
 `analyze_research_analytics.py` is a top-layer, offline-only sidecar. It sends
@@ -133,17 +132,11 @@ also excludes an incomplete remainder rather than marking it.
 ## Strategy boundaries
 
 - Momentum remains a directional trend strategy.
-- Box Range V2 remains one strategy, with separate attribution:
+- Box remains one strategy, with separate attribution:
   - `FLAT / RANGE_RECLAIM`;
   - `TREND / RISING_PULLBACK`;
   - `TREND / FALLING_RALLY`;
   - `TRANSITION` remains non-tradable.
-- Box Range (New one) is a separate compression-breakout strategy. Its signal
-  freezes the prior 15 completed bars as the box, requires width no greater
-  than 3 ATR20 and signal-day turnover at least 2x its prior-20-session mean,
-  confirms a close outside the box, and enters only at the next open inside a
-  half-box gap gate. It exits at a one-box target, at the next open after a
-  close back inside the box, or at the tenth entry-inclusive session close.
 - Reversion keeps its shock entry and exit lifecycle, but its production
   candidate score is the country-cohort BRAIN unit-safe residual. The normal
   score-weighted allocator converts that score to entry size.

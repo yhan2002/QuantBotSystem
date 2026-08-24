@@ -23,7 +23,6 @@ import core_market_data_store
 import core_portfolio_performance
 import runtime_settings
 import strategy_box_range
-import strategy_box_range_new
 import strategy_ma_cross
 import strategy_price_liquidity_reversion
 
@@ -41,12 +40,7 @@ MODE_POSITION = {
     "SHORT": "SHORT_ONLY",
     "LS": "LONG_SHORT_NEUTRAL",
 }
-DIRECTIONAL_STRATEGIES = (
-    "Momentum",
-    "Box Range",
-    "Box Range (New one)",
-    "Reversion",
-)
+DIRECTIONAL_STRATEGIES = ("Momentum", "Box Range", "Reversion")
 STRATEGIES = DIRECTIONAL_STRATEGIES
 WINDOW_ORDER = ("IS", "OOS")
 ACWI_TICKER = core_portfolio_performance.MARKET_BENCHMARK_TICKER
@@ -250,13 +244,6 @@ def _runner(strategy, ticker, prices, side, window):
         )
     if strategy == "Box Range":
         return strategy_box_range.run_box_backtest(
-            ticker,
-            side_filter=side,
-            period=core_backtest_periods.HISTORY_PERIOD,
-            **common,
-        )
-    if strategy == "Box Range (New one)":
-        return strategy_box_range_new.run_box_backtest(
             ticker,
             side_filter=side,
             period=core_backtest_periods.HISTORY_PERIOD,

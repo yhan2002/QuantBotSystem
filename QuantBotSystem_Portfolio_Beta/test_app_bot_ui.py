@@ -80,14 +80,6 @@ class BotUiTests(unittest.TestCase):
             ],
         )
 
-    def test_new_box_strategy_uses_only_common_exit_policies(self):
-        chat_id = "test-chat"
-        app_bot_session.get_or_create_session(chat_id)["strategy"] = "BOX_RANGE_NEW"
-
-        exit_texts = _button_texts(app_bot_ui.build_exit_policy_markup(chat_id))
-
-        self.assertNotIn("[ ] Box TP/SL + D+5", exit_texts)
-
     def test_strategy_names_are_consistent(self):
         chat_id = "test-chat"
         strategy_texts = _button_texts(app_bot_ui.build_strategy_markup(chat_id))
@@ -97,7 +89,6 @@ class BotUiTests(unittest.TestCase):
             [
                 "[x] Momentum",
                 "[ ] Box Range",
-                "[ ] Box Range (New one)",
                 "[ ] Reversion",
             ],
         )
