@@ -167,8 +167,11 @@ exits are disabled, and entries without a complete D+5 observation inside the
 evaluation window are excluded. It reads the local cache only.
 
 Beta Telegram Settings -> Exit Policy exposes `Strategy Default`, `D+5 Close`,
-and the Box-only `Box TP/SL + D+5`. The Box hybrid keeps native targets and
-stops, then closes the remainder from D+5 on the first session without a native
-exit event. The selected policy is frozen when a manual scan is submitted and
-is also used by scheduled scans. It applies to both LONG and SHORT trades in
-the IS/OOS portfolio calculation; the default remains `Strategy Default`.
+and the Box-only `Box TP/SL + D+5` and `Box Breakout Fill + TP/SL`. The Box
+hybrid keeps native targets and stops, then closes the remainder from D+5 on
+the first session without a native exit event. The breakout-fill benchmark
+enters at the next session's projected same-side channel boundary only when
+that daily range touches it, and keeps native exits. The selected policy is
+frozen when a manual scan is submitted and is also used by scheduled scans. It
+applies to both LONG and SHORT trades in the IS/OOS portfolio calculation; the
+default remains `Strategy Default`.

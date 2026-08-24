@@ -76,6 +76,7 @@ class BotUiTests(unittest.TestCase):
                 "[x] Strategy Default",
                 "[ ] D+5 Close",
                 "[ ] Box TP/SL + D+5",
+                "[ ] Box Breakout Fill + TP/SL",
                 "Back",
             ],
         )

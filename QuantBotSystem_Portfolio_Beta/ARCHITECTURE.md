@@ -69,7 +69,10 @@ rules remain the default, while the optional Beta D+5 policy replaces every
 native target, stop, partial, and time exit with a full close at the fifth
 session close after next-open entry. Box also exposes a hybrid policy that
 preserves its native stop/target events and, from D+5, closes the remainder on
-the first session without a native exit event. The adapter is the boundary
+the first session without a native exit event. Its optional breakout-fill
+benchmark instead enters at the projected LONG lower or SHORT upper boundary
+only when the next session trades through that exact level, while preserving
+native exits. The adapter is the boundary
 between strategy research and portfolio construction.
 
 `analyze_research_analytics.py` is a top-layer, offline-only sidecar. It sends

@@ -345,6 +345,40 @@ class BoxRangeV2Tests(unittest.TestCase):
         )
         self.assertEqual(cutoff_result[4], details)
 
+    def test_box_breakout_entry_fills_projected_boundary_and_keeps_native_targets(self):
+        for side, builder, slope, setup, boundary_key, price_column, delta in (
+            ("LONG", _append_signal_and_targets, 0.45, "rising", "lowest", "Low", -0.1),
+            ("SHORT", _append_short_signal_and_targets, -0.45, "falling", "highest", "High", 0.1),
+        ):
+            with self.subTest(side=side):
+                frame, _ = builder(_channel_history(slope), setup)
+                _, stats = strategy_box_range._entry_signal(
+                    frame.iloc[:40], frame.iloc[40]
+                )
+                boundary = strategy_box_range._project_levels(stats, 1)[boundary_key]
+                self.assertNotAlmostEqual(stats[boundary_key], boundary)
+                self.assertAlmostEqual(stats[boundary_key] + stats["channel_slope"], boundary)
+                frame.iloc[41, frame.columns.get_loc(price_column)] = boundary + delta
+
+                result = strategy_box_range.run_box_backtest(
+                    "TEST",
+                    df=frame,
+                    side_filter=side,
+                    include_trades=True,
+                    entry_execution=core_entry_execution.BOX_BREAKOUT,
+                )
+
+                trade = result[4][0]
+                self.assertAlmostEqual(boundary, trade["entry_price"])
+                self.assertEqual(core_entry_execution.BOX_BREAKOUT, trade["entry_execution"])
+                self.assertEqual(
+                    ["first target 50%", f"channel {'upper' if side == 'LONG' else 'lower'} target"],
+                    [event["reason"] for event in trade["exit_events"]],
+                )
+                self.assertTrue(
+                    all(event["date"] != trade["entry_date"] for event in trade["exit_events"])
+                )
+
     def test_fixed_exit_ignores_native_targets_and_closes_at_d_plus_five(self):
         frame, _ = _append_signal_and_targets(
             _channel_history(0.0), "range"
@@ -660,6 +694,29 @@ class BoxRangeV2Tests(unittest.TestCase):
             selection_runner("AAA", include_trades=True)
             oos_runner("AAA", include_trades=True)
         self.assertEqual(precompute.call_count, 1)
+
+    @patch(
+        "strategy_box_range.core_universe_backtest.format_fixed_is_oos_backtest",
+        return_value="\nSUMMARY",
+    )
+    @patch(
+        "strategy_box_range.core_universe_backtest.aggregate_universe_backtest",
+        return_value={},
+    )
+    @patch("strategy_box_range._load_ohlcv")
+    def test_scan_normalizes_box_breakout_execution(self, load_ohlcv, aggregate, formatter):
+        load_ohlcv.return_value = _append_signal_and_targets(
+            _channel_history(0.0), "range"
+        )[0]
+
+        report = strategy_box_range.scan_total_universe(
+            ["AAA"], entry_execution=" box_breakout "
+        )
+
+        self.assertIn("next-session boundary touch", report)
+        for call in aggregate.call_args_list:
+            self.assertEqual(core_entry_execution.BOX_BREAKOUT, call.kwargs["entry_execution"])
+        self.assertIn("targets begin next session", formatter.call_args.kwargs["entry_text"])
 
     @patch.object(strategy_box_range, "scan_total_universe", return_value="report")
     def test_public_scan_forwards_progress_callback(self, scan_total):

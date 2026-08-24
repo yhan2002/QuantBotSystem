@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import app_bot_reports
 import app_bot_session
+import core_entry_execution
 import core_universe_backtest
 
 
@@ -30,6 +31,30 @@ class BotReportTests(unittest.TestCase):
             5,
             scan.call_args.kwargs["hybrid_exit_sessions"],
         )
+
+    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
+    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
+    @patch("app_bot_reports.strategy_box_range.scan_box_range", return_value="summary")
+    @patch("app_bot_reports.get_or_create_session", return_value={})
+    def test_box_breakout_policy_forwards_boundary_execution(
+        self, _session, scan, _missing, _freshness
+    ):
+        request = app_bot_reports.ScanRequest(
+            universe=("AAA",),
+            strategy="BOX_RANGE",
+            exit_policy=app_bot_session.BOX_BREAKOUT_ENTRY_POLICY,
+            neutralization="NONE",
+            position_mode="LONG_SHORT_NEUTRAL",
+            custom_tickers=frozenset(),
+        )
+
+        app_bot_reports.run_compiled_scan("any-chat", request=request)
+
+        self.assertEqual(
+            core_entry_execution.BOX_BREAKOUT,
+            scan.call_args.kwargs["entry_execution"],
+        )
+        self.assertIsNone(scan.call_args.kwargs["hybrid_exit_sessions"])
 
     @patch("app_bot_reports.compile_selected_universe", return_value=["AAA"])
     @patch("app_bot_reports.get_or_create_session")

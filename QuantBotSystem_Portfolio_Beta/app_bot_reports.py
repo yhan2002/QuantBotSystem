@@ -8,8 +8,10 @@ import core_market_data_store
 import strategy_price_liquidity_reversion
 import core_universe_backtest
 import app_runtime_lock
+import core_entry_execution
 
 from app_bot_session import (
+    BOX_BREAKOUT_ENTRY_POLICY,
     BOX_HYBRID_EXIT_POLICY,
     BOX_HYBRID_EXIT_SESSIONS,
     EXIT_POLICY_SESSIONS,
@@ -207,6 +209,11 @@ def _run_compiled_scan(
         )
     elif selected_strategy == "BOX_RANGE":
         scan_kwargs["hybrid_exit_sessions"] = hybrid_exit_sessions
+        scan_kwargs["entry_execution"] = (
+            core_entry_execution.BOX_BREAKOUT
+            if request.exit_policy == BOX_BREAKOUT_ENTRY_POLICY
+            else core_entry_execution.NEXT_OPEN
+        )
         report = strategy_box_range.scan_box_range(
             compiled_universe,
             **scan_kwargs,
