@@ -6,6 +6,7 @@ import strategy_ma_cross
 import strategy_box_range
 import core_market_data_store
 import strategy_price_liquidity_reversion
+import strategy_relative_equilibrium
 import core_universe_backtest
 import app_runtime_lock
 import core_entry_execution
@@ -220,6 +221,11 @@ def _run_compiled_scan(
         )
     elif selected_strategy == "VALUE_REVERSION":
         report = strategy_price_liquidity_reversion.scan_value_reversion(
+            compiled_universe,
+            **scan_kwargs,
+        )
+    elif selected_strategy == "RELATIVE_EQUILIBRIUM":
+        report = strategy_relative_equilibrium.scan_relative_equilibrium(
             compiled_universe,
             **scan_kwargs,
         )

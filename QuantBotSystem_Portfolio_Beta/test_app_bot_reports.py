@@ -10,6 +10,33 @@ import core_universe_backtest
 class BotReportTests(unittest.TestCase):
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
     @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
+    @patch(
+        "app_bot_reports.strategy_relative_equilibrium.scan_relative_equilibrium",
+        return_value="summary",
+    )
+    @patch("app_bot_reports.get_or_create_session", return_value={})
+    def test_relative_equilibrium_uses_common_scan_contract(
+        self, _session, scan, _missing, _freshness
+    ):
+        request = app_bot_reports.ScanRequest(
+            universe=("AAA",),
+            strategy="RELATIVE_EQUILIBRIUM",
+            exit_policy="FIXED_5D",
+            neutralization="SECTOR",
+            position_mode="LONG_ONLY",
+            custom_tickers=frozenset(),
+        )
+
+        app_bot_reports.run_compiled_scan("any-chat", request=request)
+
+        self.assertEqual(["AAA"], scan.call_args.args[0])
+        self.assertEqual(5, scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual("SECTOR", scan.call_args.kwargs["neutralization"])
+        self.assertEqual("LONG_ONLY", scan.call_args.kwargs["position_mode"])
+        self.assertEqual({}, scan.call_args.kwargs["report_artifacts"])
+
+    @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
+    @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
     @patch("app_bot_reports.strategy_box_range.scan_box_range", return_value="summary")
     @patch("app_bot_reports.get_or_create_session", return_value={})
     def test_box_hybrid_policy_is_forwarded_only_to_box_scan(

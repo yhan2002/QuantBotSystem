@@ -32,6 +32,7 @@ UNIVERSE_MENUS = [
 STRATEGY_LABELS = {
     "MA_CROSS": "Momentum",
     "BOX_RANGE": "Box Range",
+    "RELATIVE_EQUILIBRIUM": "Relative Equilibrium",
     "VALUE_REVERSION": "Reversion",
 }
 

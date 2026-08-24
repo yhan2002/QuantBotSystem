@@ -39,6 +39,19 @@ class BotSessionTests(unittest.TestCase):
 
         self.assertEqual(session["strategy"], "MA_CROSS")
 
+    def test_relative_equilibrium_is_a_supported_strategy(self):
+        app_bot_session.USER_SESSIONS["relative-chat"] = {
+            "strategy": "RELATIVE_EQUILIBRIUM",
+        }
+
+        session = app_bot_session.get_or_create_session("relative-chat")
+
+        self.assertEqual(session["strategy"], "RELATIVE_EQUILIBRIUM")
+        self.assertEqual(
+            app_bot_session.STRATEGY_LABELS[session["strategy"]],
+            "Relative Equilibrium",
+        )
+
     def test_exit_policy_defaults_and_legacy_values_fall_back_to_native(self):
         self.assertEqual(
             app_bot_session.get_or_create_session("new-chat")["exit_policy"],

@@ -90,6 +90,7 @@ class BotUiTests(unittest.TestCase):
             [
                 "[x] Momentum",
                 "[ ] Box Range",
+                "[ ] Relative Equilibrium",
                 "[ ] Reversion",
             ],
         )

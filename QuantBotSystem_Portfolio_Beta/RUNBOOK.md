@@ -35,13 +35,21 @@ and Admin data updates are serialized. A second operation waits for the first
 one instead of reading a half-refreshed database. See Detail buttons carry
 their own report id and remain tied to the scan message that created them.
 
-All three interactive strategy scans and the Admin latest-price, four-year
+All four interactive strategy scans and the Admin latest-price, four-year
 backfill, and classification downloads are background jobs. Telegram shows a
 single 1-100% loading message in 5% increments, including stage, completed
 ticker count, and elapsed time. One process executes these heavy jobs in FIFO
 order; repeated taps in the same chat do not start a duplicate job. The old
 inline menu is removed while the message is a loading screen and the result
 menu is restored after completion.
+
+`Relative Equilibrium` is the daily comparison engine beside Box Range. It
+uses a close-known LONG alpha with a same-country sector hedge and ACWI only
+as a market-control signal. It admits OU half-lives of
+3-30 sessions, vetoes turnover shocks, and enters no earlier than the next
+open. It is separate from the previously removed peer-basket `Residual
+Stat-Arb`, which traded symmetric ±2σ spreads; no intraday signal or execution
+path is used.
 
 ## Storage
 

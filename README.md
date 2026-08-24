@@ -13,7 +13,12 @@ QuantBot은 Long/Short 종목선정과 백테스트를 위한 Python 프로젝�
 - Momentum: 5/20/60 이동평균 정렬과 동일 방향 기울기 확인
 - 거래대금 확인: 252거래일 평균 대비 거래대금 3배 이상 급증 조건
 - Box Range V2: 40개 완료 봉의 횡보·상승·하락 채널별 reclaim/pullback 후보
+- Relative Equilibrium: ACWI로 시장을 통제한 일봉 OU 잔차 LONG과 동일 국가·섹터 hedge
 - Reversion: 가격·유동성 충격 이후 평균회귀 후보
+
+Relative Equilibrium은 반감기 3~30거래일인 관계만 사용하고 거래대금 급증을
+진입 veto로 처리한 뒤 다음 시가에 진입합니다. 과거 제거된 양방향 ±2σ
+peer-spread `Residual Stat-Arb`와는 별도 엔진입니다.
 
 Beta의 기존 촉매 점수 직접 가산 실험은 제거했습니다. 현재 전략 결과를 변경하는 실험은 별도 A/B 테스트 후 반영합니다.
 

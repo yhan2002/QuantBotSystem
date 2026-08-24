@@ -4,6 +4,18 @@
 
 ## 2026-08-24
 
+### Beta Relative Equilibrium 비교 전략 연결
+
+- 일봉 LONG alpha와 동일 국가·섹터 hedge를 사용하는 `Relative Equilibrium`을 Box Range와
+  별도로 선택할 수 있게 수동·예약 스캔과 공통 리포트 흐름에 연결했습니다.
+- 종가까지 확인된 정보, 다음 시가 진입, 거래대금 급증 veto, OU 반감기
+  3~30거래일 계약을 명시했습니다. 제거된 양방향 ±2σ peer-spread
+  `Residual Stat-Arb`와는 별도 엔진이며 intraday 경로는 포함하지 않습니다.
+- ACWI는 비미국 종가에서 한 세션 지연한 신호 통제 변수로만 사용하며, 시차가
+  다른 ACWI leg를 현지 종목과 같은 날짜 시가에 체결하지 않습니다.
+- 전체 유니버스 백테스트, 봇 실행, Telegram 발송과 외부 다운로드는 수행하지
+  않았습니다.
+
 ### Beta Box Range 경계가 체결 정책
 
 - Exit Policy에 Box 전용 `Box Breakout Fill + TP/SL`을 추가했습니다.

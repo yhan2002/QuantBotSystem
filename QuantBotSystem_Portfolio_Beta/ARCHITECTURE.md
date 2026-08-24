@@ -47,8 +47,8 @@ manual scan stores an immutable report id, so an older See Detail button
 cannot be redirected to a newer scan. Per-chat export snapshots are retained
 for at most 24 hours, eight results, and a 32 MB soft cap.
 
-Interactive scans for Momentum, Box Range, and Reversion, plus Admin
-price/backfill/metadata downloads, run through one process-local
+Interactive scans for Momentum, Box Range, Relative Equilibrium, and Reversion,
+plus Admin price/backfill/metadata downloads, run through one process-local
 FIFO background worker. The Telegram callback returns immediately and edits
 one loading message in monotonic 5% steps. A frozen request snapshot keeps the
 strategy, universe, exit policy, neutralization, and position mode unchanged
@@ -64,7 +64,7 @@ ticker, strategy, side, signal_date, raw_score,
 setup, structure, metadata, entry_execution
 ```
 
-The three existing strategy engines keep their entry rules. Their native exit
+The four strategy engines keep their entry rules. Their native exit
 rules remain the default, while the optional Beta D+5 policy replaces every
 native target, stop, partial, and time exit with a full close at the fifth
 session close after next-open entry. Box also exposes a hybrid policy that
@@ -143,6 +143,12 @@ also excludes an incomplete remainder rather than marking it.
 - Reversion keeps its shock entry and exit lifecycle, but its production
   candidate score is the country-cohort BRAIN unit-safe residual. The normal
   score-weighted allocator converts that score to entry size.
+- Relative Equilibrium is daily-only: a close-known LONG alpha leg is paired
+  with a same-country sector hedge and filled no earlier than the next open.
+  ACWI is a signal-only control, lagged for non-US closes, and is not traded. Only OU
+  relationships with a 3-30 session half-life qualify, and turnover shocks
+  veto entry. It is distinct from the removed symmetric ±2σ peer-spread
+  `Residual Stat-Arb` engine.
 
 ## Reporting
 
