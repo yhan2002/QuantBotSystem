@@ -180,6 +180,53 @@ class BoxRangeV2Tests(unittest.TestCase):
         self.assertEqual(rising["structure"], "RISING")
         self.assertEqual(falling["structure"], "FALLING")
 
+    def test_falling_quality_score_uses_trend_efficiency(self):
+        falling = strategy_box_range._channel_stats(_channel_history(-0.45))
+        containment_component = min(
+            falling["containment_ratio"]
+            / strategy_box_range.MIN_CHANNEL_CONTAINMENT,
+            1.0,
+        )
+        width_component = max(
+            0.0,
+            1.0
+            - abs(
+                falling["width_atr"]
+                - (
+                    strategy_box_range.MIN_CHANNEL_WIDTH_ATR
+                    + strategy_box_range.MAX_CHANNEL_WIDTH_ATR
+                )
+                / 2.0
+            )
+            / (
+                (
+                    strategy_box_range.MAX_CHANNEL_WIDTH_ATR
+                    - strategy_box_range.MIN_CHANNEL_WIDTH_ATR
+                )
+                / 2.0
+            ),
+        )
+        trend_component = min(falling["trend_efficiency"] / 0.50, 1.0)
+        touch_component = min(falling["upper_touches"] / 3.0, 1.0)
+        expected = (
+            0.35 * containment_component
+            + 0.20 * width_component
+            + 0.15 * trend_component
+            + 0.30 * touch_component
+        )
+
+        self.assertAlmostEqual(expected, falling["short_quality_score"])
+        self.assertAlmostEqual(
+            strategy_box_range.FLAT_MAX_SLOPE_RATIO
+            - abs(falling["slope_ratio"]),
+            falling["flat_slope_margin"],
+        )
+        self.assertAlmostEqual(
+            abs(falling["slope_ratio"])
+            - strategy_box_range.TREND_MIN_SLOPE_RATIO,
+            falling["trend_slope_margin"],
+        )
+
     def test_flat_lower_reclaim_generates_long_signal(self):
         frame, status = _append_signal_and_targets(
             _channel_history(0.0), "range"
@@ -434,6 +481,42 @@ class BoxRangeV2Tests(unittest.TestCase):
                     ["-7% stop", "-10% stop"],
                     [event["reason"] for event in result[4][0]["exit_events"]],
                 )
+
+    def test_hybrid_same_bar_partial_stop_then_targets_uses_remaining_quantity(self):
+        for side in ("LONG", "SHORT"):
+            with self.subTest(side=side):
+                frame, quiet, stats, entry = _hybrid_quiet_frame(side)
+                levels = strategy_box_range._project_levels(stats, 2)
+                if side == "LONG":
+                    quiet.iloc[0, quiet.columns.get_loc("Low")] = entry * 0.92
+                    quiet.iloc[0, quiet.columns.get_loc("High")] = (
+                        levels["highest"] + 1.0
+                    )
+                else:
+                    quiet.iloc[0, quiet.columns.get_loc("High")] = entry * 1.08
+                    quiet.iloc[0, quiet.columns.get_loc("Low")] = (
+                        levels["lowest"] - 1.0
+                    )
+                frame.iloc[-len(quiet) :] = quiet
+
+                result = strategy_box_range.run_box_backtest(
+                    "TEST",
+                    df=frame,
+                    side_filter=side,
+                    include_trades=True,
+                    hybrid_exit_sessions=5,
+                )
+
+                events = result[4][0]["exit_events"]
+                self.assertEqual(
+                    ["-7% stop", "first target 50%", (
+                        "channel upper target"
+                        if side == "LONG"
+                        else "channel lower target"
+                    )],
+                    [event["reason"] for event in events],
+                )
+                self.assertEqual([0.5, 0.25, 0.25], [event["weight"] for event in events])
 
     def test_open_position_is_marked_at_evaluation_close(self):
         frame, _ = _append_signal_and_targets(

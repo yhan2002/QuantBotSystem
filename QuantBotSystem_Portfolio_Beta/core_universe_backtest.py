@@ -527,7 +527,9 @@ def export_trade_events_csv(
     columns = [
         "window", "evaluation_start", "evaluation_end", "strategy", "trade_id", "ticker", "side",
         "listing_country", "company_country", "sector", "industry",
-        "setup", "structure", "signal_score", "neutralized_score", "selected_score",
+        "setup", "structure", "flat_slope_margin", "trend_slope_margin",
+        "trend_efficiency_margin", "lower_touches", "upper_touches",
+        "signal_score", "neutralized_score", "selected_score",
         "winsorized_score", "percentile_rank", "rank_score", "requested_weight_pct",
         "allocation_status", "evaluation_status", "original_exit_date",
         "evaluation_mark_date", "evaluation_mark_price",
@@ -588,6 +590,13 @@ def export_trade_events_csv(
                         "industry": metadata.get("industry") or "",
                         "setup": trade.get("setup", ""),
                         "structure": trade.get("structure", ""),
+                        "flat_slope_margin": trade.get("flat_slope_margin", ""),
+                        "trend_slope_margin": trade.get("trend_slope_margin", ""),
+                        "trend_efficiency_margin": trade.get(
+                            "trend_efficiency_margin", ""
+                        ),
+                        "lower_touches": trade.get("lower_touches", ""),
+                        "upper_touches": trade.get("upper_touches", ""),
                         "signal_score": trade.get("signal_score", ""),
                         "neutralized_score": trade.get("neutralized_score", ""),
                         "selected_score": trade.get("selected_score", ""),
