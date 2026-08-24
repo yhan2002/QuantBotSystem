@@ -1,13 +1,14 @@
 """Entry execution benchmarks shared by Beta strategy backtests."""
 
-import pandas as pd
+import math
 
 
 NEXT_OPEN = "NEXT_OPEN"
 NEXT_DAY_OHLC4 = "NEXT_DAY_OHLC4"
 ADVERSE_GAP_FILTER = "ADVERSE_GAP_FILTER"
+BOX_BREAKOUT = "BOX_BREAKOUT"
 DEFAULT_ADVERSE_GAP_LIMIT_PCT = 2.0
-SUPPORTED_MODES = (NEXT_OPEN, NEXT_DAY_OHLC4, ADVERSE_GAP_FILTER)
+SUPPORTED_MODES = (NEXT_OPEN, NEXT_DAY_OHLC4, ADVERSE_GAP_FILTER, BOX_BREAKOUT)
 
 
 def normalize_fixed_exit_sessions(value):
@@ -36,20 +37,25 @@ def resolve_entry(
     side,
     mode=NEXT_OPEN,
     adverse_gap_limit_pct=DEFAULT_ADVERSE_GAP_LIMIT_PCT,
+    trigger_price=None,
 ):
     """Resolve a close-known signal into a next-session execution benchmark.
 
     NEXT_DAY_OHLC4 is an end-of-session execution benchmark, not observed VWAP.
     It therefore cannot use the execution day's high/low for strategy exits.
+    BOX_BREAKOUT fills an explicit trigger only when the next session trades it.
     """
     mode = normalize_mode(mode)
     entry_idx = signal_idx + 1
     if signal_idx < 0 or entry_idx >= len(prices):
         return None
 
-    signal_close = float(prices["Close"].iloc[signal_idx])
-    next_open = float(prices["Open"].iloc[entry_idx])
-    if signal_close <= 0 or next_open <= 0:
+    try:
+        signal_close = float(prices["Close"].iloc[signal_idx])
+        next_open = float(prices["Open"].iloc[entry_idx])
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not all(math.isfinite(value) and value > 0 for value in (signal_close, next_open)):
         return None
 
     direction = 1.0 if side == "LONG" else -1.0
@@ -60,12 +66,28 @@ def resolve_entry(
     ):
         return None
 
-    if mode == NEXT_DAY_OHLC4:
+    if mode == BOX_BREAKOUT:
         row = prices.iloc[entry_idx]
-        values = [row.get(name) for name in ("Open", "High", "Low", "Close")]
-        if any(not pd.notna(value) for value in values):
+        try:
+            low, high, price = map(float, (row["Low"], row["High"], trigger_price))
+        except (TypeError, ValueError, OverflowError):
             return None
-        price = sum(float(value) for value in values) / 4.0
+        if (
+            not all(math.isfinite(value) and value > 0 for value in (low, high, price))
+            or low > high
+            or not low <= price <= high
+        ):
+            return None
+        allow_entry_day_exit = True
+    elif mode == NEXT_DAY_OHLC4:
+        row = prices.iloc[entry_idx]
+        try:
+            values = [float(row[name]) for name in ("Open", "High", "Low", "Close")]
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if any(not math.isfinite(value) or value <= 0 for value in values):
+            return None
+        price = sum(values) / 4.0
         allow_entry_day_exit = False
     else:
         price = next_open

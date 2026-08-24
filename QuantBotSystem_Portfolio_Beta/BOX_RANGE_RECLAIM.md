@@ -81,14 +81,24 @@ below the setup-specific first target. Otherwise the signal is cancelled.
 Both setups enter only when the next open remains below projected resistance
 and above the setup-specific first target. Otherwise the signal is cancelled.
 
+The optional Box-only `Box Breakout Fill + TP/SL` policy replaces those
+next-open fills with an exact fill at the next session's projected same-side
+boundary: lower for LONG and upper for SHORT. The next session's daily range
+must include that boundary or the signal is not filled. Signal timing remains
+close-known, and native targets, stops, and time exits remain unchanged. Since
+daily OHLC cannot establish whether a same-day target occurred after the
+intraday boundary fill, entry-day stops remain active but targets begin on the
+following session.
+
 ## Exits
 
-Beta Exit Policy provides three choices. `Strategy Default` uses the native
+Beta Exit Policy provides four choices. `Strategy Default` uses the native
 rules below. `D+5 Close` disables them and closes the full position at the D+5
 close. The Box-only `Box TP/SL + D+5` keeps native target and stop events first,
 then closes the remaining quantity from D+5 onward on the first session without
 a native exit event. A partial target or stop on D+5 therefore defers the
-remaining close to the next event-free session.
+remaining close to the next event-free session. `Box Breakout Fill + TP/SL`
+changes only the Box entry fill described above and keeps these native exits.
 
 - Flat reclaim: take 50% at the projected channel center and the balance at the
   projected upper line.

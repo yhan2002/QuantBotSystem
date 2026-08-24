@@ -22,7 +22,7 @@ from app_bot_reports import (
     snapshot_scan_request,
 )
 from app_bot_session import (
-    BOX_HYBRID_EXIT_POLICY,
+    BOX_ONLY_EXIT_POLICIES,
     CUSTOM_GROUP_CODE,
     EXIT_POLICY_LABELS,
     NEUTRALIZATION_LABELS,
@@ -644,7 +644,7 @@ def handle_menu_callbacks(call):
                 )
                 return
             if (
-                policy == BOX_HYBRID_EXIT_POLICY
+                policy in BOX_ONLY_EXIT_POLICIES
                 and session.get("strategy") != "BOX_RANGE"
             ):
                 bot.answer_callback_query(

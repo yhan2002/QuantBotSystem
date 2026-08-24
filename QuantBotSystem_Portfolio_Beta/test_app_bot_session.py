@@ -54,14 +54,16 @@ class BotSessionTests(unittest.TestCase):
             "NATIVE",
         )
 
-        app_bot_session.USER_SESSIONS["wrong-strategy"] = {
-            "strategy": "MA_CROSS",
-            "exit_policy": app_bot_session.BOX_HYBRID_EXIT_POLICY,
-        }
-        self.assertEqual(
-            "NATIVE",
-            app_bot_session.get_or_create_session("wrong-strategy")["exit_policy"],
-        )
+        for index, policy in enumerate(app_bot_session.BOX_ONLY_EXIT_POLICIES):
+            chat_id = f"wrong-strategy-{index}"
+            app_bot_session.USER_SESSIONS[chat_id] = {
+                "strategy": "MA_CROSS",
+                "exit_policy": policy,
+            }
+            self.assertEqual(
+                "NATIVE",
+                app_bot_session.get_or_create_session(chat_id)["exit_policy"],
+            )
 
     def test_report_ids_keep_results_independent(self):
         session = {}

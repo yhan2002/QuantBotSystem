@@ -15,8 +15,10 @@ import runtime_settings
 import strategy_ma_cross
 import core_market_data_store
 import strategy_price_liquidity_reversion
+import core_entry_execution
 import core_universe_backtest
 from app_bot_session import (
+    BOX_BREAKOUT_ENTRY_POLICY,
     BOX_HYBRID_EXIT_POLICY,
     BOX_HYBRID_EXIT_SESSIONS,
     EXIT_POLICY_SESSIONS,
@@ -121,6 +123,11 @@ def _daily_market_scanner():
                     compiled_universe,
                     fixed_exit_sessions=fixed_exit_sessions,
                     hybrid_exit_sessions=hybrid_exit_sessions,
+                    entry_execution=(
+                        core_entry_execution.BOX_BREAKOUT
+                        if session.get("exit_policy") == BOX_BREAKOUT_ENTRY_POLICY
+                        else core_entry_execution.NEXT_OPEN
+                    ),
                     neutralization=neutralization,
                     position_mode=position_mode,
                 )

@@ -22,7 +22,7 @@
     },
     {
       "label": "Exit policy",
-      "value": "Box TP/SL + D+5",
+      "value": "Box Breakout Fill + TP/SL",
       "tone": "neutral"
     },
     {
@@ -62,6 +62,7 @@
       "tone": "warning",
       "items": [
         "Box TP/SL + D+5 keeps native Box exits and closes the remainder from D+5 on an event-free session.",
+        "Box Breakout Fill enters only when the next session touches the projected same-side boundary and preserves native exits.",
         "D+5 Close remains selectable in Beta; Strategy Default remains the default.",
         "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",
         "All candidates, markets, and states are deliberately synthetic.",

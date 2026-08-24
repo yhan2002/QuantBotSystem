@@ -41,9 +41,15 @@ class SchedulerRuntimeSafetyTests(unittest.TestCase):
             "send_split_telegram_message",
         ):
             app_daily_market_scheduler._daily_market_scanner()
+            hybrid_kwargs = scan.call_args.kwargs
+            session["exit_policy"] = "BOX_BREAKOUT_ENTRY"
+            app_daily_market_scheduler._daily_market_scanner()
+            breakout_kwargs = scan.call_args.kwargs
 
-        self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
-        self.assertEqual(5, scan.call_args.kwargs["hybrid_exit_sessions"])
+        self.assertIsNone(hybrid_kwargs["fixed_exit_sessions"])
+        self.assertEqual(5, hybrid_kwargs["hybrid_exit_sessions"])
+        self.assertEqual("BOX_BREAKOUT", breakout_kwargs["entry_execution"])
+        self.assertIsNone(breakout_kwargs["hybrid_exit_sessions"])
 
     def test_scheduled_scan_uses_selected_fixed_exit_policy(self):
         session = {

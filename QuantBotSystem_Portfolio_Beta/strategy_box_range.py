@@ -656,20 +656,26 @@ def run_box_backtest(
                 side = candidates["side"][index]
                 if side_filter not in (None, side):
                     continue
+                entry_levels = _project_levels(stats, 1)
                 execution = core_entry_execution.resolve_entry(
                     df,
                     index,
                     side,
                     mode=entry_execution,
                     adverse_gap_limit_pct=adverse_gap_limit_pct,
+                    trigger_price=(
+                        entry_levels["lowest"]
+                        if side == "LONG"
+                        else entry_levels["highest"]
+                    ),
                 )
-                if execution is None or not _valid_next_open(
-                    execution["next_open"], stats, side
+                if execution is None or (
+                    execution["mode"] != core_entry_execution.BOX_BREAKOUT
+                    and not _valid_next_open(execution["next_open"], stats, side)
                 ):
                     continue
 
                 entry_price = float(execution["price"])
-                entry_levels = _project_levels(stats, 1)
                 reward = max(
                     entry_levels["highest"] - entry_price
                     if side == "LONG"
@@ -797,8 +803,13 @@ def run_box_backtest(
 
             projection_steps = index - position["signal_index"]
             levels = _project_levels(position["stats"], projection_steps)
+            target_order_known = not (
+                position["entry_execution"] == core_entry_execution.BOX_BREAKOUT
+                and index == position["entry_index"]
+            )
             if (
-                not position["first_target_taken"]
+                target_order_known
+                and not position["first_target_taken"]
                 and _target_hit(side, day, levels["first_target"])
             ):
                 half = position["remaining"] * 0.5
@@ -959,6 +970,7 @@ def _candidate_row(
     neutralized_score,
     rank_score,
     requested_weight,
+    entry_execution,
 ):
     setup_labels = {
         "LONG_RANGE_RECLAIM": "flat lower reclaim",
@@ -968,17 +980,25 @@ def _candidate_row(
     }
     setup = setup_labels[result["status"]]
     side = result["side"]
-    open_gate = (
-        f"{result['lowest']:.2f} < open < {result['first_target']:.2f}"
-        if side == "LONG"
-        else f"{result['first_target']:.2f} < open < {result['highest']:.2f}"
-    )
+    if entry_execution == core_entry_execution.BOX_BREAKOUT:
+        next_boundary = (
+            result["lowest"] + result["channel_slope"]
+            if side == "LONG"
+            else result["highest"] + result["channel_slope"]
+        )
+        entry_gate = f"next-session boundary touch {next_boundary:.2f}"
+    else:
+        entry_gate = (
+            f"{result['lowest']:.2f} < open < {result['first_target']:.2f}"
+            if side == "LONG"
+            else f"{result['first_target']:.2f} < open < {result['highest']:.2f}"
+        )
     return (
         f"{index}. {ticker:<6} | {setup} | slope {result['slope_ratio']:+.2f}w | "
         f"width {result['width_atr']:.1f} ATR | quality {result['quality_score']:.2f} | "
         f"turnover {result['turnover_ratio']:.1f}x | neutral {neutralized_score:+.2f} | "
         f"rank {rank_score:+.2f} | alpha weight {requested_weight * 100:.1f}% | "
-        f"open gate {open_gate}"
+        f"entry gate {entry_gate}"
     )
 
 
@@ -1023,8 +1043,10 @@ def scan_total_universe(
     report_artifacts=None,
     fixed_exit_sessions=None,
     hybrid_exit_sessions=None,
+    entry_execution=core_entry_execution.NEXT_OPEN,
 ):
     """Scan and backtest V2 with direction controlled by position_mode."""
+    entry_execution = core_entry_execution.normalize_mode(entry_execution)
     long_candidates = []
     short_candidates = []
     failed_tickers = []
@@ -1124,7 +1146,7 @@ def scan_total_universe(
                         status=result["status"],
                         setup=result.get("setup"),
                         structure=result.get("structure"),
-                        entry_execution="NEXT_OPEN",
+                        entry_execution=entry_execution,
                     ),
                     neutralized_score,
                 )
@@ -1175,9 +1197,14 @@ def scan_total_universe(
         "Structures: flat boundary reclaims, rising-channel long pullbacks, "
         "and falling-channel short rally rejections; transition channels are excluded.\n\n"
     )
-    report += "**LONG Candidates (next open)**\n" + (
+    entry_heading = (
+        "next-session boundary touch"
+        if entry_execution == core_entry_execution.BOX_BREAKOUT
+        else "next open"
+    )
+    report += f"**LONG Candidates ({entry_heading})**\n" + (
         "\n".join(
-            _candidate_row(index, ticker, result, score, rank_score, requested_weight)
+            _candidate_row(index, ticker, result, score, rank_score, requested_weight, entry_execution)
             for index, (
                 ticker,
                 result,
@@ -1191,9 +1218,9 @@ def scan_total_universe(
         )
         or "None"
     )
-    report += "\n\n**SHORT Candidates (next open)**\n" + (
+    report += f"\n\n**SHORT Candidates ({entry_heading})**\n" + (
         "\n".join(
-            _candidate_row(index, ticker, result, score, rank_score, requested_weight)
+            _candidate_row(index, ticker, result, score, rank_score, requested_weight, entry_execution)
             for index, (
                 ticker,
                 result,
@@ -1233,6 +1260,7 @@ def scan_total_universe(
         side_filter=core_position_mode.side_filter(position_mode),
         fixed_exit_sessions=fixed_exit_sessions,
         hybrid_exit_sessions=hybrid_exit_sessions,
+        entry_execution=entry_execution,
         **core_backtest_periods.selection_window(),
     )
     oos_result = core_universe_backtest.aggregate_universe_backtest(
@@ -1248,6 +1276,7 @@ def scan_total_universe(
         side_filter=core_position_mode.side_filter(position_mode),
         fixed_exit_sessions=fixed_exit_sessions,
         hybrid_exit_sessions=hybrid_exit_sessions,
+        entry_execution=entry_execution,
         **core_backtest_periods.oos_window(),
     )
     report += core_universe_backtest.format_fixed_is_oos_backtest(
@@ -1259,7 +1288,13 @@ def scan_total_universe(
             "long support rebounds, and falling channels trade short resistance "
             "rejections; transition structures are excluded; containment >=85%, "
             "width 4~12 ATR, 2+ spaced same-side touches, turnover <2x; signal at "
-            "close and entry at the next open"
+            "close and "
+            + (
+                "next-session fill at the projected same-side channel boundary when touched; "
+                "entry-day stops active and targets begin next session"
+                if entry_execution == core_entry_execution.BOX_BREAKOUT
+                else "entry at the next open"
+            )
         ),
         exit_text=(
             f"close at D+{fixed_exit_sessions}; native targets/stops disabled; incomplete D+N holdings excluded"
@@ -1267,7 +1302,7 @@ def scan_total_universe(
             else f"native stop/target events first; from D+{hybrid_exit_sessions}, close the remainder on the first event-free session; incomplete holdings excluded"
             if hybrid_exit_sessions is not None
             else "50% at the setup-specific first target and balance at the projected "
-            "channel upper line; 10d no-target exit; remaining position exits 10d "
+            "opposite channel boundary; 10d no-target exit; remaining position exits 10d "
             "after the first target; -7% half stop and -10% final stop; stop-first "
             "daily-bar convention"
         ),
@@ -1291,6 +1326,7 @@ def scan_box_range(
     report_artifacts=None,
     fixed_exit_sessions=None,
     hybrid_exit_sessions=None,
+    entry_execution=core_entry_execution.NEXT_OPEN,
 ):
     return scan_total_universe(
         universe_list,
@@ -1300,4 +1336,5 @@ def scan_box_range(
         report_artifacts=report_artifacts,
         fixed_exit_sessions=fixed_exit_sessions,
         hybrid_exit_sessions=hybrid_exit_sessions,
+        entry_execution=entry_execution,
     )
