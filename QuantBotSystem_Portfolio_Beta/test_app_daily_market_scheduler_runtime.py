@@ -45,6 +45,45 @@ class SchedulerRuntimeSafetyTests(unittest.TestCase):
         self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
         self.assertEqual(5, scan.call_args.kwargs["hybrid_exit_sessions"])
 
+    def test_scheduled_new_box_scan_uses_common_contract(self):
+        session = {
+            "selected_groups": {"CSQ_CP"},
+            "strategy": "BOX_RANGE_NEW",
+            "exit_policy": "FIXED_5D",
+            "neutralization": "MARKET",
+            "position_mode": "SHORT_ONLY",
+            "custom_tickers": [],
+            "scheduler_active": True,
+        }
+
+        with patch.object(
+            app_daily_market_scheduler.runtime_settings,
+            "get_setting",
+            return_value=["chat-id"],
+        ), patch.dict(
+            app_daily_market_scheduler.USER_SESSIONS,
+            {"chat-id": session},
+            clear=True,
+        ), patch.object(
+            app_daily_market_scheduler,
+            "compile_selected_universe",
+            return_value=["AAA"],
+        ), patch.object(
+            app_daily_market_scheduler.strategy_box_range_new,
+            "scan_box_range_new",
+            return_value="report",
+        ) as scan, patch.object(
+            app_daily_market_scheduler,
+            "send_split_telegram_message",
+        ) as send:
+            app_daily_market_scheduler._daily_market_scanner()
+
+        self.assertNotIn("hybrid_exit_sessions", scan.call_args.kwargs)
+        self.assertEqual(5, scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertEqual("MARKET", scan.call_args.kwargs["neutralization"])
+        self.assertEqual("SHORT_ONLY", scan.call_args.kwargs["position_mode"])
+        self.assertIn("Box Range (New one) Scan", send.call_args.args[1])
+
     def test_scheduled_scan_uses_selected_fixed_exit_policy(self):
         session = {
             "selected_groups": {"CSQ_CP"},

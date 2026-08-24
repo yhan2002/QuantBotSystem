@@ -9,17 +9,19 @@ import core_position_mode
 
 DEFAULT_GROUP = "NASDAQ_TOP_30_20260731"
 DEFAULT_EXIT_SESSIONS = 5
-STRATEGY_NAMES = ("Momentum", "Box Range", "Reversion")
+STRATEGY_NAMES = ("Momentum", "Box Range", "Box Range (New one)", "Reversion")
 
 
 def _strategy_runners():
     import strategy_box_range
+    import strategy_box_range_new
     import strategy_ma_cross
     import strategy_price_liquidity_reversion
 
     return {
         "Momentum": strategy_ma_cross.scan_ma_cross,
         "Box Range": strategy_box_range.scan_box_range,
+        "Box Range (New one)": strategy_box_range_new.scan_box_range_new,
         "Reversion": strategy_price_liquidity_reversion.scan_value_reversion,
     }
 

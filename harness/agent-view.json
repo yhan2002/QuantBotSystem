@@ -22,7 +22,7 @@
     },
     {
       "label": "Exit policy",
-      "value": "Box TP/SL + D+5",
+      "value": "Box TP/SL + D+5 (legacy Box Range only)",
       "tone": "neutral"
     },
     {
@@ -43,6 +43,7 @@
       "rows": [
         ["Momentum", "SYNTH-US", "LONG", "SYNTH-A", "READY"],
         ["Box Range", "SYNTH-JP", "SHORT", "SYNTH-B", "REVIEW"],
+        ["Box Range (New one)", "SYNTH-US", "LONG", "SYNTH-D", "READY"],
         ["Reversion", "SYNTH-CSQ", "LONG", "SYNTH-C", "SKIP"]
       ]
     },
@@ -61,7 +62,7 @@
       "title": "Promotion boundary",
       "tone": "warning",
       "items": [
-        "Box TP/SL + D+5 keeps native Box exits and closes the remainder from D+5 on an event-free session.",
+        "Box TP/SL + D+5 is available only to legacy Box Range; Box Range (New one) uses Strategy Default or D+5 Close.",
         "D+5 Close remains selectable in Beta; Strategy Default remains the default.",
         "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",
         "All candidates, markets, and states are deliberately synthetic.",
