@@ -7,6 +7,13 @@ import analyze_signal_fixed_exit
 
 
 class FixedExitAnalysisTests(unittest.TestCase):
+    def test_new_box_strategy_is_available_for_fixed_exit_analysis(self):
+        parser = analyze_signal_fixed_exit.build_parser()
+
+        args = parser.parse_args(["--strategy", "Box Range (New one)"])
+
+        self.assertEqual("Box Range (New one)", args.strategy)
+
     def test_preview_does_not_load_strategy_runners(self):
         with mock.patch.object(
             analyze_signal_fixed_exit,

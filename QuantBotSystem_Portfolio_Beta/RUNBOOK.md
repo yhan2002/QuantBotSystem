@@ -35,7 +35,7 @@ and Admin data updates are serialized. A second operation waits for the first
 one instead of reading a half-refreshed database. See Detail buttons carry
 their own report id and remain tied to the scan message that created them.
 
-All three interactive strategy scans and the Admin latest-price, four-year
+All four interactive strategy scans and the Admin latest-price, four-year
 backfill, and classification downloads are background jobs. Telegram shows a
 single 1-100% loading message in 5% increments, including stage, completed
 ticker count, and elapsed time. One process executes these heavy jobs in FIFO
@@ -167,8 +167,10 @@ exits are disabled, and entries without a complete D+5 observation inside the
 evaluation window are excluded. It reads the local cache only.
 
 Beta Telegram Settings -> Exit Policy exposes `Strategy Default`, `D+5 Close`,
-and the Box-only `Box TP/SL + D+5`. The Box hybrid keeps native targets and
-stops, then closes the remainder from D+5 on the first session without a native
-exit event. The selected policy is frozen when a manual scan is submitted and
-is also used by scheduled scans. It applies to both LONG and SHORT trades in
-the IS/OOS portfolio calculation; the default remains `Strategy Default`.
+and the legacy Box Range-only `Box TP/SL + D+5`. The Box hybrid keeps that
+engine's native targets and stops, then closes the remainder from D+5 on the
+first session without a native exit event. Box Range (New one) uses its own
+single-position lifecycle under `Strategy Default` and does not expose the
+legacy hybrid. The selected policy is frozen when a manual scan is submitted
+and is also used by scheduled scans. It applies to both LONG and SHORT trades
+in the IS/OOS portfolio calculation; the default remains `Strategy Default`.

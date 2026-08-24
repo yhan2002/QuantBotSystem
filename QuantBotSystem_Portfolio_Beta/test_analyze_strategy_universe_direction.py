@@ -8,6 +8,31 @@ import analyze_strategy_universe_direction as subject
 
 
 class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
+    def test_new_box_runner_uses_shared_next_open_contract(self):
+        prices = pd.DataFrame()
+        runner = Mock(return_value=(0.0, 0.0, 0, "N/A", []))
+
+        with patch.object(subject.strategy_box_range_new, "run_box_backtest", runner):
+            result = subject._runner(
+                "Box Range (New one)",
+                "AAA",
+                prices,
+                "LONG",
+                {"start_date": "2026-01-01", "end_date": "2026-07-31"},
+            )
+
+        self.assertEqual((0.0, 0.0, 0, "N/A", []), result)
+        runner.assert_called_once_with(
+            "AAA",
+            side_filter="LONG",
+            period=subject.core_backtest_periods.HISTORY_PERIOD,
+            include_trades=True,
+            df=prices,
+            entry_execution=subject.core_entry_execution.NEXT_OPEN,
+            start_date="2026-01-01",
+            end_date="2026-07-31",
+        )
+
     def test_trade_stats(self):
         stats = subject.trade_stats(
             [{"return": 10.0}, {"return": -4.0}, {"return": 2.0}]
