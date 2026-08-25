@@ -21,6 +21,7 @@ import core_backtest_periods
 import core_entry_execution
 import core_market_data_store
 import core_portfolio_performance
+import core_universe_backtest
 import runtime_settings
 import strategy_box_range
 import strategy_ma_cross
@@ -533,7 +534,13 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
     latest_dates = [df.index.max() for df in price_data.values() if df is not None and not df.empty]
     if not latest_dates:
         raise RuntimeError("No local market data is available")
-    cutoff = min(pd.Timestamp(core_backtest_periods.OOS_END), max(latest_dates)).normalize()
+    acwi_cutoff = core_universe_backtest._latest_usable_market_date(
+        core_backtest_periods.oos_end(),
+        lambda _ticker: acwi_price_data,
+    )
+    if acwi_cutoff is None:
+        raise RuntimeError("Rolling OOS requires a current usable ACWI cache date")
+    cutoff = min(pd.Timestamp(acwi_cutoff), max(latest_dates)).normalize()
     price_data = {
         ticker: (df.loc[:cutoff].copy() if df is not None and not df.empty else df)
         for ticker, df in price_data.items()
@@ -614,6 +621,7 @@ def run_analysis(output_dir=None, max_stale_days=15, minimum_trades=30, timestam
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "data_cutoff": cutoff.date().isoformat(),
+        "evaluation_windows": windows,
         "summary_rows": len(summary_rows),
         "daily_rows": len(daily_rows),
         "unique_tickers": len(master_universe),

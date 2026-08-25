@@ -305,15 +305,20 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
     def test_run_analysis_loads_acwi_once_outside_trading_universe(self):
         prices = pd.DataFrame(
             {
-                "Open": [100.0],
-                "High": [101.0],
-                "Low": [99.0],
-                "Close": [100.0],
-                "Volume": [1000.0],
+                "Open": [100.0, 101.0],
+                "High": [101.0, 102.0],
+                "Low": [99.0, 100.0],
+                "Close": [100.0, 101.0],
+                "Volume": [1000.0, 1000.0],
             },
-            index=pd.DatetimeIndex(["2026-07-01"]),
+            index=pd.DatetimeIndex(["2026-08-21", "2026-08-24"]),
         )
-        price_loader = Mock(side_effect=lambda ticker, **_: prices.copy())
+        acwi = prices.iloc[:1].copy()
+        price_loader = Mock(
+            side_effect=lambda ticker, **_: (
+                acwi.copy() if ticker == subject.ACWI_TICKER else prices.copy()
+            )
+        )
         performance_row = Mock(
             return_value={
                 "strategy": "Momentum",
@@ -328,7 +333,15 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
                 "status": "REVIEW",
             }
         )
-        runner = Mock(return_value=(0.0, 0.0, 0, "N/A", []))
+        runner = Mock(
+            side_effect=lambda _strategy, _ticker, _prices, _side, window: (
+                0.0,
+                0.0,
+                0,
+                f"{window['evaluation_start']} to {window['evaluation_end']}",
+                [],
+            )
+        )
         with (
             TemporaryDirectory() as output_dir,
             patch.object(subject, "BASE_GROUPS", {"CSQ": "unused"}),
@@ -339,6 +352,11 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
             patch.object(subject, "_universe_specs", return_value={"CSQ": ["AAA"]}),
             patch.object(subject, "_runner", runner),
             patch.object(subject, "_performance_row", performance_row),
+            patch.object(
+                subject.core_backtest_periods,
+                "oos_end",
+                return_value="2026-08-25",
+            ),
             patch.object(
                 subject.core_market_data_store,
                 "get_price_data",
@@ -360,9 +378,19 @@ class StrategyUniverseDirectionAnalysisTests(unittest.TestCase):
         ]
         pd.testing.assert_frame_equal(
             benchmark_loader(subject.ACWI_TICKER),
-            prices,
+            acwi,
+        )
+        self.assertEqual(runner.call_args.args[4]["evaluation_end"], "2026-08-21")
+        self.assertEqual(
+            performance_row.call_args.args[4]["period"],
+            "2026-01-01 to 2026-08-21",
         )
         self.assertEqual(metadata["schema_version"], subject.SCHEMA_VERSION)
+        self.assertEqual(metadata["data_cutoff"], "2026-08-21")
+        self.assertEqual(
+            metadata["evaluation_windows"]["OOS"]["evaluation_end"],
+            "2026-08-21",
+        )
         self.assertEqual(
             metadata["benchmark_roles"]["primary_pass_fail"]["ticker"],
             "ACWI",

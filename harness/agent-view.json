@@ -64,6 +64,7 @@
       "items": [
         "Box TP/SL + D+5 keeps native Box exits and closes the remainder from D+5 on an event-free session.",
         "Box Breakout Fill enters only when the next session touches the projected same-side boundary and preserves native exits.",
+        "OOS starts on 2026-01-01 and rolls through the latest usable cached ACWI session; missing or stale ACWI blocks the run.",
         "Relative Equilibrium is a daily LONG-alpha plus factor-hedge strategy; it does not use intraday signals.",
         "D+5 Close remains selectable in Beta; Strategy Default remains the default.",
         "The selected exit policy applies symmetrically to LONG and SHORT portfolio trades.",

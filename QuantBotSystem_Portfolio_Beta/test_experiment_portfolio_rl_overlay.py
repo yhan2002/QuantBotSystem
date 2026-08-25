@@ -320,7 +320,7 @@ class ExperimentHelperTests(unittest.TestCase):
         output_paths.assert_not_called()
 
     def test_latest_cutoff_never_adopts_cache_rows_after_oos_end(self):
-        oos_end = pd.Timestamp(subject.core_backtest_periods.OOS_END)
+        oos_end = pd.Timestamp(subject.core_backtest_periods.oos_end())
         future_date = oos_end + pd.Timedelta(days=30)
         future_frame = pd.DataFrame(
             {"Close": [98.0, 99.0, 100.0]},

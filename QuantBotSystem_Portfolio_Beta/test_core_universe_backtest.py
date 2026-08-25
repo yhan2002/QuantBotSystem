@@ -1,15 +1,23 @@
 import unittest
 from unittest import mock
 import tempfile
+from datetime import date
 from pathlib import Path
 import zipfile
 
 import pandas as pd
 
 import core_universe_backtest
+import core_backtest_periods
 
 
 class UniverseBacktestTests(unittest.TestCase):
+    def test_oos_window_rolls_to_requested_current_date(self):
+        self.assertEqual(
+            core_backtest_periods.oos_window(date(2026, 8, 25)),
+            {"evaluation_start": "2026-01-01", "evaluation_end": "2026-08-25"},
+        )
+
     def test_signal_score_overlay_runs_before_cohort_scoring(self):
         seen = []
 
@@ -67,6 +75,59 @@ class UniverseBacktestTests(unittest.TestCase):
         self.assertEqual(seen_ends, ["2025-01-03"])
         self.assertEqual(result["period"], "2025-01-02 to 2025-01-03")
         self.assertEqual(performance.call_args.args[3], "2025-01-03")
+
+    def test_rolling_oos_rejects_missing_or_stale_acwi_before_runner(self):
+        runner = mock.Mock()
+        cases = (
+            pd.DataFrame(),
+            pd.DataFrame(
+                {"Close": [100.0]},
+                index=pd.to_datetime(["2026-07-01"]),
+            ),
+        )
+        with mock.patch.object(
+            core_backtest_periods, "oos_end", return_value="2026-08-25"
+        ):
+            for acwi in cases:
+                for portfolio_accounting in (False, True):
+                    with self.subTest(
+                        rows=len(acwi), portfolio_accounting=portfolio_accounting
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "usable ACWI"):
+                            core_universe_backtest.aggregate_universe_backtest(
+                                ["AAA"],
+                                runner,
+                                portfolio_accounting=portfolio_accounting,
+                                market_benchmark_loader=lambda _ticker, frame=acwi: frame,
+                                evaluation_start="2026-01-01",
+                                evaluation_end="2026-08-25",
+                            )
+        runner.assert_not_called()
+
+    def test_latest_usable_market_date_cleans_and_sorts_acwi_rows(self):
+        acwi = pd.DataFrame(
+            {"Close": [101.0, 102.0, 0.0, 103.0, 104.0]},
+            index=[
+                "not-a-date",
+                "2026-08-24T00:00:00+09:00",
+                "2026-08-25",
+                "2026-09-01",
+                "2026-08-21",
+            ],
+        )
+
+        self.assertEqual(
+            core_universe_backtest._latest_usable_market_date(
+                "2026-08-25", lambda _ticker: acwi
+            ),
+            "2026-08-24",
+        )
+        self.assertEqual(
+            core_universe_backtest._latest_usable_market_date(
+                "2026-08-23", lambda _ticker: acwi
+            ),
+            "2026-08-21",
+        )
 
     def test_missing_or_stale_acwi_does_not_cap_runner_window(self):
         empty = core_universe_backtest._latest_usable_market_date(
@@ -204,7 +265,8 @@ class UniverseBacktestTests(unittest.TestCase):
         )
 
         self.assertIn("Candidate selection (IS: 2024-01 to 2025-12):", summary)
-        self.assertIn("Fixed OOS (2026-01 ~ 2026-07-31):", summary)
+        self.assertIn("Rolling OOS (2026-01 ~ 2026-07-31):", summary)
+        self.assertIn("Rolling OOS (2026-01 to 2026-07-31)", detail)
         self.assertIn("Closed trades: 1", detail)
 
     def test_portfolio_summary_uses_cagr_while_side_detail_says_avg_trade(self):

@@ -132,7 +132,8 @@ changes only the Box entry fill described above and keeps these native exits.
   `FAIL`; missing or nonpositive ACWI ROI is `REVIEW`. Universe EW, win rate,
   CAGR, MDD, and Sharpe are secondary diagnostics.
 - Review target, time-exit, -7% stop, and -10% stop contributions separately.
-- Do not tune thresholds from the fixed OOS result.
+- The OOS start remains fixed at 2026-01-01, while its end rolls to the latest
+  usable cached ACWI session at scan time. Do not tune thresholds from OOS.
 
 ## TradingView reference
 

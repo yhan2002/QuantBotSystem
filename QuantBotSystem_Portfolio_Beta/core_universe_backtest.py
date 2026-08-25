@@ -191,8 +191,19 @@ def _latest_usable_market_date(
         series = series[series > 0]
         if series.empty:
             continue
-        series.index = pd.to_datetime(series.index).normalize()
-        candidates = series.index[series.index <= staleness_reference]
+        dates = []
+        for value in series.index:
+            try:
+                stamp = pd.Timestamp(value)
+            except (TypeError, ValueError):
+                continue
+            if pd.isna(stamp):
+                continue
+            if stamp.tzinfo is not None:
+                stamp = stamp.tz_localize(None)
+            dates.append(stamp.normalize())
+        candidates = pd.DatetimeIndex(dates).unique().sort_values()
+        candidates = candidates[candidates <= staleness_reference]
         if candidates.empty:
             continue
         latest = candidates[-1]
@@ -230,13 +241,23 @@ def aggregate_universe_backtest(
         market_benchmark_loader or core_market_data_store.get_price_data
     )
     effective_runner_kwargs = dict(runner_kwargs)
-    if portfolio_accounting:
+    is_rolling_oos = (
+        effective_runner_kwargs.get("evaluation_start")
+        == core_backtest_periods.OOS_START
+        and effective_runner_kwargs.get("evaluation_end")
+        == core_backtest_periods.oos_end()
+    )
+    if portfolio_accounting or is_rolling_oos:
         common_end = _latest_usable_market_date(
             effective_runner_kwargs.get("evaluation_end"),
             benchmark_loader,
         )
         if common_end:
             effective_runner_kwargs["evaluation_end"] = common_end
+        elif is_rolling_oos:
+            raise RuntimeError(
+                "Rolling OOS requires a current usable ACWI cache date"
+            )
 
     for completed, ticker in enumerate(universe_list, start=1):
         succeeded = False
@@ -926,7 +947,7 @@ def format_fixed_is_oos_backtest(
     strategy_key=None,
     report_artifacts=None,
 ):
-    """Format fixed 2024-25 selection evidence and 2026 OOS results together."""
+    """Format fixed 2024-25 selection evidence and rolling 2026 OOS together."""
     def result_line(result, include_period=True, separate_all=False):
         period_text = f"{result['period']} | " if include_period else ""
         prefix = (
@@ -943,7 +964,7 @@ def format_fixed_is_oos_backtest(
     report += "Candidate selection (IS: 2024-01 to 2025-12):\n"
     report += result_line(selection_result, include_period=False, separate_all=True) + "\n"
     _, oos_latest_date = _period_bounds(oos_result["period"])
-    report += f"Fixed OOS (2026-01 ~ {oos_latest_date or 'N/A'}):\n"
+    report += f"Rolling OOS (2026-01 ~ {oos_latest_date or 'N/A'}):\n"
     report += result_line(oos_result, include_period=False, separate_all=True) + "\n"
     if any(
         result.get("portfolio_performance")
@@ -956,7 +977,7 @@ def format_fixed_is_oos_backtest(
     )
     report += "-----------------------------------------\n"
 
-    detail = "**Backtest Detail - Fixed IS/OOS**\n"
+    detail = "**Backtest Detail - Fixed IS / Rolling OOS**\n"
     detail += "-----------------------------------------\n"
     detail += f"Entry: {entry_text}\nExit: {exit_text}\n"
     detail += (
@@ -967,7 +988,7 @@ def format_fixed_is_oos_backtest(
     )
     for label, result in (
         ("Candidate selection (IS: 2024-01 to 2025-12)", selection_result),
-        ("Fixed OOS (2026-01 to 2026-07)", oos_result),
+        (f"Rolling OOS (2026-01 to {oos_latest_date or 'N/A'})", oos_result),
     ):
         detail += f"\n{label}\n"
         detail += "Evaluation: " + result_line(result) + "\n"
