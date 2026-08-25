@@ -311,7 +311,7 @@ def _latest_cutoff(
         )
     provenance_safe_acwi_date = clock_safe_acwi_dates[-2]
     return min(
-        pd.Timestamp(core_backtest_periods.OOS_END),
+        pd.Timestamp(core_backtest_periods.oos_end()),
         provenance_safe_acwi_date,
         max(ticker_latest),
     ).normalize()
