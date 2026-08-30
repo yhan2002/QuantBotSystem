@@ -2,6 +2,32 @@
 
 프로젝트의 주간 변경사항을 배포판과 베타판으로 구분해 기록합니다.
 
+## 주간 요약: 2026-08-24 ~ 2026-08-31
+
+### 배포판 변경
+
+- `QuantBotSystem/` 변경 없음.
+- 통합 Beta의 Box·Relative Equilibrium·Rolling OOS 변경은 배포판에 승격하지 않았습니다.
+- 배포 Telegram·스케줄러·전략 실행 규칙은 기존 상태를 유지했으며 봇 재시작·발송은 수행하지 않았습니다.
+
+### 베타판 변경
+
+- 레거시 `QuantBotSystem_Beta/`는 변경 없이 보존하고 `QuantBotSystem_Portfolio_Beta/`에서만 개발을 진행했습니다.
+- Box Range 채널 진단과 TradingView 표시를 보강하고, 신호 다음 거래일의 투영 경계가가 일중 범위에 들어올 때만 체결하는 선택형 진입 정책을 추가했습니다.
+- 별도 압축 Box breakout은 추가 후 전량 되돌려 현재 통합 Beta 전략에서 제외했습니다.
+- 동일 국가·섹터 hedge를 쓰는 일봉 `Relative Equilibrium` 전략을 수동·예약 스캔과 공통 리포트에 연결했습니다.
+- 고정 OOS 종료일을 최신 정상 ACWI 캐시 거래일까지 이동하는 Rolling OOS로 바꾸고, 캐시 누락·7일 초과 시 실행 전 중단하도록 했습니다.
+- 전체 유니버스 백테스트·가격 다운로드·봇 실행·Telegram 발송은 수행하지 않았습니다.
+
+### GitHub 커밋 요약
+
+- `ec5b073`: Box 채널 진단과 TradingView 참고 구현 보강
+- `6e769f8`: Box TradingView 기본 표시 단순화
+- `d87705a`, `3b05e31`: 압축 Box breakout 실험 추가 후 전량 되돌림
+- `90645dd`: Box 투영 경계가 체결 정책 추가
+- `5e8aab8`: Relative Equilibrium 전략과 운영 경로 연결
+- `67b6bd9`: OOS 종료일을 최신 시장 거래일까지 확장
+
 ## 2026-08-25
 
 ### Beta OOS 최신 거래일까지 확장
