@@ -847,7 +847,7 @@ def get_price_data(ticker, period_days=None):
     conn = get_connection()
     try:
         query = """
-            SELECT date, open, high, low, close, adj_close, volume
+            SELECT date, open, high, low, close, adj_close, volume, updated_at
             FROM ohlcv
             WHERE ticker = ?
             ORDER BY date
@@ -859,6 +859,8 @@ def get_price_data(ticker, period_days=None):
     if df.empty:
         return pd.DataFrame()
 
+    latest_updated_at = df["updated_at"].iloc[-1]
+    df = df.drop(columns=["updated_at"])
     df["date"] = pd.to_datetime(df["date"])
     df = df.set_index("date")
     df = df.rename(
@@ -873,6 +875,7 @@ def get_price_data(ticker, period_days=None):
     )
     if period_days is not None and len(df) > period_days:
         df = df.tail(period_days)
+    df.attrs["latest_updated_at"] = latest_updated_at
     return df[["Open", "High", "Low", "Close", "Adj Close", "Volume"]]
 
 

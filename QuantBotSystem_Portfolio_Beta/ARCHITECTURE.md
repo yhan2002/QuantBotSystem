@@ -55,6 +55,11 @@ strategy, universe, exit policy, neutralization, and position mode unchanged
 while a job is queued. The existing operation lock remains the database
 consistency boundary.
 
+The manual Momentum route enables an informational EMA 20/60/120/200
+transition section. The scheduled route leaves it disabled, so daily messages
+retain their existing contract. These events do not alter Momentum candidates,
+scores, entries, exits, or portfolio accounting.
+
 ## Common signal contract
 
 Strategy-specific analyzers are adapted into `Signal` records:

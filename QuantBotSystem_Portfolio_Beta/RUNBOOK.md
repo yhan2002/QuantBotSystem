@@ -35,6 +35,11 @@ and Admin data updates are serialized. A second operation waits for the first
 one instead of reading a half-refreshed database. See Detail buttons carry
 their own report id and remain tied to the scan message that created them.
 
+Manual Momentum scans append close-confirmed EMA 20/60/120/200 transition
+lists: new bullish alignment (`정배열`), new bearish alignment (`역배열`),
+and first alignment break (`배열 파괴`). Scheduled daily Momentum messages do
+not include this manual-only section.
+
 All four interactive strategy scans and the Admin latest-price, four-year
 backfill, and classification downloads are background jobs. Telegram shows a
 single 1-100% loading message in 5% increments, including stage, completed

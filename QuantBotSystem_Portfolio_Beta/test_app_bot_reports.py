@@ -143,6 +143,7 @@ class BotReportTests(unittest.TestCase):
         )
         self.assertEqual({}, scan.call_args.kwargs["report_artifacts"])
         self.assertIsNone(scan.call_args.kwargs["fixed_exit_sessions"])
+        self.assertIs(scan.call_args.kwargs["include_ema_alignment_events"], True)
 
     @patch("app_bot_reports.core_market_data_store.freshness_summary", return_value="fresh")
     @patch("app_bot_reports.core_market_data_store.get_missing_tickers", return_value=[])
