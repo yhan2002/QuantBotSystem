@@ -40,6 +40,10 @@ lists: new bullish alignment (`정배열`), new bearish alignment (`역배열`),
 and first alignment break (`배열 파괴`). Scheduled daily Momentum messages do
 not include this manual-only section.
 
+The 08:00 `morning_us_eod` refresh also replaces the validated ACWI benchmark
+cache. If ACWI is temporarily missing or stale, Momentum still returns current
+signals and marks only Rolling OOS metrics unavailable until benchmark refresh.
+
 All four interactive strategy scans and the Admin latest-price, four-year
 backfill, and classification downloads are background jobs. Telegram shows a
 single 1-100% loading message in 5% increments, including stage, completed

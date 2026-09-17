@@ -186,7 +186,17 @@ def _daily_market_data_refresh(label="daily"):
         if summary["failed"]:
             print(f"[{now_str}] Data refresh failed tickers: {', '.join(summary['failed'])}")
     except Exception as e:
-        print(f"[{now_str}] Daily market data refresh failed: {e}")
+        print(f"[{now_str}] Universe market data refresh failed: {e}")
+
+    if label == "morning_us_eod":
+        try:
+            benchmark_summary = core_market_data_store.refresh_market_benchmark()
+            print(
+                f"[{now_str}] ACWI refresh complete. "
+                f"latest={benchmark_summary['latest_date']}"
+            )
+        except Exception as e:
+            print(f"[{now_str}] ACWI benchmark refresh failed: {e}")
 
 
 def configure_jobs():

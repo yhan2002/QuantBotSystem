@@ -660,36 +660,46 @@ def scan_ma_cross(
         fixed_exit_sessions=fixed_exit_sessions,
         **core_backtest_periods.selection_window(),
     )
-    oos_result = core_universe_backtest.aggregate_universe_backtest(
-        universe_list,
-        run_isolated_backtest,
-        period=core_backtest_periods.HISTORY_PERIOD,
-        neutralization=neutralization,
-        position_mode=position_mode,
-        portfolio_accounting=True,
-        progress_callback=_stage_progress_callback(
-            progress_callback, "OOS_BACKTEST"
-        ),
-        side_filter=core_position_mode.side_filter(position_mode),
-        fixed_exit_sessions=fixed_exit_sessions,
-        **core_backtest_periods.oos_window(),
-    )
-    backtest_report = core_universe_backtest.format_fixed_is_oos_backtest(
-        selection_result,
-        oos_result,
-        entry_text=(
-            "MA 5/20/60 alignment and same-direction slopes plus "
-            f"turnover >{TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
-            "at close; enter next open"
-        ),
-        exit_text=(
-            f"close at D+{fixed_exit_sessions}; native exits disabled; incomplete D+N holdings excluded"
-            if fixed_exit_sessions is not None
-            else f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
-        ),
-        strategy_key="ma_momentum",
-        report_artifacts=report_artifacts,
-    )
+    try:
+        oos_result = core_universe_backtest.aggregate_universe_backtest(
+            universe_list,
+            run_isolated_backtest,
+            period=core_backtest_periods.HISTORY_PERIOD,
+            neutralization=neutralization,
+            position_mode=position_mode,
+            portfolio_accounting=True,
+            progress_callback=_stage_progress_callback(
+                progress_callback, "OOS_BACKTEST"
+            ),
+            side_filter=core_position_mode.side_filter(position_mode),
+            fixed_exit_sessions=fixed_exit_sessions,
+            **core_backtest_periods.oos_window(),
+        )
+        backtest_report = core_universe_backtest.format_fixed_is_oos_backtest(
+            selection_result,
+            oos_result,
+            entry_text=(
+                "MA 5/20/60 alignment and same-direction slopes plus "
+                f"turnover >{TURNOVER_MULTIPLE:.0f}x its {TURNOVER_LOOKBACK_DAYS}d average "
+                "at close; enter next open"
+            ),
+            exit_text=(
+                f"close at D+{fixed_exit_sessions}; native exits disabled; incomplete D+N holdings excluded"
+                if fixed_exit_sessions is not None
+                else f"close after {MOMENTUM_HOLDING_DAYS} trading days; no overlapping entries"
+            ),
+            strategy_key="ma_momentum",
+            report_artifacts=report_artifacts,
+        )
+    except core_universe_backtest.MarketBenchmarkUnavailableError:
+        backtest_report = (
+            "\n\nBacktest Summary\n"
+            "-----------------------------------------\n"
+            "Rolling OOS unavailable: ACWI cache is stale or missing.\n"
+            "Current Momentum signals above remain available. "
+            "Refresh Benchmark, then rescan for OOS metrics.\n"
+            "-----------------------------------------\n"
+        )
 
     msg = (
         "**Momentum Scan Report**\n"

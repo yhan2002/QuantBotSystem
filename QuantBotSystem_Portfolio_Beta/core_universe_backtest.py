@@ -22,6 +22,10 @@ DETAIL_MARKER = "\n<<BACKTEST_DETAIL>>\n"
 CSV_MARKER = "\n<<BACKTEST_CSV>>\n"
 
 
+class MarketBenchmarkUnavailableError(RuntimeError):
+    pass
+
+
 def _period_bounds(label):
     if not label or label == "N/A" or " to " not in label:
         return None, None
@@ -255,7 +259,7 @@ def aggregate_universe_backtest(
         if common_end:
             effective_runner_kwargs["evaluation_end"] = common_end
         elif is_rolling_oos:
-            raise RuntimeError(
+            raise MarketBenchmarkUnavailableError(
                 "Rolling OOS requires a current usable ACWI cache date"
             )
 

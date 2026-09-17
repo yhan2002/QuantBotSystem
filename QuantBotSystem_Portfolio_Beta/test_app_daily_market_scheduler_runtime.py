@@ -9,6 +9,64 @@ import app_runtime_lock
 
 
 class SchedulerRuntimeSafetyTests(unittest.TestCase):
+    def test_morning_refresh_updates_acwi_but_evening_refresh_does_not(self):
+        summary = {"requested": 1, "updated": 1, "failed": []}
+        with patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "preload_all_universe",
+            return_value=summary,
+        ), patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "refresh_market_benchmark",
+            return_value={"latest_date": "2026-09-16"},
+        ) as refresh_benchmark:
+            app_daily_market_scheduler._daily_market_data_refresh(
+                label="morning_us_eod"
+            )
+            app_daily_market_scheduler._daily_market_data_refresh(
+                label="evening_asia_eod"
+            )
+
+        refresh_benchmark.assert_called_once_with()
+
+    def test_morning_acwi_refresh_survives_universe_refresh_failure(self):
+        with patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "preload_all_universe",
+            side_effect=RuntimeError("universe failed"),
+        ), patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "refresh_market_benchmark",
+            return_value={"latest_date": "2026-09-16"},
+        ) as refresh_benchmark, patch.object(builtins, "print") as printed:
+            app_daily_market_scheduler._daily_market_data_refresh(
+                label="morning_us_eod"
+            )
+
+        refresh_benchmark.assert_called_once_with()
+        output = "\n".join(str(call.args[0]) for call in printed.call_args_list)
+        self.assertIn("Universe market data refresh failed", output)
+        self.assertIn("ACWI refresh complete", output)
+
+    def test_acwi_failure_keeps_successful_universe_refresh_result(self):
+        summary = {"requested": 1, "updated": 1, "failed": []}
+        with patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "preload_all_universe",
+            return_value=summary,
+        ), patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "refresh_market_benchmark",
+            side_effect=RuntimeError("ACWI failed"),
+        ), patch.object(builtins, "print") as printed:
+            app_daily_market_scheduler._daily_market_data_refresh(
+                label="morning_us_eod"
+            )
+
+        output = "\n".join(str(call.args[0]) for call in printed.call_args_list)
+        self.assertIn("Market data refresh complete", output)
+        self.assertIn("ACWI benchmark refresh failed", output)
+
     def test_scheduled_relative_equilibrium_scan_uses_common_settings(self):
         session = {
             "selected_groups": {"CSQ_CP"},
