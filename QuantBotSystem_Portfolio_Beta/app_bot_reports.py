@@ -204,6 +204,7 @@ def _run_compiled_scan(
         scan_kwargs["progress_callback"] = progress_callback
 
     if selected_strategy == "MA_CROSS":
+        scan_kwargs["include_ema_alignment_events"] = True
         report = strategy_ma_cross.scan_ma_cross(
             compiled_universe,
             **scan_kwargs,

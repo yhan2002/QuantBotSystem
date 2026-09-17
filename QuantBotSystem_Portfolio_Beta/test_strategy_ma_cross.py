@@ -1,6 +1,8 @@
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import patch
 
+import numpy as np
 import pandas as pd
 
 import core_entry_execution
@@ -48,6 +50,7 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
         )
 
         self.assertIn("Momentum Scan Report", report)
+        self.assertNotIn("EMA 20/60/120/200 배열 변화", report)
         self.assertEqual(
             events,
             [
@@ -140,6 +143,135 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
             dates[-1].date().isoformat(),
         )
         self.assertEqual(cutoff_result[4], details)
+
+    def test_detects_three_latest_ema_alignment_transitions(self):
+        dates = pd.date_range("2024-01-01", periods=400, freq="B")
+
+        def frame(closes):
+            closes = np.asarray(closes, dtype=float)
+            return pd.DataFrame(
+                {
+                    "Open": closes,
+                    "High": closes,
+                    "Low": closes,
+                    "Close": closes,
+                    "Volume": 1000.0,
+                },
+                index=dates[: len(closes)],
+            )
+
+        cases = [
+            (
+                np.r_[np.full(220, 100.0), np.linspace(100, 160, 2)],
+                "BULLISH_ALIGNMENT",
+            ),
+            (
+                np.r_[np.full(220, 100.0), np.linspace(100, 40, 2)],
+                "BEARISH_ALIGNMENT",
+            ),
+            (
+                np.r_[
+                    np.linspace(50, 150, 300),
+                    np.linspace(150, 80, 30)[:12],
+                ],
+                "ALIGNMENT_BREAK",
+            ),
+        ]
+
+        for closes, expected in cases:
+            prices = frame(closes)
+            with self.subTest(expected=expected), patch.object(
+                strategy_ma_cross,
+                "_load_ohlcv",
+                return_value=prices,
+            ):
+                event, signal_date = strategy_ma_cross.detect_ema_alignment_event(
+                    "TEST"
+                )
+                self.assertEqual(expected, event)
+                self.assertEqual(prices.index[-1].date().isoformat(), signal_date)
+
+    def test_completed_bar_filter_drops_intraday_row_but_keeps_past_row(self):
+        closes = np.r_[np.full(220, 100.0), 100.0, 160.0, 1.0]
+        dates = pd.date_range("2024-01-02", periods=len(closes), freq="B")
+        prices = pd.DataFrame({"Close": closes}, index=dates)
+        current_session = prices.copy()
+        current_session.index = current_session.index[:-1].append(
+            pd.DatetimeIndex([pd.Timestamp("2026-09-17")])
+        )
+        current_session.attrs["latest_updated_at"] = "2026-09-17T15:00:00+00:00"
+        before_us_close = datetime(2026, 9, 17, 19, 0, tzinfo=timezone.utc)
+
+        filtered = strategy_ma_cross._completed_daily_bars(
+            current_session, "TEST", now_utc=before_us_close
+        )
+        past = strategy_ma_cross._completed_daily_bars(
+            prices,
+            "TEST",
+            now_utc=datetime(2026, 9, 17, 20, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(filtered.index[-1], current_session.index[-2])
+        self.assertEqual(past.index[-1], prices.index[-1])
+
+    def test_ema_values_match_recursive_trading_formula(self):
+        close = pd.Series(np.linspace(50.0, 150.0, 240))
+
+        def recursive_ema(values, span):
+            alpha = 2.0 / (span + 1.0)
+            result = float(values.iloc[0])
+            for value in values.iloc[1:]:
+                result = alpha * float(value) + (1.0 - alpha) * result
+            return result
+
+        for window, actual in zip(
+            strategy_ma_cross.EMA_ALIGNMENT_WINDOWS,
+            strategy_ma_cross._ema_series(close),
+        ):
+            self.assertAlmostEqual(
+                recursive_ema(close, window),
+                float(actual.iloc[-1]),
+                places=12,
+            )
+
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "format_fixed_is_oos_backtest",
+        return_value="\nSUMMARY",
+    )
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "aggregate_universe_backtest",
+        return_value={},
+    )
+    @patch.object(
+        strategy_ma_cross,
+        "analyze_trend_strict_signals",
+        return_value=("EXIT_SIGNAL", 0.0),
+    )
+    @patch.object(strategy_ma_cross, "detect_ema_alignment_event")
+    def test_manual_scan_reports_ema_events_with_requested_wording(
+        self,
+        detect,
+        _analyze,
+        _aggregate,
+        _format,
+    ):
+        detect.side_effect = [
+            ("BULLISH_ALIGNMENT", "2026-09-16"),
+            ("BEARISH_ALIGNMENT", "2026-09-16"),
+            ("ALIGNMENT_BREAK", "2026-09-16"),
+        ]
+
+        report = strategy_ma_cross.scan_ma_cross(
+            ["AAA", "BBB", "CCC"],
+            include_ema_alignment_events=True,
+        )
+
+        self.assertIn("정배열 신규 완성: AAA (2026-09-16)", report)
+        self.assertIn("역배열 신규 완성: BBB (2026-09-16)", report)
+        self.assertIn("배열 파괴: CCC (2026-09-16)", report)
+        self.assertNotIn("역정배열", report)
 
     def test_fixed_exit_closes_at_d_plus_five_and_drops_incomplete_entries(self):
         dates = pd.date_range("2024-01-01", periods=280, freq="B")

@@ -129,6 +129,7 @@ class SchedulerRuntimeSafetyTests(unittest.TestCase):
             "LONG_SHORT_NEUTRAL",
             scan.call_args.kwargs["position_mode"],
         )
+        self.assertNotIn("include_ema_alignment_events", scan.call_args.kwargs)
 
     def test_scheduler_send_error_fully_redacts_bot_token(self):
         token = "123456:ABC_def-secret"

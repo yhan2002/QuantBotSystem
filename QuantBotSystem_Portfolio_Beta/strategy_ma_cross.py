@@ -1,5 +1,8 @@
 # File name: ma_cross_engine.py
 # Generates moving-average momentum signals and backtest reports.
+from datetime import datetime, time, timezone
+from zoneinfo import ZoneInfo
+
 import numpy as np
 import pandas as pd
 import core_market_data_store
@@ -17,6 +20,15 @@ MOMENTUM_SLOPE_THRESHOLD = 0.0
 MOMENTUM_HOLDING_DAYS = 20
 TURNOVER_LOOKBACK_DAYS = 252
 TURNOVER_MULTIPLE = 3.0
+EMA_ALIGNMENT_WINDOWS = (20, 60, 120, 200)
+MARKET_SESSION_CLOSES = {
+    ".T": ("Asia/Tokyo", time(15, 30)),
+    ".HK": ("Asia/Hong_Kong", time(16, 0)),
+    ".SS": ("Asia/Shanghai", time(15, 0)),
+    ".SZ": ("Asia/Shanghai", time(15, 0)),
+    ".KS": ("Asia/Seoul", time(15, 30)),
+    ".KQ": ("Asia/Seoul", time(15, 30)),
+}
 
 
 def _normalize_ohlcv(df):
@@ -359,6 +371,78 @@ def check_new_signal_status(
         return False
 
 
+def detect_ema_alignment_event(
+    ticker,
+    windows=EMA_ALIGNMENT_WINDOWS,
+    period="2y",
+):
+    """Return the latest completed-bar EMA transition, if any."""
+    try:
+        df = _completed_daily_bars(_load_ohlcv(ticker, period=period), ticker)
+        if df.empty or len(df) < max(windows) + 1:
+            return None
+
+        close = df["Close"].astype(float)
+        emas = _ema_series(close, windows)
+        bullish = (emas[0] > emas[1]) & (emas[1] > emas[2]) & (emas[2] > emas[3])
+        bearish = (emas[0] < emas[1]) & (emas[1] < emas[2]) & (emas[2] < emas[3])
+        current = len(df) - 1
+        previous = current - 1
+
+        event = None
+        if bullish.iloc[current] and not bullish.iloc[previous]:
+            event = "BULLISH_ALIGNMENT"
+        elif bearish.iloc[current] and not bearish.iloc[previous]:
+            event = "BEARISH_ALIGNMENT"
+        elif (
+            not bullish.iloc[current]
+            and not bearish.iloc[current]
+            and (bullish.iloc[previous] or bearish.iloc[previous])
+        ):
+            event = "ALIGNMENT_BREAK"
+
+        if event is None:
+            return None
+        return event, df.index[current].date().isoformat()
+    except Exception:
+        return None
+
+
+def _ema_series(close, windows=EMA_ALIGNMENT_WINDOWS):
+    return [
+        close.ewm(span=window, adjust=False, min_periods=window).mean()
+        for window in windows
+    ]
+
+
+def _completed_daily_bars(df, ticker, now_utc=None):
+    if df.empty:
+        return df
+    suffix = next(
+        (suffix for suffix in MARKET_SESSION_CLOSES if ticker.endswith(suffix)),
+        None,
+    )
+    zone_name, close_time = MARKET_SESSION_CLOSES.get(
+        suffix, ("America/New_York", time(16, 0))
+    )
+    market_zone = ZoneInfo(zone_name)
+    now_utc = now_utc or datetime.now(timezone.utc)
+    market_now = now_utc.astimezone(market_zone)
+    latest_date = pd.Timestamp(df.index[-1]).date()
+    if latest_date < market_now.date():
+        return df
+    if latest_date > market_now.date() or market_now.time() < close_time:
+        return df.iloc[:-1]
+
+    updated_at = pd.to_datetime(df.attrs.get("latest_updated_at"), utc=True)
+    if pd.isna(updated_at):
+        return df.iloc[:-1]
+    updated_local = updated_at.tz_convert(market_zone)
+    if updated_local.date() != latest_date or updated_local.time() < close_time:
+        return df.iloc[:-1]
+    return df
+
+
 def _format_ranked_rows(items, long_side=True):
     if not items:
         return "None\n"
@@ -420,16 +504,27 @@ def scan_ma_cross(
     progress_callback=None,
     report_artifacts=None,
     fixed_exit_sessions=None,
+    include_ema_alignment_events=False,
 ):
     long_list, short_list, exit_list = [], [], []
     new_longs, new_shorts = [], []
     failed_tickers = []
     raw_scores = {}
+    ema_events = {
+        "BULLISH_ALIGNMENT": [],
+        "BEARISH_ALIGNMENT": [],
+        "ALIGNMENT_BREAK": [],
+    }
 
     total_tickers = len(universe_list)
     for completed, ticker in enumerate(universe_list, start=1):
         succeeded = False
         try:
+            if include_ema_alignment_events:
+                ema_event = detect_ema_alignment_event(ticker)
+                if ema_event is not None:
+                    event, signal_date = ema_event
+                    ema_events[event].append(f"{ticker} ({signal_date})")
             signal, strength = analyze_trend_strict_signals(ticker)
             succeeded = signal not in ("INSUFFICIENT_DATA", "ERROR")
 
@@ -542,6 +637,14 @@ def scan_ma_cross(
 
     long_rows = _format_ranked_rows(top_longs, long_side=True)
     short_rows = _format_ranked_rows(top_shorts, long_side=False)
+    ema_event_report = ""
+    if include_ema_alignment_events:
+        ema_event_report = (
+            "**EMA 20/60/120/200 배열 변화 (수동 스캔 전용)**\n"
+            f"- 정배열 신규 완성: {', '.join(ema_events['BULLISH_ALIGNMENT']) or 'None'}\n"
+            f"- 역배열 신규 완성: {', '.join(ema_events['BEARISH_ALIGNMENT']) or 'None'}\n"
+            f"- 배열 파괴: {', '.join(ema_events['ALIGNMENT_BREAK']) or 'None'}\n\n"
+        )
 
     selection_result = core_universe_backtest.aggregate_universe_backtest(
         universe_list,
@@ -599,6 +702,7 @@ def scan_ma_cross(
         "**New Signals Today**\n"
         f"- New LONG: {', '.join(new_longs) if new_longs else 'None'}\n"
         f"- New SHORT: {', '.join(new_shorts) if new_shorts else 'None'}\n\n"
+        f"{ema_event_report}"
         "-----------------------------\n"
         "**LONG Candidates**\n"
         "Top 5 by momentum score:\n"
