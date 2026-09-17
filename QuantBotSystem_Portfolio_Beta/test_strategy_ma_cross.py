@@ -63,6 +63,36 @@ class MomentumEvaluationMarkTests(unittest.TestCase):
             ],
         )
 
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "format_fixed_is_oos_backtest",
+    )
+    @patch.object(
+        strategy_ma_cross.core_universe_backtest,
+        "aggregate_universe_backtest",
+    )
+    @patch.object(
+        strategy_ma_cross,
+        "analyze_trend_strict_signals",
+        return_value=("EXIT_SIGNAL", 0.0),
+    )
+    def test_stale_acwi_keeps_current_momentum_report_available(
+        self, _analyze, aggregate, format_backtest
+    ):
+        aggregate.side_effect = [
+            {},
+            strategy_ma_cross.core_universe_backtest.MarketBenchmarkUnavailableError(
+                "stale ACWI"
+            ),
+        ]
+
+        report = strategy_ma_cross.scan_ma_cross(["AAA"])
+
+        self.assertIn("Momentum Scan Report", report)
+        self.assertIn("Rolling OOS unavailable: ACWI cache is stale or missing", report)
+        self.assertIn("Current Momentum signals above remain available", report)
+        format_backtest.assert_not_called()
+
     def test_incomplete_holding_period_is_marked_at_evaluation_close(self):
         dates = pd.date_range("2024-01-01", periods=275, freq="B")
         frame = pd.DataFrame(

@@ -190,7 +190,9 @@ and do not change the ROI PASS/FAIL result.
 pre-IS seed through the latest available date so historical `Adj Close`
 revisions are captured. A coverage and freshness gate protects the existing
 cache from partial Yahoo responses. The job uses the background queue and
-runtime serialization lock.
+runtime serialization lock. The 08:00 `morning_us_eod` scheduler runs the same
+validated refresh. A missing or stale ACWI cache suppresses only Momentum's
+Rolling OOS metrics; current cached-ticker signals remain available.
 
 The IS/OOS headline return is portfolio CAGR annualized from daily ledger NAV
 with 252 trading days. Trade-level averages remain explicitly labelled
