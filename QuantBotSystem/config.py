@@ -41,7 +41,7 @@ universe_groups = {
         'MDGL', 'META', 'MKSI', 'MMYT', 'MNDY', 'MS', 'MSFT', 'MSI', 'MTSI', 'MU', 
         'NCLH', 'NFLX', 'NOC', 'NOW', 'NTNX', 'NTRA', 'NUVL', 'NVDA', 'ORCL', 'OTEX', 
         'PANW', 'PEGA', 'PEP', 'PGR', 'PLTR', 'PM', 'PNFP', 'PODD', 'RCL', 'REGN', 
-        'RGEN', 'RGLD', 'RL', 'RVMD', 'SAIA', 'SAIC', 'SNPS', 'SOFI', 'SPT', 'SRE', 
+        'RGEN', 'RGLD', 'RL', 'RVMD', 'SAIA', 'SAIC', 'SNDK', 'SNPS', 'SOFI', 'SPT', 'SRE',
         'STT', 'TCOM', 'TEM', 'TLN', 'TMO', 'TMUS', 'TPG', 'TPR', 'TRMB', 'TSLA', 
         'TTD', 'UBER', 'VERX', 'VRNS', 'VRT', 'VRTX', 'VTR', 'WFC', 'WMT', 'WTFC', 'Z', 'ZION'
     ],
