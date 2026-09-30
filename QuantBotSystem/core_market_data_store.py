@@ -4,7 +4,7 @@ import os
 import sqlite3
 import time
 from datetime import datetime, timezone
-from math import ceil, isfinite
+from math import ceil, isfinite, isclose
 
 import pandas as pd
 import yfinance as yf
@@ -604,6 +604,32 @@ def format_market_benchmark_refresh_summary(summary):
     )
 
 
+def _coherent_refresh(conn, ticker, downloaded):
+    """Validate a full replacement when any cached price basis is restated."""
+    if downloaded.empty:
+        return downloaded
+    fields = ("Open", "High", "Low", "Close", "Adj Close")
+    old = {row[0]: row[1:] for row in conn.execute(
+        "SELECT date, open, high, low, close, adj_close FROM ohlcv WHERE ticker=?", (ticker,))}
+    def valid(frame):
+        return (not frame.index.has_duplicates and all(
+            isfinite(float(value)) and float(value) > 0 for value in frame[list(fields)].to_numpy().flat))
+    if not valid(downloaded):
+        raise ValueError("Invalid downloaded prices; cache retained")
+    overlap = [d for d in downloaded.index if d.isoformat() in old]
+    changed = any(any(previous is None or not isclose(float(downloaded.at[d, field]), float(previous), rel_tol=1e-6, abs_tol=1e-8)
+                      for field, previous in zip(fields, old[d.isoformat()])) for d in overlap)
+    if old and (changed or not overlap):
+        start = min(pd.Timestamp(min(old)), pd.Timestamp(downloaded.index.min()))
+        end = max(pd.Timestamp(max(old)), pd.Timestamp(downloaded.index.max())) + pd.Timedelta(days=1)
+        replacement = _download_history_range(ticker, start, end)
+        required = set(old) | {d.isoformat() for d in downloaded.index}
+        if replacement.empty or not valid(replacement) or not required.issubset({d.isoformat() for d in replacement.index}):
+            raise ValueError("Incomplete adjustment refresh; cache retained")
+        return replacement
+    return downloaded
+
+
 def _download_history(ticker, period):
     return _normalize_download(
         yf.download(ticker, period=period, progress=False, auto_adjust=False)
@@ -725,7 +751,7 @@ def refresh_latest_price_data(
                     continue
 
                 if not downloaded.empty:
-                    summary["updated"] += _upsert_ohlcv(conn, ticker, downloaded)
+                    summary["updated"] += _upsert_ohlcv(conn, ticker, _coherent_refresh(conn, ticker, downloaded))
                 else:
                     summary["unchanged"] += 1
 
@@ -733,6 +759,7 @@ def refresh_latest_price_data(
                 if latest_date:
                     summary["latest_dates"][ticker] = latest_date
             except Exception:
+                conn.rollback()
                 if ticker not in summary["failed"]:
                     summary["failed"].append(ticker)
             if sleep_seconds and idx < len(tickers):
@@ -775,11 +802,12 @@ def backfill_price_data(
                 if downloaded.empty:
                     summary["failed"].append(ticker)
                 else:
-                    summary["updated"] += _upsert_ohlcv(conn, ticker, downloaded)
+                    summary["updated"] += _upsert_ohlcv(conn, ticker, _coherent_refresh(conn, ticker, downloaded))
                 latest_date = _get_latest_cached_date(conn, ticker)
                 if latest_date:
                     summary["latest_dates"][ticker] = latest_date
             except Exception:
+                conn.rollback()
                 summary["failed"].append(ticker)
             if sleep_seconds and idx < len(tickers):
                 time.sleep(sleep_seconds)
