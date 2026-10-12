@@ -1,8 +1,9 @@
+import io
 import json
 import os
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,6 +47,36 @@ class ActiveVersionTests(unittest.TestCase):
             selector.normalize_version("experimental")
         with self.assertRaisesRegex(selector.argparse.ArgumentTypeError, "BETA"):
             selector.parse_version("experimental")
+
+
+class PlatformSupportTests(unittest.TestCase):
+    def test_macos_run_fails_before_runtime_files_or_child_creation(self):
+        with patch.object(selector.sys, "platform", "darwin"), patch.object(
+            selector, "_prepare_runtime_directories"
+        ) as prepare, patch.object(selector, "PollerLock") as lock, patch.object(
+            selector.subprocess, "Popen"
+        ) as popen:
+            with self.assertRaisesRegex(selector.SelectorError, "docs/MACOS.md"):
+                selector.run_version(selector.BETA)
+        prepare.assert_not_called()
+        lock.assert_not_called()
+        popen.assert_not_called()
+
+    def test_macos_cli_refuses_run_replace_and_stop_before_any_changes(self):
+        for command in (["run", "BETA", "--replace"], ["stop"]):
+            with self.subTest(command=command), patch.object(
+                selector.sys, "platform", "darwin"
+            ), patch.object(selector, "save_selected_version") as save, patch.object(
+                selector, "stop_running"
+            ) as stop, patch.object(selector, "run_version") as run:
+                error = io.StringIO()
+                with redirect_stderr(error):
+                    self.assertEqual(2, selector.main(command))
+                self.assertIn("Windows/Linux only", error.getvalue())
+                self.assertIn("docs/MACOS.md", error.getvalue())
+                save.assert_not_called()
+                stop.assert_not_called()
+                run.assert_not_called()
 
 
 class ChildEnvironmentTests(unittest.TestCase):
@@ -232,6 +263,7 @@ class PollerLockTests(unittest.TestCase):
 
             kill.assert_not_called()
 
+    @patch.object(selector.sys, "platform", "linux")
     def test_manager_stop_signal_terminates_child_before_lock_release(self):
         class FakeProcess:
             pid = 202
@@ -281,6 +313,7 @@ class PollerLockTests(unittest.TestCase):
             self.assertTrue(process.terminated)
             self.assertFalse(lock_path.exists())
 
+    @patch.object(selector.sys, "platform", "linux")
     def test_manager_signal_during_popen_waits_for_child_handle(self):
         class FakeProcess:
             pid = 303

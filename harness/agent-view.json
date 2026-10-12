@@ -52,6 +52,7 @@
       "columns": ["Action", "Preview state", "Safety evidence"],
       "rows": [
         ["Select version", "SIMULATED", "No local selector file written"],
+        ["macOS selector run / stop", "BLOCKED", "Windows/Linux only; see docs/MACOS.md before manual execution"],
         ["Run scan", "BLOCKED", "No market download"],
         ["Send Telegram", "BLOCKED", "No token or chat destination"]
       ]

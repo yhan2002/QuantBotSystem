@@ -559,7 +559,17 @@ def _terminate_child(process: subprocess.Popen, timeout_seconds: float = 5.0) ->
         process.wait(timeout=timeout_seconds)
 
 
+def _require_process_management_support() -> None:
+    # PID reuse protection currently uses Win32 creation times or Linux /proc.
+    if sys.platform not in ("win32", "linux"):
+        raise SelectorError(
+            "Selector process management supports Windows/Linux only. "
+            "On macOS, see docs/MACOS.md for offline checks and manual execution."
+        )
+
+
 def run_version(version: str) -> int:
+    _require_process_management_support()
     selected = normalize_version(version)
     spec = VERSION_SPECS[selected]
     if not spec.directory.is_dir():
@@ -780,6 +790,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command in ("run", "stop"):
+            _require_process_management_support()
         if args.command == "status":
             print_status()
             return 0

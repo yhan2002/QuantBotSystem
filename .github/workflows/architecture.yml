@@ -33,6 +33,7 @@ jobs:
           test_agent_view.py
           test_review_gate.py
           test_runtime_settings.py
+          test_RUN_quantbot_version_switch.py
           -v
       - name: Build synthetic DOM and screenshot
         run: >-
