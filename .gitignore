@@ -3,11 +3,14 @@
 **/config_local.py
 **/local_settings.py
 **/config_backup.py
+**/*.private.json
 *.env
+.venv/
 .venv-hmm/
 
 # Runtime data and generated outputs
 **/data/
+/operational_freshness/
 **/__pycache__/
 *.py[cod]
 *.log
