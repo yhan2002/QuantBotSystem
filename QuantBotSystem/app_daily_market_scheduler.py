@@ -1,6 +1,10 @@
-﻿# File name: daily_market_scheduler.py
+# File name: daily_market_scheduler.py
 # Sends scheduled Telegram reports using the selected universe and strategy.
 import time
+import json
+import os
+import tempfile
+from pathlib import Path
 import threading
 from datetime import datetime
 from urllib.parse import quote
@@ -9,6 +13,7 @@ import requests
 import schedule
 
 import app_runtime_lock
+import app_freshness_handoff
 import strategy_box_range
 import config
 import runtime_settings
@@ -40,20 +45,60 @@ def _redact_bot_token(message, bot_token):
     return redacted
 
 
+def _record_scheduler_event(kind, payload):
+    """Keep the latest local refresh/report evidence without credentials or chat IDs."""
+    temporary = None
+    try:
+        directory = Path(runtime_settings.RUNTIME_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / "scheduler_status.json"
+        previous = {}
+        if path.is_file():
+            with path.open(encoding="utf-8") as stream:
+                previous = json.loads(stream.read(65537))
+            if not isinstance(previous, dict):
+                previous = {}
+        if kind == "report":
+            refresh = previous.get("refresh", {})
+            if not isinstance(refresh, dict):
+                refresh = {}
+            payload = {**payload, "refresh_status": refresh.get("status", "UNKNOWN"),
+                       "refresh_at": refresh.get("at"), "freshness": "UNVERIFIED"}
+        previous[kind] = {"at": datetime.now().isoformat(timespec="seconds"), **payload}
+        fd, temporary = tempfile.mkstemp(dir=directory, prefix="scheduler-status-", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(previous, stream, ensure_ascii=False, allow_nan=False)
+        os.replace(temporary, path)
+    except (OSError, ValueError, TypeError) as error:
+        print(f"[scheduler evidence unavailable] {type(error).__name__}", flush=True)
+    finally:
+        if temporary is not None:
+            try:
+                Path(temporary).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
 def send_split_telegram_message(chat_id, text):
     bot_token = runtime_settings.get_setting("BOT_TOKEN", config.BOT_TOKEN)
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     max_length = 4000
 
     chunks = [text[i : i + max_length] for i in range(0, len(text), max_length)]
+    succeeded = True
     for chunk in chunks:
         payload = {"chat_id": chat_id, "text": chunk, "parse_mode": "Markdown"}
         try:
-            requests.post(url, json=payload, timeout=10)
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            if response.json().get("ok") is not True:
+                raise RuntimeError("Telegram delivery was not confirmed")
             time.sleep(0.5)
         except Exception as e:
+            succeeded = False
             safe_error = _redact_bot_token(e, bot_token)
-            print(f"[scheduler send failed] Chat ID {chat_id}: {safe_error}")
+            print(f"[scheduler send failed] Chat ID {chat_id}: {safe_error}", flush=True)
+    return succeeded
 
 
 def daily_market_scanner():
@@ -63,8 +108,10 @@ def daily_market_scanner():
 
 def _daily_market_scanner():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now_str}] Scheduled market scanner started.")
+    print(f"[{now_str}] Scheduled market scanner started.", flush=True)
+    _record_scheduler_event("report", {"status": "STARTED", "refresh_dependency": "SEE_REFRESH_RECORD"})
 
+    delivered_count = failed_count = skipped_count = 0
     for chat_id in runtime_settings.get_setting(
         "ALLOWED_CHAT_IDS", config.ALLOWED_CHAT_IDS
     ):
@@ -81,7 +128,8 @@ def _daily_market_scanner():
         )
 
         if not session.get("scheduler_active", True):
-            print(f"[{now_str}] Chat ID {chat_id}: scheduler is OFF.")
+            skipped_count += 1
+            print(f"[{now_str}] Chat ID {chat_id}: scheduler is OFF.", flush=True)
             continue
 
         selected_strategy = session.get("strategy", "MA_CROSS")
@@ -95,6 +143,12 @@ def _daily_market_scanner():
             compiled_universe = config.universe
 
         try:
+            check = app_freshness_handoff.validate(core_market_data_store.DB_PATH, compiled_universe)
+            if check and check['status'] != 'VALIDATED':
+                failed_count += 1
+                _record_scheduler_event("report_dependency", {"status": "BLOCKED", "failed_count": check['failed_count'], "pipeline_run_id": check['run_id']})
+                print(f"[scheduled report blocked] {check['failed_count']} selected caches stale/unverified; no strategy/rank changed", flush=True)
+                continue
             if selected_strategy == "MA_CROSS":
                 report_content = strategy_ma_cross.scan_ma_cross(
                     compiled_universe,
@@ -123,16 +177,25 @@ def _daily_market_scanner():
             report_content, _ = core_universe_backtest.split_summary_detail(report_content)
 
             final_msg = f"{header}\n{report_content}"
-            send_split_telegram_message(chat_id, final_msg)
+            delivered = send_split_telegram_message(chat_id, final_msg)
+            delivered_count += int(delivered)
+            failed_count += int(not delivered)
             print(
-                f"[{now_str}] Chat ID {chat_id}: scheduled report sent "
+                f"[{now_str}] Chat ID {chat_id}: scheduled report {'sent' if delivered else 'delivery unconfirmed'} "
                 f"({len(compiled_universe)} tickers)."
-            )
+            , flush=True)
 
         except Exception as e:
             error_msg = f"[scheduler error] Chat ID {chat_id}: {e}"
-            print(error_msg)
+            print(error_msg, flush=True)
+            failed_count += 1
+            _record_scheduler_event("report_error", {"status": "FAILED", "error_type": type(e).__name__})
             send_split_telegram_message(chat_id, error_msg)
+
+    status = ("PARTIAL" if failed_count and delivered_count else "DELIVERY_FAILED" if failed_count
+              else "DELIVERED" if delivered_count else "SKIPPED")
+    _record_scheduler_event("report", {"status": status, "delivered_count": delivered_count,
+                                      "failed_count": failed_count, "skipped_count": skipped_count})
 
 
 def daily_market_data_refresh(label="daily"):
@@ -142,18 +205,34 @@ def daily_market_data_refresh(label="daily"):
 
 def _daily_market_data_refresh(label="daily"):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{now_str}] Market data refresh started. label={label}")
+    print(f"[{now_str}] Market data refresh started. label={label}", flush=True)
+    _record_scheduler_event("refresh", {"status": "STARTED", "label": label})
     try:
+        shared = app_freshness_handoff.refresh(label)
+        if shared is not None:
+            _record_scheduler_event("refresh", {"status": shared['status'], "label": label, "pipeline_run_id": shared['run_id'], "last_success": shared['last_success'], "freshness": "SEE_SHARED_SOURCE_COVERAGE"})
+            print(f"[shared pipeline] {shared['status']} run={shared['run_id']}", flush=True)
+            return shared
         summary = core_market_data_store.preload_all_universe(config)
+        latest = sorted(summary.get("latest_dates", {}).values())
+        _record_scheduler_event("refresh", {
+            "status": "PARTIAL" if summary["failed"] else "COMPLETE",
+            "label": label, "requested": summary["requested"], "rows_updated": summary["updated"],
+            "failed_count": len(summary["failed"]), "price_coverage": len(latest),
+            "oldest_price_date": latest[0] if latest else None,
+            "newest_price_date": latest[-1] if latest else None,
+            "freshness": "UNVERIFIED",
+        })
         print(
             f"[{now_str}] Market data refresh complete. label={label}, "
             f"tickers={summary['requested']}, rows_updated={summary['updated']}, "
             f"failed={len(summary['failed'])}"
-        )
+        , flush=True)
         if summary["failed"]:
-            print(f"[{now_str}] Data refresh failed tickers: {', '.join(summary['failed'])}")
+            print(f"[{now_str}] Data refresh failed tickers: {', '.join(summary['failed'])}", flush=True)
     except Exception as e:
-        print(f"[{now_str}] Daily market data refresh failed: {e}")
+        _record_scheduler_event("refresh", {"status": "FAILED", "label": label, "error_type": type(e).__name__})
+        print(f"[{now_str}] Daily market data refresh failed: {e}", flush=True)
 
 
 def configure_jobs():
@@ -186,7 +265,7 @@ def start_scheduler_thread():
     thread = threading.Thread(target=run_scheduler_loop, daemon=True)
     thread.start()
     _scheduler_started = True
-    print("[scheduled market scanner] started in background thread.")
+    print("[scheduled market scanner] started in background thread.", flush=True)
 
 
 if __name__ == "__main__":
@@ -195,7 +274,7 @@ if __name__ == "__main__":
         "[scheduled market scanner] waiting for jobs: "
         f"data refresh {MORNING_DATA_REFRESH_TIME}/{EVENING_DATA_REFRESH_TIME}, "
         f"scan {SCHEDULED_SCAN_TIME}."
-    )
+    , flush=True)
     while True:
         schedule.run_pending()
         time.sleep(60)

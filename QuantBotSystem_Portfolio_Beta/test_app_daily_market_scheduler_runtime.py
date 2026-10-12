@@ -9,6 +9,76 @@ import app_runtime_lock
 
 
 class SchedulerRuntimeSafetyTests(unittest.TestCase):
+    def setUp(self):
+        refresh = patch.object(
+            app_daily_market_scheduler.app_freshness_handoff,
+            "refresh",
+            return_value=None,
+        )
+        validate = patch.object(
+            app_daily_market_scheduler.app_freshness_handoff,
+            "validate",
+            return_value={"status": "VALIDATED", "failed_count": 0, "run_id": "test"},
+        )
+        refresh.start()
+        validate.start()
+        self.addCleanup(refresh.stop)
+        self.addCleanup(validate.stop)
+
+    def test_shared_refresh_skips_native_fallback(self):
+        shared = {
+            "status": "COMPLETE",
+            "run_id": "shared-run",
+            "last_success": "2026-10-01T08:00:00",
+        }
+        with patch.object(
+            app_daily_market_scheduler.app_freshness_handoff,
+            "refresh",
+            return_value=shared,
+        ), patch.object(
+            app_daily_market_scheduler.core_market_data_store,
+            "preload_all_universe",
+        ) as preload:
+            result = app_daily_market_scheduler._daily_market_data_refresh()
+
+        self.assertEqual(shared, result)
+        preload.assert_not_called()
+
+    def test_unvalidated_cache_blocks_scheduled_scan(self):
+        session = {
+            "selected_groups": {"CSQ_CP"},
+            "strategy": "MA_CROSS",
+            "custom_tickers": [],
+            "scheduler_active": True,
+        }
+        with patch.object(
+            app_daily_market_scheduler.runtime_settings,
+            "get_setting",
+            return_value=["chat-id"],
+        ), patch.dict(
+            app_daily_market_scheduler.USER_SESSIONS,
+            {"chat-id": session},
+            clear=True,
+        ), patch.object(
+            app_daily_market_scheduler,
+            "compile_selected_universe",
+            return_value=["AAA"],
+        ), patch.object(
+            app_daily_market_scheduler.app_freshness_handoff,
+            "validate",
+            return_value={"status": "BLOCKED", "failed_count": 1, "run_id": "test"},
+        ), patch.object(
+            app_daily_market_scheduler.strategy_ma_cross,
+            "scan_ma_cross",
+        ) as scan, patch.object(
+            app_daily_market_scheduler,
+            "send_split_telegram_message",
+        ) as send:
+            app_daily_market_scheduler._daily_market_scanner()
+
+        scan.assert_not_called()
+        send.assert_not_called()
+
     def test_morning_refresh_updates_acwi_but_evening_refresh_does_not(self):
         summary = {"requested": 1, "updated": 1, "failed": []}
         with patch.object(
