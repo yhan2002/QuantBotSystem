@@ -87,9 +87,10 @@ EXPORT_DIR = _resolved_path(
 STATE_DIR = _resolved_path(
     os.environ.get("QUANTBOT_STATE_DIR", str(DATA_DIR / "state"))
 )
+# Empty launcher environment values must not resolve to the working directory.
+_configured_market_db_path = os.environ.get("QUANTBOT_MARKET_DB_PATH")
 MARKET_DB_PATH = _resolved_path(
-    os.environ.get(
-        "QUANTBOT_MARKET_DB_PATH",
-        str(DATA_DIR / "market_data.sqlite"),
-    )
+    _configured_market_db_path
+    if _configured_market_db_path and _configured_market_db_path.strip()
+    else DATA_DIR / "market_data.sqlite"
 )
