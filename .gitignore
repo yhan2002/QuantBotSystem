@@ -1,5 +1,6 @@
 # Local credentials and machine-specific settings
 **/config.local.py
+**/config_local.py
 **/local_settings.py
 **/config_backup.py
 *.env
