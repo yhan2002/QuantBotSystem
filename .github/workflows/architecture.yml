@@ -26,6 +26,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Prepare blank local config without overwriting files
+        run: python tools/prepare_local_config.py
       - name: Check all version boundaries
         run: >-
           python -m unittest
@@ -33,6 +35,7 @@ jobs:
           test_agent_view.py
           test_review_gate.py
           test_runtime_settings.py
+          test_config_templates.py
           -v
       - name: Build synthetic DOM and screenshot
         run: >-

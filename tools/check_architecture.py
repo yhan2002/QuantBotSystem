@@ -14,6 +14,8 @@ VERSION_NAMES = (
     "QuantBotSystem_Portfolio_Beta",
 )
 
+LOCAL_CONFIG_VERSIONS = {"QuantBotSystem", "QuantBotSystem_Beta"}
+
 PRIVATE_SOURCE_NAMES = {
     "config.local.py",
     "config_backup.py",
@@ -135,6 +137,7 @@ def _production_files(directory: Path) -> list[Path]:
         for path in directory.glob("*.py")
         if not path.name.startswith("test_")
         and path.name not in PRIVATE_SOURCE_NAMES
+        and not (directory.name in LOCAL_CONFIG_VERSIONS and path.name == "config.py")
     )
 
 
@@ -172,6 +175,9 @@ def _check_version(version: str) -> list[str]:
         return [f"missing version directory: {version}"]
 
     required = set(REQUIRED_COMMON_MODULES)
+    if version in LOCAL_CONFIG_VERSIONS:
+        required.remove("config.py")
+        required.add("config.local.example.py")
     if version == "QuantBotSystem_Portfolio_Beta":
         required.update(REQUIRED_PORTFOLIO_MODULES)
     for name in sorted(required):

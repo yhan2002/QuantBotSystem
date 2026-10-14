@@ -56,7 +56,7 @@ def _load_config_module(path: Path) -> ModuleType:
 
 
 def get_setting(name: str, default=None):
-    """Read a private setting, falling back to tracked ``config.py`` values."""
+    """Read a private setting, falling back to ignored local ``config.py`` values."""
     path = resolve_config_path()
     if path is not None:
         local_module = _load_config_module(path)

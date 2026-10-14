@@ -52,6 +52,7 @@
       "columns": ["Action", "Preview state", "Safety evidence"],
       "rows": [
         ["Select version", "SIMULATED", "No local selector file written"],
+        ["Prepare local config", "SIMULATED", "Blank templates only; existing local settings preserved"],
         ["Run scan", "BLOCKED", "No market download"],
         ["Send Telegram", "BLOCKED", "No token or chat destination"]
       ]

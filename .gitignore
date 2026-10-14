@@ -1,4 +1,6 @@
 # Local credentials and machine-specific settings
+/QuantBotSystem/config.py
+/QuantBotSystem_Beta/config.py
 **/config.local.py
 **/config_local.py
 **/local_settings.py

@@ -27,7 +27,8 @@ Portfolio Beta의 상세 불변식과 저장 경계는
 - `app_*`: Telegram·스케줄러·세션·보고 orchestration
 - `strategy_*`: 전략별 신호와 진입·청산 규칙
 - `core_*`: 시장 데이터, 체결, 중립화, 백테스트, 성과 계산
-- `config.py`: 추적 가능한 기본 설정
+- 배포선·레거시 Beta의 `config.py`: 추적 금지 로컬 설정; 기존 `config.local.example.py`에서 명시적으로 준비
+- Portfolio Beta의 `config.py`: 비밀값 없는 공통 기본 설정(기존 런타임 계약 유지)
 - `config.local.py`, `local_settings.py`: 추적 금지 로컬 비밀 설정
 - `analyze_*`: 개발자용 분석·장시간 검증 진입점
 - `test_*`: 해당 버전의 회귀·구조 계약

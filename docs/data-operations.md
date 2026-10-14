@@ -2,6 +2,8 @@
 
 ## 추적 금지
 
+- `QuantBotSystem/config.py`, `QuantBotSystem_Beta/config.py`
+
 - `config.local.py`, `local_settings.py`, `config_backup.py`, `.env`
 - Telegram token, 허용 chat ID, 인증 URL과 API key
 - `data/`, SQLite·DB, 캐시, 로그

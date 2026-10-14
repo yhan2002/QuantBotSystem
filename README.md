@@ -23,9 +23,11 @@ ACWI 시장 통제와 동일 국가·섹터 hedge를 사용하는 Relative Equil
 ## 설치와 오프라인 검증
 
 명령은 저장소 루트에서 실행합니다. CI의 기본 Python은 3.11입니다.
-설정·DB·봇 실행 없이 아래 표준 라이브러리 검사부터 실행할 수 있습니다.
+새 clone에서는 먼저 빈 템플릿으로 로컬 설정을 준비합니다. 이 명령은 기존 설정을 덮어쓰지
+않고, 봇·API·스케줄러를 실행하지 않습니다. 이후 아래 표준 라이브러리 검사를 실행합니다.
 
 ```powershell
+python tools/prepare_local_config.py
 python -m unittest test_architecture.py test_agent_view.py test_review_gate.py test_runtime_settings.py -v
 python tools/check_architecture.py
 ```
@@ -56,17 +58,25 @@ HMM과 연구 분석은 선택 기능입니다. 별도 연구 환경에서
 
 ## 비밀 설정과 데이터
 
-실제 값은 추적하지 않는 `config.local.py`에만 설정합니다.
-필드 예시는 [배포선 예제](QuantBotSystem/config.local.example.py)와
-[Beta 예제](QuantBotSystem_Portfolio_Beta/config.local.example.py)에 있습니다.
-예제의 토큰·채팅 ID는 자리표시자입니다. 기존 설정 파일을 덮어쓰지 않습니다.
+`QuantBotSystem/config.py`와 `QuantBotSystem_Beta/config.py`는 Git에서 제외합니다.
+기존 [배포선 예제](QuantBotSystem/config.local.example.py)와
+[레거시 Beta 예제](QuantBotSystem_Beta/config.local.example.py)를 완전한 로컬 설정
+템플릿으로 사용합니다. 이름을 달리한 중복 예제는 만들지 않습니다. 토큰·채팅 ID·개인
+워크북 경로는 비어 있고 공개 기본 유니버스와 필수 구조는 유지합니다.
+`python tools/prepare_local_config.py`는 이 두 예제를 같은 폴더의 `config.py`로
+복사하되 이미 있는 파일은 그대로 둡니다. 비밀값은 기존처럼 Git에서 제외되는
+`config.local.py`에서 관리할 수 있습니다. [통합 Beta 비밀 설정 예제](QuantBotSystem_Portfolio_Beta/config.local.example.py)는 별도 런타임 경로를 유지합니다.
+
+이미 사용하는 clone에서 업데이트할 때는 먼저 해당 두 `config.py`의 로컬 사본을
+보관하세요. 추적 삭제 커밋을 pull하면 변경되지 않은 추적 파일이 작업 폴더에서도
+삭제될 수 있습니다. 현재 회사 PC 원본이나 실행 중인 봇에는 이 변경을 적용하지 않았습니다.
 
 - 통합 Beta는 selector를 통해 기존 `QuantBotSystem_Beta/config.local.py`와
   `QuantBotSystem_Beta/data/market_data.sqlite`를 공유합니다.
 - 배포선은 자체 `QuantBotSystem/config.local.py`와 `QuantBotSystem/data/`를 사용합니다.
 - `QUANTBOT_CONFIG_PATH`는 명시적 비밀 설정 파일 경로입니다. 유효하지 않은 경로는 실패하며,
   비어 있는 `QUANTBOT_MARKET_DB_PATH`는 기존 기본 DB 경로를 사용합니다.
-- `config.local.py`, 옛 이름 `config_local.py`, `local_settings.py`, `.env`,
+- 위 두 `config.py`, `config.local.py`, 옛 이름 `config_local.py`, `local_settings.py`, `.env`,
   `*.private.json`, 데이터·로그·캐시·실계좌/포지션 내역은 커밋하지 않습니다.
 
 예약 갱신·리포트에는 별도로 설치된 로컬 freshness 파이프라인과
